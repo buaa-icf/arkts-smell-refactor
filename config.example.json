@@ -1,0 +1,63 @@
+{
+  "refactorAgent": {
+    "command": [
+      "deveco-code",
+      "--project",
+      "{project_root}",
+      "--prompt-file",
+      "{prompt_file}"
+    ],
+    "cwd": "{project_root}",
+    "timeoutSeconds": 1800
+  },
+  "gates": {
+    "smell": {
+      "command": [
+        "your-smell-check-wrapper",
+        "--task",
+        "{task_file}"
+      ],
+      "cwd": "{project_root}",
+      "timeoutSeconds": 600
+    },
+    "build": {
+      "command": [
+        "hvigorw",
+        "assembleHap"
+      ],
+      "cwd": "{project_root}",
+      "timeoutSeconds": 1800
+    },
+    "test": {
+      "command": [
+        "hvigorw",
+        "test"
+      ],
+      "cwd": "{project_root}",
+      "timeoutSeconds": 1800
+    },
+    "linter": {
+      "command": [
+        "codelinter",
+        "{target_file}",
+        "-c",
+        "code-linter.json5"
+      ],
+      "cwd": "{project_root}",
+      "timeoutSeconds": 600
+    }
+  },
+  "reviewAgent": {
+    "command": [
+      "deveco-code",
+      "--project",
+      "{project_root}",
+      "--read-only",
+      "--prompt-file",
+      "{review_prompt_file}"
+    ],
+    "cwd": "{project_root}",
+    "timeoutSeconds": 1800
+  }
+}
+
