@@ -15,7 +15,7 @@ from .utils import read_json, write_json
 
 
 IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
-GENERATED_FILES = {"buildprofile.ets"}
+GENERATED_FILES = {"buildprofile.ets", "oh-package-lock.json5"}
 
 
 def refactor_gate(task_dir: Path, source_root: Path, deveco: Path) -> int:
@@ -71,7 +71,7 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
     return subprocess.run(command, cwd=workspace).returncode
 
 
-def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Path) -> int:
+def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Path | None) -> int:
     """Fail only for linter defects introduced on changed production lines."""
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", [])
     introduced: list[str] = []
@@ -80,8 +80,12 @@ def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Pat
         current = source_root / relative
         if not current.is_file():
             continue
+        command = [str(codelinter), str(current)]
+        if config:
+            command.extend(["-c", str(config)])
+        command.extend(["-e", "error,warn,suggestion"])
         completed = subprocess.run(
-            [str(codelinter), str(current), "-c", str(config), "-e", "error,warn,suggestion"],
+            command,
             cwd=source_root, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         output = (completed.stdout or "") + (completed.stderr or "")
@@ -150,7 +154,12 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         if not differs:
             continue
         normalized = relative.as_posix().lower()
-        allowed = mirror_file.suffix.lower() in {".ets", ".ts"} and "/src/main/" in f"/{normalized}"
+        is_main_source = mirror_file.suffix.lower() in {".ets", ".ts"} and "/src/main/" in f"/{normalized}"
+        # Harmony modules expose their production API through a module-root
+        # Index.ets. Moving logic into an owning module commonly requires a
+        # matching export here, so it is production source rather than config.
+        is_module_entry = mirror_file.name.lower() == "index.ets" and len(relative.parts) >= 2
+        allowed = is_main_source or is_module_entry
         if not allowed:
             forbidden.append(relative.as_posix())
             continue
@@ -273,14 +282,14 @@ def main(argv: list[str] | None = None) -> int:
     linter.add_argument("--task-dir", required=True, type=Path)
     linter.add_argument("--source-root", required=True, type=Path)
     linter.add_argument("--codelinter", required=True, type=Path)
-    linter.add_argument("--config", required=True, type=Path)
+    linter.add_argument("--config", type=Path)
     args = parser.parse_args(argv)
     if args.command == "smell":
         return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve())
     if args.command == "refactor":
         return refactor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve())
     if args.command == "linter":
-        return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve())
+        return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve() if args.config else None)
     return hvigor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None, args.task, args.module)
 
 

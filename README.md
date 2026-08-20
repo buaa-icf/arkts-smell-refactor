@@ -398,7 +398,7 @@ DevEco Code Refactor Agent
   → 异味复检
   → 编译
   → 目标模块 Local Test
-  → Code Linter（只判定本次变更行和新增文件中的缺陷）
+  → Code Linter（只判定本次变更行和新增文件中的缺陷；项目没有配置文件时使用内置默认规则）
   → 独立 DevEco Code Review Agent
 ```
 

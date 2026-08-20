@@ -140,7 +140,13 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
     test_module = _target_module_name(Path(task.target_path), harmony_root) if harmony_root else None
     test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
     linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
-    linter = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "linter", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--codelinter", tools["codelinter"], "--config", str(linter_config)], "cwd": "{task_dir}", "timeoutSeconds": 1200} if tools["codelinter"] and linter_config and harmony_root else missing("codelinter、code-linter.json5 或 Harmony 工程根目录")
+    if tools["codelinter"] and harmony_root:
+        linter_command = [sys.executable, "-m", "arkts_smell_refactor.gate", "linter", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--codelinter", tools["codelinter"]]
+        if linter_config:
+            linter_command.extend(["--config", str(linter_config)])
+        linter = {"command": linter_command, "cwd": "{task_dir}", "timeoutSeconds": 1200}
+    else:
+        linter = missing("codelinter 或 Harmony 工程根目录")
     return {"refactorAgent": refactor, "gates": {"smell": smell, "build": build, "test": test, "linter": linter}, "reviewAgent": review}
 
 
