@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | `feature-envy-check` | Feature Envy | 调用点、公开接口、委托和兼容入口 |
 | `long-method-check` | Long Method | ArkUI 状态、Builder、组件树、新增克隆 |
-| `switch-statement-check` | Switch Statement | default、return/throw、控制流顺序 |
+| `switch-statement-check` | Switch Statement | 按符号定位真实分支；区分值映射、分组 case、可执行 fall-through、行为策略和长 if/else 链 |
 | `code-clone-fragment-check` | Code Clone | 关联片段、UI ID、片段差异 |
 
 ## 目录结构
@@ -51,6 +51,7 @@ arkts-smell-refactor/
 ├─ src/arkts_smell_refactor/
 │  ├─ dataset.py       数据集展开与异味信息解析
 │  ├─ risk.py          纯静态风险分析
+│  ├─ switch_analysis.py  Switch/长 if-else 结构画像与重构形态建议
 │  ├─ prompts.py       重构与评审 Prompt 生成
 │  ├─ runner.py        Agent 和五层门禁编排
 │  └─ cli.py           命令行入口
@@ -295,6 +296,16 @@ runs/feature-envy-local/
 7. 识别目标范围是否读取 ArkUI 响应式字段；
 8. 根据异味类型增加专项风险与约束。
 
+对 `switch-statement-check`，风险报告还会生成 `switchStatementAnalysis`。分析器优先按检测消息中的方法名定位真实方法体，因此能处理部分 HomeCheck 数据中 `line=2/3` 这类 CFG 相对行号；随后识别：
+
+- 目标是大型 `switch` 还是长 `if / else if` 链；
+- selector、case/default 标签、分支数和检测器给出的 case 行数；
+- 空 case 形成的共享标签组与包含执行语句的 fall-through；
+- `return/throw/continue/await`、`this` 状态写入和嵌套条件；
+- 更匹配当前结构的 `Map<K, V>`、`Set<K>`、`Map<K, Handler>` 或具名策略/方法提取。
+
+这些证据会同时进入重构 Prompt 和独立评审 Prompt。框架不会把所有 switch 机械地改成函数 Map：纯值映射优先 `Map<K, V>`，共享标签优先 `Set`/值表，复合状态行为优先具名方法或策略；存在可执行 fall-through 时会直接标记高风险并要求保留原执行序列。
+
 示例：
 
 ```json
@@ -472,6 +483,7 @@ python -m unittest discover -s tests -v
 - 特殊 Data Clumps 格式的明确拒绝；
 - 生产代码和测试代码调用点分类；
 - 测试调用导致的兼容入口约束；
+- Switch 的符号级定位、值映射建议、分组 case、可执行 fall-through、状态写入和长 if/else 链分析；
 - 六步流水线的 Dry Run 渲染。
 
 ## 已知限制与下一步
@@ -480,7 +492,7 @@ python -m unittest discover -s tests -v
 
 1. DevEco Code CLI 参数由使用者配置，尚未绑定特定版本。
 2. 异味门禁需要项目提供能以退出码表达“目标异味是否消失”的包装命令。
-3. 静态调用点扫描是文本级近似，后续可接入 ArkTS AST/类型分析提高精度。
+3. 静态调用点与条件分支分析是文本/词法级近似，后续可接入 ArkTS AST/类型分析提高符号、类型和闭包捕获精度。
 4. 暂未自动返修；当前会完整保存失败证据，可在下一版把失败门禁转换成定向返修 Prompt。
 5. 暂未接入 Data Clumps 和循环依赖的特殊输入格式。
 6. 当前按任务顺序执行门禁，不并行运行构建和测试。
