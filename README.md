@@ -207,6 +207,8 @@ src/ohosTest/
 
 Refactor Agent 只在这个隔离工作区中修改代码。结束后平台只允许 `.ets/.ts` 的 `src/main` 生产代码同步回真实仓库；如果 Agent 尝试修改测试、依赖或构建配置，本次重构直接失败且这些越界修改不会回写。
 
+隔离复制还会排除 Hvigor 生成的 `.test`、`coverage` 等测试缓存，避免缓存中的超长路径或临时文件导致复制失败。
+
 Agent 在隔离区执行 Hvigor 验证时自动产生的模块级 `BuildProfile.ets` 属于临时构建产物：平台会忽略且不会回写，不能因此把正常的生产代码重构误判为越界修改。
 
 默认重构规范是保留原方法、所属类、签名和调用关系，优先使用 Extract Method、Extract Class 或 Introduce Delegate。也就是把依恋外部对象的逻辑提取出去，由原方法委托，而不是删除/搬走原方法再批量修改调用方。
@@ -395,8 +397,8 @@ python -m arkts_smell_refactor run `
 DevEco Code Refactor Agent
   → 异味复检
   → 编译
-  → 测试
-  → Code Linter
+  → 目标模块 Local Test
+  → Code Linter（只判定本次变更行和新增文件中的缺陷）
   → 独立 DevEco Code Review Agent
 ```
 

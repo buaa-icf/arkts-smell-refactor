@@ -94,6 +94,29 @@ class RunnerTests(unittest.TestCase):
             build = next(item for item in result["steps"] if item["name"] == "build")
             self.assertEqual("BLOCKED", build["status"])
 
+    def test_refactor_blocker_skips_meaningless_downstream_gates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            task = {
+                "schema_version": "1.0", "task_id": "x", "source_project": "demo",
+                "commit_hash": "", "workspace_root": temp, "project_root": temp,
+                "smell_type": "feature-envy", "rule": "rule", "severity": "",
+                "message": "message",
+                "target": {"file_path": "Foo.ets", "symbol": "work", "range": {}, "related_targets": []},
+                "raw": {}
+            }
+            (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+            command = [__import__('sys').executable, "-c", "print('model service is currently overloaded'); raise SystemExit(1)"]
+            config = {
+                "refactorAgent": {"command": command, "blockedOutputRegex": "model service is currently overloaded"},
+                "gates": {name: {"command": ["must-not-run"]} for name in ("smell", "build", "test", "linter")},
+                "reviewAgent": {"command": ["must-not-run"]},
+            }
+            result = execute_pipeline(task_dir, config)
+            self.assertEqual("BLOCKED", result["verdict"])
+            self.assertEqual("BLOCKED", result["steps"][0]["status"])
+            self.assertTrue(all(step["status"] == "SKIPPED" for step in result["steps"][1:]))
+
 
 if __name__ == "__main__":
     unittest.main()

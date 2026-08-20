@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import filecmp
 import hashlib
 import json
@@ -13,7 +14,7 @@ from pathlib import Path
 from .utils import read_json, write_json
 
 
-IGNORED_DIRS = {".git", ".hvigor", ".cache", "build", "oh_modules", "node_modules"}
+IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
 GENERATED_FILES = {"buildprofile.ets"}
 
 
@@ -43,7 +44,7 @@ def refactor_gate(task_dir: Path, source_root: Path, deveco: Path) -> int:
     return _sync_production_changes(workspace, source_root)
 
 
-def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | None, task_name: str) -> int:
+def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | None, task_name: str, module: str | None = None) -> int:
     """Validate from an ASCII-path copy so hvigor never sees a Chinese project path."""
     tool_root = task_dir.parents[2]
     short_id = hashlib.sha1(str(task_dir).encode("utf-8")).hexdigest()[:8]
@@ -59,12 +60,57 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
         if installed.returncode != 0:
             return installed.returncode
         install_marker.write_text("ok", encoding="ascii")
-    return subprocess.run(
-        [str(hvigorw), task_name, "-p", "coverage=true", "--no-daemon"]
-        if task_name in {"test", "onDeviceTest"}
-        else [str(hvigorw), task_name, "--no-daemon"],
-        cwd=workspace,
-    ).returncode
+    command = [str(hvigorw), task_name]
+    if task_name == "test":
+        if module:
+            command.extend(["-p", f"module={module}"])
+        command.extend(["-p", "coverage=true"])
+    elif task_name == "onDeviceTest":
+        command.extend(["-p", "coverage=true"])
+    command.append("--no-daemon")
+    return subprocess.run(command, cwd=workspace).returncode
+
+
+def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Path) -> int:
+    """Fail only for linter defects introduced on changed production lines."""
+    changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", [])
+    introduced: list[str] = []
+    for relative_text in changes:
+        relative = Path(relative_text)
+        current = source_root / relative
+        if not current.is_file():
+            continue
+        completed = subprocess.run(
+            [str(codelinter), str(current), "-c", str(config), "-e", "error,warn,suggestion"],
+            cwd=source_root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        output = (completed.stdout or "") + (completed.stderr or "")
+        print(output, end="" if output.endswith("\n") else "\n")
+        defect_lines = [int(match.group(1)) for match in re.finditer(r"(?m)^\s*(\d+):(\d+)\s+(?:error|warn|suggestion)\b", output)]
+        baseline = task_dir / "baseline-production" / relative
+        changed_lines = _changed_current_lines(baseline, current)
+        for line in defect_lines:
+            if not baseline.exists() or line in changed_lines:
+                introduced.append(f"{relative.as_posix()}:{line}")
+        if completed.returncode not in {0, 1}:
+            return completed.returncode
+    if introduced:
+        print("本次变更新增或触及 Linter 缺陷：" + ", ".join(introduced), file=sys.stderr)
+        return 1
+    print("本次变更范围未引入 Linter 缺陷")
+    return 0
+
+
+def _changed_current_lines(baseline: Path, current: Path) -> set[int]:
+    current_lines = current.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not baseline.exists():
+        return set(range(1, len(current_lines) + 1))
+    before = baseline.read_text(encoding="utf-8", errors="replace").splitlines()
+    changed: set[int] = set()
+    for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(None, before, current_lines).get_opcodes():
+        if tag != "equal":
+            changed.update(range(j1 + 1, j2 + 1))
+    return changed
 
 
 def _fresh_copy(source: Path, destination: Path, exclude_tests: bool) -> None:
@@ -222,12 +268,20 @@ def main(argv: list[str] | None = None) -> int:
     hvigor.add_argument("--hvigorw", required=True, type=Path)
     hvigor.add_argument("--ohpm", type=Path)
     hvigor.add_argument("--task", required=True)
+    hvigor.add_argument("--module")
+    linter = sub.add_parser("linter")
+    linter.add_argument("--task-dir", required=True, type=Path)
+    linter.add_argument("--source-root", required=True, type=Path)
+    linter.add_argument("--codelinter", required=True, type=Path)
+    linter.add_argument("--config", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.command == "smell":
         return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve())
     if args.command == "refactor":
         return refactor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve())
-    return hvigor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None, args.task)
+    if args.command == "linter":
+        return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve())
+    return hvigor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None, args.task, args.module)
 
 
 if __name__ == "__main__":

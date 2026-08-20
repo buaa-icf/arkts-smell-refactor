@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arkts_smell_refactor.gate import _fresh_copy, _sync_production_changes
+from arkts_smell_refactor.gate import _changed_current_lines, _fresh_copy, _sync_production_changes
 
 
 class GateTests(unittest.TestCase):
@@ -56,6 +56,30 @@ class GateTests(unittest.TestCase):
             self.assertEqual(0, _sync_production_changes(mirror, source))
             self.assertEqual("after", source_file.read_text(encoding="utf-8"))
             self.assertFalse((source / "feature/BuildProfile.ets").exists())
+
+    def test_test_build_cache_is_excluded_from_refactor_workspace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "mirror"
+            main = source / "module/src/main/ets/Foo.ets"
+            cache = source / "module/.test/default/cache/compiler.msgpack"
+            for path in (main, cache):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("data", encoding="utf-8")
+            _fresh_copy(source, mirror, exclude_tests=True)
+            self.assertTrue((mirror / "module/src/main/ets/Foo.ets").exists())
+            self.assertFalse((mirror / "module/.test").exists())
+
+    def test_changed_line_detection_ignores_preexisting_linter_lines(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            before = root / "before.ets"
+            after = root / "after.ets"
+            before.write_text("old warning\nkeep\nbefore\n", encoding="utf-8")
+            after.write_text("old warning\nkeep\nafter\n", encoding="utf-8")
+            self.assertNotIn(1, _changed_current_lines(before, after))
+            self.assertIn(3, _changed_current_lines(before, after))
 
 
 if __name__ == "__main__":

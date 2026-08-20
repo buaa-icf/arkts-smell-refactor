@@ -123,41 +123,43 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
         return {"enabled": False, "reason": f"未找到 {name}"}
 
     harmony_root = _find_harmony_project_root(Path(task.target_path), Path(task.project_root))
-    refactor = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"]], "cwd": "{task_dir}", "timeoutSeconds": 3600} if tools["deveco"] and harmony_root else None
+    refactor = {
+        "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"]],
+        "cwd": "{task_dir}",
+        "blockedOutputRegex": "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable",
+        "timeoutSeconds": 3600,
+    } if tools["deveco"] and harmony_root else None
     review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{project_root}", "--format", "default", "--dangerously-skip-permissions"], "timeoutSeconds": 3600} if tools["deveco"] else None
     smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] else missing("HomeCheck")
     environment_blockers = (
         "Invalid project path|Permissions Error|signing|signature|SignHap|"
-        "Invalid storeFile value|device not found|no devices|ABI"
+        "Invalid storeFile value|device not found|no devices"
     )
     build = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "assembleHap"), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
-    test_task = _detect_test_task(harmony_root, task.target.symbol) if harmony_root else "test"
-    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
+    test_task = "test"
+    test_module = _target_module_name(Path(task.target_path), harmony_root) if harmony_root else None
+    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
     linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
-    linter = {"command": [tools["codelinter"], "{target_file}", "-c", str(linter_config), "-e", "error,warn,suggestion"], "cwd": str(harmony_root or task.project_root), "successOutputRegex": "No defects found in your code\\.", "timeoutSeconds": 1200} if tools["codelinter"] and linter_config else missing("codelinter 或 code-linter.json5")
+    linter = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "linter", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--codelinter", tools["codelinter"], "--config", str(linter_config)], "cwd": "{task_dir}", "timeoutSeconds": 1200} if tools["codelinter"] and linter_config and harmony_root else missing("codelinter、code-linter.json5 或 Harmony 工程根目录")
     return {"refactorAgent": refactor, "gates": {"smell": smell, "build": build, "test": test, "linter": linter}, "reviewAgent": review}
 
 
-def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, str | None], task_name: str) -> list[str]:
+def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, str | None], task_name: str, module: str | None = None) -> list[str]:
     command = [sys.executable, "-m", "arkts_smell_refactor.gate", "hvigor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--hvigorw", str(tools["hvigorw"]), "--task", task_name]
     if tools.get("ohpm"):
         command.extend(["--ohpm", str(tools["ohpm"])])
+    if module:
+        command.extend(["--module", module])
     return command
 
 
-def _detect_test_task(harmony_root: Path, symbol: str | None) -> str:
-    if not symbol:
-        return "test"
-    needle = symbol.split(".")[-1] + "("
-    for path in harmony_root.rglob("*.ets"):
-        normalized = path.as_posix().lower()
-        if "/src/test/" in normalized:
-            try:
-                if needle in path.read_text(encoding="utf-8"):
-                    return "test"
-            except OSError:
-                pass
-    return "onDeviceTest"
+def _target_module_name(target: Path, harmony_root: Path) -> str | None:
+    for parent in [target.parent, *target.parents]:
+        if (parent / "src" / "main").is_dir():
+            return parent.name
+        if parent == harmony_root:
+            break
+    return None
 
 
 def _find_linter_config(target: Path, project_root: Path) -> Path | None:

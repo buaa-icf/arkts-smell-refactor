@@ -43,6 +43,20 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
     else:
         results.append(CommandResult("refactor-agent", "SKIPPED", reason="config 未配置 refactorAgent"))
 
+    if refactor and not dry_run and results[-1].status != "PASS":
+        reason = "重构 Agent 未成功，后续验证没有可验证的重构结果"
+        gate_results = [CommandResult(name, "SKIPPED", reason=reason) for name in ("smell", "build", "test", "linter")]
+        write_json(task_dir / "gates.json", {
+            "schemaVersion": "1.0",
+            "taskId": task.task_id,
+            "gates": [item.to_dict() for item in gate_results],
+        })
+        results.extend(gate_results)
+        results.append(CommandResult("review-agent", "SKIPPED", reason=reason))
+        result = _final_result(task.task_id, results, dry_run)
+        write_json(task_dir / "result.json", result)
+        return result
+
     gate_results: list[CommandResult] = []
     for gate_name in ("smell", "build", "test", "linter"):
         spec = config.get("gates", {}).get(gate_name)
