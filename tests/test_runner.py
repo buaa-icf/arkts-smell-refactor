@@ -117,6 +117,23 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual("BLOCKED", result["steps"][0]["status"])
             self.assertTrue(all(step["status"] == "SKIPPED" for step in result["steps"][1:]))
 
+    def test_timeout_returns_blocked_without_hanging(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            task = {
+                "schema_version": "1.0", "task_id": "timeout", "source_project": "demo",
+                "commit_hash": "", "workspace_root": temp, "project_root": temp,
+                "smell_type": "feature-envy", "rule": "rule", "severity": "",
+                "message": "message",
+                "target": {"file_path": "Foo.ets", "symbol": "work", "range": {}, "related_targets": []},
+                "raw": {}
+            }
+            (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+            command = [__import__('sys').executable, "-c", "import time; time.sleep(10)"]
+            result = execute_pipeline(task_dir, {"refactorAgent": {"command": command, "timeoutSeconds": 1}})
+            self.assertEqual("BLOCKED", result["steps"][0]["status"])
+            self.assertIn("超过 1 秒", result["steps"][0]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

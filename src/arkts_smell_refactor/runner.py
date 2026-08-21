@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -109,39 +111,74 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
     started = time.monotonic()
     timeout = int(spec.get("timeoutSeconds", 1800))
     try:
-        completed = subprocess.run(
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        process = subprocess.Popen(
             rendered,
             cwd=cwd,
             shell=isinstance(rendered, str),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
             env=None,
+            creationflags=creationflags,
+            start_new_session=os.name != "nt",
         )
-        output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
+        stdout, stderr = process.communicate(timeout=timeout)
+        output = (stdout or "") + ("\n" + stderr if stderr else "")
         log_file = task_dir / f"{name}.log"
         write_text(log_file, output)
         success_regex = spec.get("successOutputRegex")
         blocked_regex = spec.get("blockedOutputRegex")
-        passed = completed.returncode == 0 or bool(success_regex and re.search(str(success_regex), output, re.IGNORECASE))
+        passed = process.returncode == 0 or bool(success_regex and re.search(str(success_regex), output, re.IGNORECASE))
         blocked = bool(not passed and blocked_regex and re.search(str(blocked_regex), output, re.IGNORECASE))
         return CommandResult(
             name=name,
             status="PASS" if passed else ("BLOCKED" if blocked else "FAIL"),
             command=_display_command(rendered),
-            exit_code=completed.returncode,
+            exit_code=process.returncode,
             duration_seconds=round(time.monotonic() - started, 3),
             output_file=str(log_file),
             reason="环境或工具链阻塞" if blocked else None,
         )
     except subprocess.TimeoutExpired as error:
+        _terminate_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
         log_file = task_dir / f"{name}.log"
-        write_text(log_file, (error.stdout or "") + "\nTIMEOUT")
+        output = _as_text(stdout or error.stdout) + ("\n" + _as_text(stderr or error.stderr) if stderr or error.stderr else "")
+        write_text(log_file, output + "\nTIMEOUT")
         return CommandResult(name, "BLOCKED", _display_command(rendered), duration_seconds=round(time.monotonic() - started, 3), output_file=str(log_file), reason=f"超过 {timeout} 秒")
     except OSError as error:
         return CommandResult(name, "BLOCKED", _display_command(rendered), duration_seconds=round(time.monotonic() - started, 3), reason=str(error))
+
+
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    """Terminate the whole command tree so inherited pipes cannot hang timeout cleanup."""
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def _as_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
 def _render_command(command: Any, context: dict[str, str]) -> str | list[str]:
