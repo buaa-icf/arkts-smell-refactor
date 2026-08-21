@@ -7,7 +7,7 @@ from .models import RefactorTask
 
 
 SMELL_GUIDANCE = {
-    "feature-envy": "保留原方法和签名，在原方法中引入委托；把对外部对象的读取、计算和写入提取到数据归属类或专用生产类。不要删除或移动原入口。",
+    "feature-envy": "严格依据 Feature Envy 静态画像选择职责归属和重构手法；画像不能证明 Move Method 安全时，使用 Mapper、Builder、Adapter 或 Delegate，避免把依恋整体复制到无关工具类。",
     "long-method": "按职责拆分，保持局部变量作用域、闭包捕获、ArkUI 状态读取和组件树不变；避免产生新克隆。",
     "code-clone": "先比较所有克隆片段的差异，再提取共享实现；保持 UI ID、默认值、事件和副作用逐项一致。",
     "switch-statement": "按静态分析建议选择 Map<K, V>、Set<K>、Map<K, Handler> 或具名策略/方法提取；不要为了统一使用 Map 而制造更长的内联闭包表。保持 default、分组 case、可执行 fall-through、return/throw、短路求值与副作用顺序。",
@@ -18,10 +18,8 @@ SMELL_GUIDANCE = {
 def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
     risks = "\n".join(f"- [{x['level']}] {x['code']}: {x['evidence']}" for x in risk.get("risks", [])) or "- 未发现额外静态风险。"
     constraints = "\n".join(f"- {x['instruction']}（原因：{x['reason']}）" for x in risk.get("recommendedConstraints", [])) or "- 采用最小、行为保持的修改。"
-    conditional_analysis = _conditional_analysis_text(risk)
-    conditional_section = (
-        f"\n## 条件分支静态画像\n\n{conditional_analysis}\n" if conditional_analysis else ""
-    )
+    analysis_text, analysis_title = _smell_analysis_text(risk)
+    analysis_section = f"\n## {analysis_title}\n\n{analysis_text}\n" if analysis_text else ""
     target_range = task.target.source_range
     return f"""你正在重构一个 ArkTS 代码异味。请直接修改工作区中的生产代码并保存修改。
 
@@ -44,11 +42,10 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 - 不修改测试、构建配置、依赖和无关文件。
 - 保持公开 API、状态更新、默认值、null/undefined、异常、数组顺序和副作用顺序，除非为消除异味必须调整且提供兼容入口。
 - 不读取、搜索或修改 `src/test`、`src/ohosTest` 及任何测试文件；测试对 Refactor Agent 不可见。
-- 保留目标方法的名称、参数、返回值、可见性和所属类，不要求修改任何调用方。
-- 默认采用 Extract Method / Extract Class / Introduce Delegate：原方法作为稳定入口，把依恋外部对象的逻辑提取到合适的生产类，再由原方法委托。
+- 根据风险报告和专项静态画像选择 Extract Method、Move Method、Extract Class、Mapper、Builder、Adapter、Delegate 或其他最小重构；不要机械套用同一种手法。
 - 不把原条件分支内的操作无条件移到分支外；提取前后必须保持条件和副作用边界。
 - 不要把“检测器不再命中”当作行为等价的证明。
-{conditional_section}
+{analysis_section}
 
 ## 异味专项指导
 
@@ -59,10 +56,8 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 
 
 def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: str = "gates.json") -> str:
-    conditional_analysis = _conditional_analysis_text(risk)
-    conditional_section = (
-        f"\n条件分支静态画像：\n{conditional_analysis}\n" if conditional_analysis else ""
-    )
+    analysis_text, analysis_title = _smell_analysis_text(risk)
+    analysis_section = f"\n{analysis_title}：\n{analysis_text}\n" if analysis_text else ""
     return f"""你是独立的 ArkTS 重构评审 Agent。该任务仅做只读评审，禁止修改任何文件。
 
 请对照平台保存的重构前本地文件、当前生产代码、task.json、risk-report.json 和 {gates_file}，评审以下重构。`commitHash` 只是输入元信息，不得替代本地重构前基线：
@@ -71,7 +66,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 - 文件：{task.target.file_path}
 - 符号：{task.target.symbol or '未解析'}
 - 原始证据：{task.message}
-{conditional_section}
+{analysis_section}
 
 必须执行以下检查：
 
@@ -84,6 +79,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 5. 前四层门禁结果只能作为证据，不能代替语义评审。
 6. 对 switch-statement 任务逐项核对 selector、每个 case 标签、default/无 default、分组 case 和可执行 fall-through；确认 Map/Set 的键语义以及 0、false、空串、null/undefined 等值没有被错误当成缺失。
 7. 若使用函数/策略表，核对 this 绑定、闭包捕获、表创建时机、await/异常传播和每次调用的状态读取；若重构的是 if/else if，核对条件从左到右求值与短路行为。
+8. 对 feature-envy 任务核对被依恋对象、访问成员、职责归属和建议重构形态；确认原入口契约、对象身份、条件边界、读取时机、累加/替换语义和依赖方向没有变化，并检查依恋是否只是被搬到新的方法或工具类。
 
 最终只输出一个 JSON 对象，不要使用 Markdown 代码围栏：
 
@@ -118,3 +114,43 @@ def _conditional_analysis_text(risk: dict[str, Any]) -> str:
         f"- 控制流：{controls}；this 状态写入：{writes}；异步：{analysis.get('hasAsyncWork', False)}",
         f"- 建议形态：{analysis.get('recommendedPattern', '人工判断')}（{analysis.get('recommendationReason', '需结合源码确认')}）",
     ])
+
+
+def _feature_envy_analysis_text(risk: dict[str, Any]) -> str:
+    analysis = risk.get("featureEnvyAnalysis")
+    if not analysis:
+        return ""
+    members = ", ".join(
+        f"{item['name']}×{item['count']}" + (f"（写{item['writes']}）" if item.get("writes") else "")
+        for item in analysis.get("accessedMembers", [])
+    ) or "未解析"
+    candidates = ", ".join(
+        f"{item['receiver']}×{item['accessCount']}"
+        for item in analysis.get("receiverCandidates", [])
+    ) or "无"
+    preserve = "；".join(analysis.get("mustPreserve", [])) or "按原方法逐项核对"
+    reasons = "；".join(analysis.get("moveReasons", [])) or "无"
+    extraction = analysis.get("extractionRegion") or {}
+    extraction_text = (
+        f"{extraction.get('startLine')}-{extraction.get('endLine')}"
+        if extraction else "未定位"
+    )
+    return "\n".join([
+        f"- 被依恋目标：{analysis.get('reportedTarget') or '未解析'}；实际 receiver：{analysis.get('receiver') or '未解析'}；类型：{analysis.get('targetType', 'unknown')}",
+        f"- 归属类型：{analysis.get('ownershipKind', 'unknown')}；依恋形态：{analysis.get('classification', 'unknown')}；读取：{analysis.get('readCount', 0)}；写入：{analysis.get('writeCount', 0)}",
+        f"- 访问成员：{members}",
+        f"- receiver 候选：{candidates}；建议提取范围：{extraction_text}",
+        f"- Move Method 可行性：{analysis.get('moveFeasibility', 'unknown')}（{reasons}）",
+        f"- 建议形态：{analysis.get('recommendedPattern', '人工判断')}；目标位置：{analysis.get('recommendedDestination', '人工判断')}（{analysis.get('recommendationReason', '需结合源码确认')}）",
+        f"- 必须保持：{preserve}",
+    ])
+
+
+def _smell_analysis_text(risk: dict[str, Any]) -> tuple[str, str]:
+    feature_envy = _feature_envy_analysis_text(risk)
+    if feature_envy:
+        return feature_envy, "Feature Envy 静态画像"
+    conditional = _conditional_analysis_text(risk)
+    if conditional:
+        return conditional, "条件分支静态画像"
+    return "", "专项静态画像"

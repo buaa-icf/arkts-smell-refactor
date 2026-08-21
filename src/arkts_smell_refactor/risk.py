@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import RefactorTask
-from .switch_analysis import analyze_switch_statement
+from .analysis.feature_envy import analyze_feature_envy, feature_envy_risks_and_constraints
+from .analysis.switch_statement import analyze_switch_statement
 from .utils import iter_source_files, normalized_relative
 
 
@@ -35,8 +36,18 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
 
     if declaration["visibility"] == "public" or declaration["exported"]:
         risks.append(_risk("PUBLIC_API_CHANGE", "high" if callers else "medium", "目标符号可被其他文件使用", [x["filePath"] for x in callers]))
+        constraints.append({
+            "code": "PRESERVE_PUBLIC_CONTRACT",
+            "reason": "目标符号对外可见",
+            "instruction": "除非专项分析明确证明可以安全移动，否则保持名称、参数、返回值、可见性和所属类型",
+        })
     if callers:
         risks.append(_risk("CALL_SITE_BREAK", "high" if len(callers) >= 5 else "medium", f"发现 {len(callers)} 个静态调用点", [x["filePath"] for x in callers]))
+        constraints.append({
+            "code": "PRESERVE_PRODUCTION_CALLERS",
+            "reason": f"发现 {len(callers)} 个生产代码调用点",
+            "instruction": "保持现有生产调用方式有效；优先保留兼容入口，不要求修改调用方",
+        })
     if reactive_reads:
         risks.append(_risk("REACTIVE_STATE", "high", "目标范围读取 ArkUI 响应式状态：" + ", ".join(reactive_reads), [task.target.file_path]))
         constraints.append(
@@ -46,7 +57,16 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
                 "instruction": "抽取 Builder/组件后必须保持对响应式状态的实时读取",
             }
         )
-    switch_analysis = _add_smell_specific(task, target_text, range_text, risks, constraints)
+    smell_analysis = _add_smell_specific(
+        task,
+        target_text,
+        range_text,
+        risks,
+        constraints,
+        declaration=declaration,
+        production_callers=production,
+        reactive_names=reactive_names,
+    )
 
     rank = {"low": 1, "medium": 2, "high": 3}
     level = max((item["level"] for item in risks), key=rank.get, default="low")
@@ -67,7 +87,8 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
         },
         "risks": risks,
         "recommendedConstraints": constraints,
-        **({"switchStatementAnalysis": switch_analysis} if switch_analysis else {}),
+        **({"switchStatementAnalysis": smell_analysis} if task.smell_type == "switch-statement" and smell_analysis else {}),
+        **({"featureEnvyAnalysis": smell_analysis} if task.smell_type == "feature-envy" and smell_analysis else {}),
         "analysisLimitations": [
             "调用点采用文本级静态扫描，反射、字符串注册和跨语言调用可能无法识别",
             "ArkTS 类型解析器尚未接入，public/export 判断为保守近似",
@@ -153,6 +174,10 @@ def _add_smell_specific(
     range_text: str,
     risks: list[dict[str, Any]],
     constraints: list[dict[str, str]],
+    *,
+    declaration: dict[str, Any],
+    production_callers: list[dict[str, Any]],
+    reactive_names: set[str],
 ) -> dict[str, Any] | None:
     if task.smell_type == "code-clone":
         if task.target.related_targets:
@@ -242,7 +267,19 @@ def _add_smell_specific(
         ])
         return analysis
     elif task.smell_type == "feature-envy":
-        constraints.append({"code": "PREFER_DELEGATION", "reason": "移动公开方法容易破坏调用契约", "instruction": "优先使用委托；需要搬迁时保留兼容入口"})
+        analysis = analyze_feature_envy(
+            task,
+            target_text,
+            declaration=declaration,
+            production_callers=production_callers,
+            reactive_names=reactive_names,
+        )
+        feature_risks, feature_constraints = feature_envy_risks_and_constraints(
+            task, analysis, declaration, production_callers
+        )
+        risks.extend(feature_risks)
+        constraints.extend(feature_constraints)
+        return analysis
     return None
 
 
