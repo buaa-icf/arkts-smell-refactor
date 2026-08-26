@@ -31,7 +31,6 @@ def refactor_gate(task_dir: Path, source_root: Path, deveco: Path) -> int:
         return 3
     prompt = (task_dir / "refactor-prompt.md").read_text(encoding="utf-8")
     prompt = prompt.replace(task["target"]["file_path"], target_relative.as_posix())
-    prompt += "\n\n当前是隔离的生产代码工作区，测试目录已被物理移除。只修改生产代码。\n"
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
     completed = subprocess.run(

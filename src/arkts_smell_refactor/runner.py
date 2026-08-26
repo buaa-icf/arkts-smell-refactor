@@ -234,17 +234,38 @@ def _task_from_file(path: Path) -> RefactorTask:
 
 def _extract_review_json(log_path: Path, output_path: Path) -> dict[str, Any] | None:
     text = log_path.read_text(encoding="utf-8")
-    decoder = json.JSONDecoder()
     candidates: list[dict[str, Any]] = []
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            verdict = str(value.get("verdict", "")).upper()
+            if verdict in {"PASS", "FAIL", "UNCERTAIN"}:
+                candidates.append(value)
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+        elif isinstance(value, str) and "verdict" in value:
+            collect_json_text(value)
+
+    def collect_json_text(value: str) -> None:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(value):
+            if char != "{":
+                continue
+            try:
+                data, _ = decoder.raw_decode(value[index:])
+            except json.JSONDecodeError:
+                continue
+            collect(data)
+
+    # 支持旧版 default 文本日志，也支持 --format json 的 JSONL 事件日志。
+    for line in text.splitlines():
         try:
-            data, _ = decoder.raw_decode(text[index:])
+            collect(json.loads(line))
         except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and "verdict" in data:
-            candidates.append(data)
+            collect_json_text(line)
     if not candidates:
         return None
     data = candidates[-1]

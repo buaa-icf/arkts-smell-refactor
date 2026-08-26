@@ -129,7 +129,7 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
         "blockedOutputRegex": "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable",
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
-    review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{project_root}", "--format", "default", "--dangerously-skip-permissions"], "timeoutSeconds": 3600} if tools["deveco"] else None
+    review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{project_root}", "--format", "json", "--dangerously-skip-permissions"], "timeoutSeconds": 3600} if tools["deveco"] else None
     smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] else missing("HomeCheck")
     environment_blockers = (
         "Invalid project path|Permissions Error|signing|signature|SignHap|"

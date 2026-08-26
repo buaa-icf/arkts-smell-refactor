@@ -7,7 +7,7 @@ from .models import RefactorTask
 
 
 SMELL_GUIDANCE = {
-    "feature-envy": "严格依据 Feature Envy 静态画像选择职责归属和重构手法；画像不能证明 Move Method 安全时，使用 Mapper、Builder、Adapter 或 Delegate，避免把依恋整体复制到无关工具类。",
+    "feature-envy": "结合源码确认静态画像给出的职责归属；不得只改名、挪行、按检测阈值拆小方法，或把依恋整体复制到无关工具类。",
     "long-method": "按职责拆分，保持局部变量作用域、闭包捕获、ArkUI 状态读取和组件树不变；避免产生新克隆。",
     "code-clone": "先比较所有克隆片段的差异，再提取共享实现；保持 UI ID、默认值、事件和副作用逐项一致。",
     "switch-statement": "按静态分析建议选择 Map<K, V>、Set<K>、Map<K, Handler> 或具名策略/方法提取；不要为了统一使用 Map 而制造更长的内联闭包表。保持 default、分组 case、可执行 fall-through、return/throw、短路求值与副作用顺序。",
@@ -39,12 +39,13 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 ## 强制约束
 
 {constraints}
-- 不修改测试、构建配置、依赖和无关文件。
-- 保持公开 API、状态更新、默认值、null/undefined、异常、数组顺序和副作用顺序，除非为消除异味必须调整且提供兼容入口。
-- 不读取、搜索或修改 `src/test`、`src/ohosTest` 及任何测试文件；测试对 Refactor Agent 不可见。
+- 测试目录已从隔离工作区移除；不修改构建配置、依赖和无关生产文件。
+- 保持状态更新、默认值、null/undefined、异常、数组顺序、对象身份和副作用顺序。
 - 根据风险报告和专项静态画像选择 Extract Method、Move Method、Extract Class、Mapper、Builder、Adapter、Delegate 或其他最小重构；不要机械套用同一种手法。
 - 不把原条件分支内的操作无条件移到分支外；提取前后必须保持条件和副作用边界。
 - 不要把“检测器不再命中”当作行为等价的证明。
+- 重构完成后允许第一次 `build_project`。
+- 第一次 `build_project` 失败后，只有判断为“本次修改导致的编译错误”，才允许修改代码并进行第二次构建。
 {analysis_section}
 
 ## 异味专项指导
@@ -135,6 +136,11 @@ def _feature_envy_analysis_text(risk: dict[str, Any]) -> str:
         f"{extraction.get('startLine')}-{extraction.get('endLine')}"
         if extraction else "未定位"
     )
+    execution = analysis.get("executionContext") or {}
+    boundary = execution.get("modificationBoundary") or {}
+    focus_files = "，".join(execution.get("focusFiles", [])) or "仅目标文件"
+    modification_files = "，".join(boundary.get("defaultFiles", [])) or "仅目标文件"
+    helper_rule = "允许新增一个最小生产 Helper" if boundary.get("allowNewProductionHelper") else "默认不新增生产 Helper"
     return "\n".join([
         f"- 被依恋目标：{analysis.get('reportedTarget') or '未解析'}；实际 receiver：{analysis.get('receiver') or '未解析'}；类型：{analysis.get('targetType', 'unknown')}",
         f"- 归属类型：{analysis.get('ownershipKind', 'unknown')}；依恋形态：{analysis.get('classification', 'unknown')}；读取：{analysis.get('readCount', 0)}；写入：{analysis.get('writeCount', 0)}",
@@ -142,6 +148,9 @@ def _feature_envy_analysis_text(risk: dict[str, Any]) -> str:
         f"- receiver 候选：{candidates}；建议提取范围：{extraction_text}",
         f"- Move Method 可行性：{analysis.get('moveFeasibility', 'unknown')}（{reasons}）",
         f"- 建议形态：{analysis.get('recommendedPattern', '人工判断')}；目标位置：{analysis.get('recommendedDestination', '人工判断')}（{analysis.get('recommendationReason', '需结合源码确认')}）",
+        f"- 建议范围：{execution.get('suggestedScope', '人工判断')}；重点文件：{focus_files}",
+        f"- 默认修改边界：{modification_files}；{helper_rule}；扩大规则：{boundary.get('expansionRule', '保持最小改动')}",
+        f"- 建议构建模块：{execution.get('buildTarget') or '未解析，由工程配置确定'}",
         f"- 必须保持：{preserve}",
     ])
 

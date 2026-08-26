@@ -43,11 +43,12 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
         })
     if callers:
         risks.append(_risk("CALL_SITE_BREAK", "high" if len(callers) >= 5 else "medium", f"发现 {len(callers)} 个静态调用点", [x["filePath"] for x in callers]))
-        constraints.append({
-            "code": "PRESERVE_PRODUCTION_CALLERS",
-            "reason": f"发现 {len(callers)} 个生产代码调用点",
-            "instruction": "保持现有生产调用方式有效；优先保留兼容入口，不要求修改调用方",
-        })
+        if declaration["visibility"] != "public" and not declaration["exported"]:
+            constraints.append({
+                "code": "PRESERVE_PRODUCTION_CALLERS",
+                "reason": f"发现 {len(callers)} 个生产代码调用点",
+                "instruction": "保持现有生产调用方式有效；优先保留兼容入口，不要求修改调用方",
+            })
     if reactive_reads:
         risks.append(_risk("REACTIVE_STATE", "high", "目标范围读取 ArkUI 响应式状态：" + ", ".join(reactive_reads), [task.target.file_path]))
         constraints.append(
@@ -67,6 +68,15 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
         production_callers=production,
         reactive_names=reactive_names,
     )
+    if task.smell_type == "feature-envy" and smell_analysis:
+        smell_analysis["executionContext"] = _feature_envy_execution_context(
+            task,
+            smell_analysis,
+            production,
+            scan_root,
+            workspace,
+            target_path,
+        )
 
     rank = {"low": 1, "medium": 2, "high": 3}
     level = max((item["level"] for item in risks), key=rank.get, default="low")
@@ -285,6 +295,87 @@ def _add_smell_specific(
 
 def _risk(code: str, level: str, evidence: str, affected: list[str]) -> dict[str, Any]:
     return {"code": code, "level": level, "evidence": evidence, "affectedFiles": sorted(set(affected))}
+
+
+def _feature_envy_execution_context(
+    task: RefactorTask,
+    analysis: dict[str, Any],
+    production_callers: list[dict[str, Any]],
+    scan_root: Path,
+    workspace: Path,
+    target_path: Path,
+) -> dict[str, Any]:
+    definition_file = _find_type_definition(scan_root, workspace, analysis.get("targetType"), target_path)
+    focus_files = [task.target.file_path]
+    if definition_file and definition_file not in focus_files:
+        focus_files.append(definition_file)
+    for caller in production_callers:
+        caller_file = caller.get("filePath")
+        if caller_file and caller_file not in focus_files:
+            focus_files.append(caller_file)
+
+    default_modification_files = [task.target.file_path]
+    if definition_file and definition_file not in default_modification_files:
+        default_modification_files.append(definition_file)
+    destination = str(analysis.get("recommendedDestination", ""))
+    suggested_scope = "intra-class" if destination == "target-class" else "inter-class"
+    return {
+        "suggestedScope": suggested_scope,
+        "focusFiles": focus_files,
+        "modificationBoundary": {
+            "defaultFiles": default_modification_files,
+            "allowNewProductionHelper": "helper" in destination or "builder" in destination,
+            "expansionRule": "仅当类型导出、依赖方向或编译错误直接要求时扩大范围，并保持改动最小",
+        },
+        "buildTarget": _nearest_module_name(target_path),
+    }
+
+
+def _find_type_definition(scan_root: Path, workspace: Path, type_text: str | None, target_path: Path) -> str | None:
+    if not type_text:
+        return None
+    candidates = [
+        token for token in re.findall(r"\b[A-Za-z_$][\w$]*\b", type_text)
+        if token not in {"undefined", "null", "unknown", "Object", "string", "number", "boolean"}
+    ]
+    target_text = _read(target_path)
+    for type_name in candidates:
+        import_match = re.search(
+            rf"import\s*{{[^}}]*\b{re.escape(type_name)}\b[^}}]*}}\s*from\s*['\"]([^'\"]+)['\"]",
+            target_text,
+        )
+        if import_match and import_match.group(1).startswith("."):
+            base = (target_path.parent / import_match.group(1)).resolve()
+            for candidate in (base, base.with_suffix(".ets"), base.with_suffix(".ts"), base / "Index.ets", base / "index.ets"):
+                if candidate.is_file():
+                    return normalized_relative(candidate, workspace)
+
+    # Avoid a second full-project content scan. Filename matches are cheap and
+    # sufficiently precise for a navigation hint; unresolved types stay omitted.
+    names = {name.lower() for name in candidates}
+    for path in iter_source_files(scan_root):
+        if path.resolve() == target_path.resolve() or path.stem.lower() not in names:
+            continue
+        for type_name in candidates:
+            declaration = re.compile(rf"\b(?:export\s+)?(?:default\s+)?(?:class|interface|struct|type)\s+{re.escape(type_name)}\b")
+            if declaration.search(_read(path)):
+                return normalized_relative(path, workspace)
+    return None
+
+
+def _nearest_module_name(target_path: Path) -> str | None:
+    for directory in (target_path.parent, *target_path.parents):
+        module_file = directory / "src" / "main" / "module.json5"
+        package_file = directory / "oh-package.json5"
+        for path in (module_file, package_file):
+            if not path.is_file():
+                continue
+            match = re.search(r"(?:\"|')name(?:\"|')\s*:\s*(?:\"|')([^\"']+)", _read(path))
+            if match:
+                return match.group(1)
+        if directory == target_path.anchor:
+            break
+    return None
 
 
 def _range_text(text: str, start: int | None, end: int | None) -> str:

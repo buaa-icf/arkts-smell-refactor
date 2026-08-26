@@ -51,7 +51,9 @@ arkts-smell-refactor/
 ├─ src/arkts_smell_refactor/
 │  ├─ dataset.py       数据集展开与异味信息解析
 │  ├─ risk.py          纯静态风险分析
-│  ├─ switch_analysis.py  Switch/长 if-else 结构画像与重构形态建议
+│  ├─ analysis/        各异味独立的专项静态分析器
+│  │  ├─ feature_envy.py      Feature Envy 访问画像、职责归属与提取建议
+│  │  └─ switch_statement.py  Switch/长 if-else 结构画像与重构形态建议
 │  ├─ prompts.py       重构与评审 Prompt 生成
 │  ├─ runner.py        Agent 和五层门禁编排
 │  └─ cli.py           命令行入口
@@ -291,7 +293,7 @@ runs/feature-envy-local/
 2. 在对应 `sourceProject` 中扫描 `.ets`、`.ts` 文件；
 3. 排除 `.git`、`build`、`node_modules`、`oh_modules`、`.hvigor` 和测试产物；
 4. 将 `src/main` 调用归为生产代码；
-5. 将 `src/test`、`src/ohosTest` 调用归为测试代码；
+5. 不读取或输出 `src/test`、`src/ohosTest` 调用点，避免向 Refactor Agent 暴露测试信息；测试契约由后续独立 Review Agent 检查；
 6. 近似判断目标符号的可见性和类是否导出；
 7. 识别目标范围是否读取 ArkUI 响应式字段；
 8. 根据异味类型增加专项风险与约束。
@@ -306,30 +308,35 @@ runs/feature-envy-local/
 
 这些证据会同时进入重构 Prompt 和独立评审 Prompt。框架不会把所有 switch 机械地改成函数 Map：纯值映射优先 `Map<K, V>`，共享标签优先 `Set`/值表，复合状态行为优先具名方法或策略；存在可执行 fall-through 时会直接标记高风险并要求保留原执行序列。
 
+对 `feature-envy-check`，风险报告会生成 `featureEnvyAnalysis`。分析器按目标符号定位方法体，并结合检测消息生成：
+
+- 被依恋类型与实际 receiver 候选；
+- 字段/方法访问次数、写入次数和 ATFD/LDA/CPFD；
+- 业务数据、SDK 对象、全局状态或服务对象等职责归属类型；
+- 数据转换、集合处理、状态修改或 SDK 编排等依恋形态；
+- Move Method 的可行性与依赖方向限制；
+- Mapper、Builder、Adapter、Delegate 或 Move Method 等推荐重构形态；
+- 本次提取必须保持的条件边界、数组累加、对象身份、异步顺序和响应式读取。
+
+通用分析层只负责符号可见性、生产调用点、响应式状态与外部契约；Feature Envy 的委托、职责归属和提取方案由专项分析器生成。分析结果同时进入 Refactor Prompt 和 Review Prompt。
+
 示例：
 
 ```json
 {
   "riskLevel": "high",
-  "callers": {
-    "total": 13,
-    "production": 6,
-    "test": 7,
-    "items": []
-  },
-  "risks": [
-    {
-      "code": "TEST_REFERENCE_BREAK",
-      "level": "high",
-      "evidence": "测试目录中发现 7 个调用点，测试禁止修改"
-    }
-  ],
-  "recommendedConstraints": [
-    {
-      "code": "KEEP_COMPATIBILITY_ENTRY",
-      "instruction": "若移动或重命名实现，保留原入口并委托给新实现"
-    }
-  ]
+  "callers": {"total": 2, "production": 2, "test": 0, "items": []},
+  "featureEnvyAnalysis": {
+    "reportedTarget": "ITransactionInfo|undefined",
+    "receiver": "this.transactionInfo",
+    "classification": "COLLECTION_PROCESSING",
+    "readCount": 19,
+    "writeCount": 0,
+    "moveFeasibility": "uncertain",
+    "recommendedPattern": "EXTRACT_MAPPER_OR_BUILDER",
+    "recommendedDestination": "owning-model-or-dedicated-builder",
+    "mustPreserve": ["数组 push 的累加语义和对象身份", "条件不满足时不执行的边界"]
+  }
 }
 ```
 

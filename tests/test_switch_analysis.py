@@ -4,7 +4,7 @@ from unittest.mock import patch
 from arkts_smell_refactor.models import RefactorTask, SourceRange, Target
 from arkts_smell_refactor.prompts import build_refactor_prompt, build_review_prompt
 from arkts_smell_refactor.risk import analyze_risks
-from arkts_smell_refactor.switch_analysis import analyze_switch_statement
+from arkts_smell_refactor.analysis.switch_statement import analyze_switch_statement
 
 
 def task(message: str, symbol: str = "format") -> RefactorTask:

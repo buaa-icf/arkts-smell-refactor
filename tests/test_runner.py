@@ -49,6 +49,28 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual("FAIL", review["verdict"])
             self.assertTrue(output.exists())
 
+    def test_extracts_review_verdict_from_jsonl_text_event(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log = root / "review-agent.log"
+            output = root / "review.json"
+            event = {
+                "type": "text",
+                "timestamp": 123456789,
+                "part": {
+                    "type": "text",
+                    "text": json.dumps({
+                        "verdict": "PASS",
+                        "summary": "行为等价",
+                        "issues": [],
+                    }, ensure_ascii=False),
+                },
+            }
+            log.write_text(json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8")
+            review = _extract_review_json(log, output)
+            self.assertEqual("PASS", review["verdict"])
+            self.assertTrue(output.exists())
+
     def test_success_output_can_override_nonzero_exit(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)

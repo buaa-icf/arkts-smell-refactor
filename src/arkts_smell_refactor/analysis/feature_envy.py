@@ -131,20 +131,6 @@ def feature_envy_risks_and_constraints(
             "reason": "跨对象写入提取后容易变成创建新对象或替换引用",
             "instruction": "保持被依恋对象的身份、字段写入次数、写入顺序和条件边界",
         })
-    if production_callers or declaration.get("visibility") == "public" or declaration.get("exported"):
-        constraints.append({
-            "code": "KEEP_COMPATIBILITY_ENTRY",
-            "reason": "目标方法存在生产调用契约或对外可见",
-            "instruction": "保留原方法名称、参数、返回值、可见性和所属类，以原方法作为委托入口",
-        })
-    constraints.append({
-        "code": "FOLLOW_FEATURE_ENVY_OWNERSHIP",
-        "reason": analysis["recommendationReason"],
-        "instruction": (
-            f"优先采用 {analysis['recommendedPattern']}，目标位置为 "
-            f"{analysis['recommendedDestination']}；不要只改名、挪行或把依恋整体复制到无关工具类"
-        ),
-    })
     if analysis["mustPreserve"]:
         constraints.append({
             "code": "PRESERVE_EXTRACTION_SEMANTICS",
