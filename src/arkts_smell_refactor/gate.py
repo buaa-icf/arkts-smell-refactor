@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .utils import read_json, write_json
@@ -118,8 +119,30 @@ def _changed_current_lines(baseline: Path, current: Path) -> set[int]:
 
 def _fresh_copy(source: Path, destination: Path, exclude_tests: bool) -> None:
     if destination.exists():
-        shutil.rmtree(destination)
+        _discard_workspace(destination)
     shutil.copytree(source, destination, ignore=_ignore(exclude_tests))
+
+
+def _discard_workspace(destination: Path) -> None:
+    """Remove a generated workspace robustly even when build caches disappear mid-walk."""
+    def onexc(function, path, error):
+        if isinstance(error, FileNotFoundError):
+            return
+        try:
+            Path(path).chmod(0o700)
+            function(path)
+        except FileNotFoundError:
+            return
+        except OSError:
+            pass
+
+    for _ in range(2):
+        if not destination.exists():
+            return
+        shutil.rmtree(destination, onexc=onexc)
+    if destination.exists():
+        stale = destination.with_name(f"{destination.name}.stale-{time.time_ns()}")
+        destination.rename(stale)
 
 
 def _overlay_copy(source: Path, destination: Path, exclude_tests: bool) -> None:
@@ -189,26 +212,60 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
 def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) -> None:
     """Materialize a review-only evidence pack so the reviewer never needs project access."""
     current_root = task_dir / "current-production"
+    context_root = task_dir / "review-context-production"
     if current_root.exists():
         shutil.rmtree(current_root)
+    if context_root.exists():
+        shutil.rmtree(context_root)
     patch_parts: list[str] = []
+    added_text: list[str] = []
+    changed_current_files: list[Path] = []
     for relative_text in changes:
         relative = Path(relative_text)
         baseline = task_dir / "baseline-production" / relative
         current = source / relative
         if current.is_file():
+            changed_current_files.append(current)
             destination = current_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(current, destination)
         before = baseline.read_text(encoding="utf-8", errors="replace").splitlines() if baseline.is_file() else []
         after = current.read_text(encoding="utf-8", errors="replace").splitlines() if current.is_file() else []
-        patch_parts.extend(difflib.unified_diff(
+        current_diff = list(difflib.unified_diff(
             before, after,
             fromfile=f"baseline/{relative.as_posix()}",
             tofile=f"current/{relative.as_posix()}",
             lineterm="",
         ))
+        patch_parts.extend(current_diff)
+        added_text.extend(line[1:] for line in current_diff if line.startswith("+") and not line.startswith("+++"))
     (task_dir / "review-diff.patch").write_text("\n".join(patch_parts) + "\n", encoding="utf-8")
+    _collect_review_dependencies(source, changed_current_files, "\n".join(added_text), context_root)
+
+
+def _collect_review_dependencies(source: Path, changed_files: list[Path], added_text: str, destination: Path) -> None:
+    """Copy direct relative imports actually referenced by added lines into the review evidence pack."""
+    copied: list[str] = []
+    for current in changed_files:
+        text = current.read_text(encoding="utf-8", errors="replace")
+        for match in re.finditer(r"(?m)^\s*import\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]", text):
+            binding, specifier = match.group(1), match.group(2)
+            if not specifier.startswith("."):
+                continue
+            base = (current.parent / specifier)
+            candidates = [base.with_suffix(".ets"), base / "Index.ets", base]
+            dependency = next((item for item in candidates if item.is_file()), None)
+            if not dependency:
+                continue
+            try:
+                relative = dependency.resolve().relative_to(source.resolve())
+            except ValueError:
+                continue
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dependency, target)
+            copied.append(relative.as_posix())
+    write_json(destination.parent / "review-context.json", {"productionDependencies": list(dict.fromkeys(copied))})
 
 
 def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
@@ -219,6 +276,10 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
     target = task["target"]
     target_file = target.get("file_path", target.get("filePath", "")).replace("\\", "/")
     symbol = target.get("symbol")
+    risk = read_json(task_dir / "risk-report.json") if (task_dir / "risk-report.json").exists() else {}
+    expected_owner = risk.get("target", {}).get("owner")
+    target_source = Path(task.get("workspace_root", task.get("workspaceRoot", ""))) / target_file
+    target_text = target_source.read_text(encoding="utf-8", errors="replace") if target_source.is_file() else ""
 
     base_project = read_json(homecheck_root / "config" / "projectConfig.json")
     base_rule = read_json(homecheck_root / "config" / "ruleConfig.json")
@@ -274,8 +335,12 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
             if message.get("rule") != rule:
                 continue
             text = str(message.get("message", ""))
-            if not symbol or re.search(rf"['\"]{re.escape(symbol)}['\"]", text):
-                remaining.append(message)
+            if symbol and not re.search(rf"['\"]{re.escape(symbol)}['\"]", text):
+                continue
+            issue_owner = _owner_at_line(target_text, int(message.get("line", 1)), target_source.stem)
+            if expected_owner and issue_owner != expected_owner:
+                continue
+            remaining.append(message)
     write_json(task_dir / "smell-after.json", remaining)
     if remaining:
         print(f"目标异味仍存在：{len(remaining)} 条", file=sys.stderr)
@@ -287,6 +352,12 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
 def _strip_project(path: str, project: str) -> str:
     prefix = project.rstrip("/") + "/"
     return path[len(prefix) :] if path.startswith(prefix) else path
+
+
+def _owner_at_line(text: str, line: int, fallback: str) -> str:
+    prefix = "\n".join(text.splitlines()[:max(0, line - 1)])
+    owners = list(re.finditer(r"\b(?:class|struct)\s+([A-Za-z_$][\w$]*)", prefix))
+    return owners[-1].group(1) if owners else fallback
 
 
 def main(argv: list[str] | None = None) -> int:

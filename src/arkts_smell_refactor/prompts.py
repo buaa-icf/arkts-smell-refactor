@@ -60,7 +60,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
     analysis_section = f"\n{analysis_title}：\n{analysis_text}\n" if analysis_text else ""
     return f"""你是独立的 ArkTS 重构评审 Agent。该任务仅做只读评审，禁止修改任何文件。
 
-只使用任务目录中平台提供的 `review-diff.patch`、`baseline-production`、`current-production`、task.json、review-risk.json、refactor-changes.json 和 {gates_file} 评审以下重构。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或任何写入命令。`commitHash` 只是输入元信息，不得替代本地重构前基线：
+只使用任务目录中平台提供的 `review-diff.patch`、`baseline-production`、`current-production`、`review-context-production`、review-context.json、task.json、review-risk.json、refactor-changes.json 和 {gates_file} 评审以下重构。`review-context-production` 包含本次 diff 直接依赖的只读生产实现，必须核对新增委托、Mapper、Builder、Helper 等被调用实现。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或任何写入命令。`commitHash` 只是输入元信息，不得替代本地重构前基线：
 
 - 异味：{task.smell_type}
 - 文件：{task.target.file_path}

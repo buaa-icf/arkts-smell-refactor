@@ -73,7 +73,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
         review_prompt = build_review_prompt(task, risk)
         review_prompt += f"\n\n本次直接重构本地当前代码，commitHash 仅为元信息，不得用它作为语义基线。"
-        review_prompt += "\n平台会在任务目录生成 baseline-production、current-production 与 review-diff.patch。只允许使用这些材料评审，禁止访问原项目。\n"
+        review_prompt += "\n平台会在任务目录生成 baseline-production、current-production、review-context-production 与 review-diff.patch。只允许使用这些材料评审，禁止访问原项目。\n"
         write_text(task_dir / "review-prompt.md", review_prompt)
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")

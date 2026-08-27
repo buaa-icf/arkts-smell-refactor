@@ -2,10 +2,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arkts_smell_refactor.gate import _changed_current_lines, _fresh_copy, _sync_production_changes
+from arkts_smell_refactor.gate import _changed_current_lines, _fresh_copy, _owner_at_line, _sync_production_changes
 
 
 class GateTests(unittest.TestCase):
+    def test_smell_identity_distinguishes_same_method_name_by_owner(self):
+        source = """class TotalCashMapper {
+  static getTotalCash() {}
+}
+class OrderVM {
+  getTotalCash() {}
+}
+"""
+        self.assertEqual("TotalCashMapper", _owner_at_line(source, 2, "File"))
+        self.assertEqual("OrderVM", _owner_at_line(source, 5, "File"))
+
     def test_refactor_workspace_physically_excludes_tests(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -90,6 +101,29 @@ class GateTests(unittest.TestCase):
 
             self.assertEqual(0, _sync_production_changes(mirror, source))
             self.assertEqual("export after", source_file.read_text(encoding="utf-8"))
+
+    def test_review_pack_includes_direct_relative_production_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_page = source / "feature/src/main/ets/pages/Page.ets"
+            mirror_page = mirror / "feature/src/main/ets/pages/Page.ets"
+            dependency = source / "feature/src/main/ets/viewModels/PageVM.ets"
+            source_page.parent.mkdir(parents=True)
+            mirror_page.parent.mkdir(parents=True)
+            dependency.parent.mkdir(parents=True)
+            source_page.write_text("export class Page {}", encoding="utf-8")
+            mirror_page.write_text(
+                "import { PageVM } from '../viewModels/PageVM'\nexport class Page { vm: PageVM }",
+                encoding="utf-8",
+            )
+            dependency.write_text("export class PageVM { copy(): void {} }", encoding="utf-8")
+
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            packed = mirror.parent / "review-context-production/feature/src/main/ets/viewModels/PageVM.ets"
+            self.assertTrue(packed.exists())
+            self.assertIn("copy", packed.read_text(encoding="utf-8"))
 
     def test_test_build_cache_is_excluded_from_refactor_workspace(self):
         with tempfile.TemporaryDirectory() as temp:

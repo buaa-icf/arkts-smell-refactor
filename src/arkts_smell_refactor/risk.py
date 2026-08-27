@@ -87,6 +87,7 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
         "target": {
             "filePath": task.target.file_path,
             "symbol": symbol,
+            "owner": owner,
             **declaration,
         },
         "callers": {

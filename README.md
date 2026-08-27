@@ -217,7 +217,7 @@ Agent 在隔离区执行 Hvigor 验证时自动产生的模块级 `BuildProfile.
 
 默认重构规范是保留原方法、所属类、签名和调用关系，优先使用 Extract Method、Extract Class 或 Introduce Delegate。也就是把依恋外部对象的逻辑提取出去，由原方法委托，而不是删除/搬走原方法再批量修改调用方。
 
-Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、风险报告和前四层结果，并把其工作目录限制在任务目录；它不读取原项目、调用点或测试代码，也不重复运行构建和测试。
+Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、diff 直接依赖的一跳生产实现、风险报告和前四层结果，并把其工作目录限制在任务目录；它不扫描原项目、调用点或测试代码，也不重复运行构建和测试。新增委托、Mapper、Builder、Helper 等依赖实现会进入 `review-context-production`，避免因收窄项目访问而丢失语义证据。
 
 工具会自动从 PATH 查找实际安装的 `deveco`、`hvigorw`、`codelinter`，并自动定位同一工作区下的 `homecheck-extrule`。缺少工具时对应步骤记为 `BLOCKED/INCOMPLETE`，不会要求使用者临时拼接命令。
 
@@ -439,6 +439,8 @@ repair-prompt-1.md
 repair-agent-1.log
 review-diff.patch
 current-production/
+review-context-production/
+review-context.json
 gates.json
 review.json
 result.json
