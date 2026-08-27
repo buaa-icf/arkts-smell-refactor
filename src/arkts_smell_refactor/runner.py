@@ -126,7 +126,9 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         if repair_result.status != "PASS":
             terminal = [repair_result]
             attempts.append({"attempt": repair_number, "steps": [repair_result.to_dict()]})
-            break
+            if repair_result.status == "BLOCKED" or repair_number >= max_repairs:
+                break
+            continue
 
     result = _final_result(task.task_id, results, dry_run, terminal)
     result["repairAttempts"] = repair_number
@@ -161,6 +163,16 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     logical_stage = failed.name.split("-repair-", 1)[0]
     review = read_json(task_dir / "review.json") if logical_stage == "review-agent" and (task_dir / "review.json").exists() else {}
     issues = review.get("issues", []) if isinstance(review, dict) else []
+    if logical_stage == "smell" and (task_dir / "smell-after.json").exists():
+        issues = [
+            {
+                "category": "remaining-smell",
+                "filePath": task.target.file_path,
+                "line": item.get("line"),
+                "reason": item.get("message", "目标异味仍存在"),
+            }
+            for item in read_json(task_dir / "smell-after.json")
+        ]
     log_text = ""
     if failed.output_file and Path(failed.output_file).is_file():
         log_text = Path(failed.output_file).read_text(encoding="utf-8", errors="replace")[-12000:]

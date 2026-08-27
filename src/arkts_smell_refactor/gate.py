@@ -22,7 +22,8 @@ GENERATED_FILES = {"buildprofile.ets", "oh-package-lock.json5"}
 def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: Path | None = None) -> int:
     """Run the refactor agent in a production-only mirror, then copy back code only."""
     task = read_json(task_dir / "task.json")
-    workspace = task_dir / "refactor-workspace"
+    workspace_name = "refactor-workspace" if prompt_file is None else f"refactor-workspace-{prompt_file.stem}"
+    workspace = task_dir / workspace_name
     _fresh_copy(source_root, workspace, exclude_tests=True)
     target_file = Path(task["workspace_root"]) / task["target"]["file_path"]
     try:
