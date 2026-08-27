@@ -44,8 +44,7 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 - 根据风险报告和专项静态画像选择 Extract Method、Move Method、Extract Class、Mapper、Builder、Adapter、Delegate 或其他最小重构；不要机械套用同一种手法。
 - 不把原条件分支内的操作无条件移到分支外；提取前后必须保持条件和副作用边界。
 - 不要把“检测器不再命中”当作行为等价的证明。
-- 重构完成后允许第一次 `build_project`。
-- 第一次 `build_project` 失败后，只有判断为“本次修改导致的编译错误”，才允许修改代码并进行第二次构建。
+- 每轮重构最多执行两次 `build_project`：重构后允许第一次；只有第一次失败且确认是本轮修改导致的编译错误，才允许修复后执行第二次。第二次后不得继续构建，失败交由平台 loop 处理。
 {analysis_section}
 
 ## 异味专项指导
@@ -61,7 +60,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
     analysis_section = f"\n{analysis_title}：\n{analysis_text}\n" if analysis_text else ""
     return f"""你是独立的 ArkTS 重构评审 Agent。该任务仅做只读评审，禁止修改任何文件。
 
-请对照平台保存的重构前本地文件、当前生产代码、task.json、risk-report.json 和 {gates_file}，评审以下重构。`commitHash` 只是输入元信息，不得替代本地重构前基线：
+只使用任务目录中平台提供的 `review-diff.patch`、`baseline-production`、`current-production`、task.json、review-risk.json、refactor-changes.json 和 {gates_file} 评审以下重构。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或任何写入命令。`commitHash` 只是输入元信息，不得替代本地重构前基线：
 
 - 异味：{task.smell_type}
 - 文件：{task.target.file_path}
@@ -72,15 +71,16 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 必须执行以下检查：
 
 1. 目标异味是否实质消除，而不只是逃避检测器；是否产生新异味。
-2. 打开并检查 diff 涉及的每个生产代码文件及新增实现，不得用“只要新方法等价”代替实际核对。
-3. 根据 risk-report.json 的每项风险检查调用契约、响应式状态、UI ID、默认值、null/undefined、异常、数组顺序、对象引用和副作用顺序。
+2. 打开并检查平台提供的 diff 涉及的每个生产代码文件及新增实现，不得用“只要新方法等价”代替实际核对；证据不足时必须输出 UNCERTAIN，不得扫描项目补充上下文。
+3. 根据 review-risk.json 的每项语义风险检查响应式状态、UI ID、默认值、null/undefined、异常、数组顺序、对象引用和副作用顺序。
    特别检查条件分支内的调用是否被移到分支外；“无数据时不执行”与“无数据时重置状态”不等价。
-4. 检查旧符号的生产代码与测试代码调用点是否仍然有效；测试代码本身不得被修改。
-   同名方法不一定是同一个符号，不得把其他类的同名方法及其测试当作目标调用点，也不得因此扩大修改范围。
-5. 前四层门禁结果只能作为证据，不能代替语义评审。
+4. 调用点、编译和测试正确性由前四层门禁负责，评审 Agent 不重复搜索调用点或测试代码；只核对 diff 中可见的入口契约变化、语义异味和风险是否消除。
+5. 前四层门禁结果只能作为已完成的机械验证证据，不能代替语义评审。
 6. 对 switch-statement 任务逐项核对 selector、每个 case 标签、default/无 default、分组 case 和可执行 fall-through；确认 Map/Set 的键语义以及 0、false、空串、null/undefined 等值没有被错误当成缺失。
 7. 若使用函数/策略表，核对 this 绑定、闭包捕获、表创建时机、await/异常传播和每次调用的状态读取；若重构的是 if/else if，核对条件从左到右求值与短路行为。
 8. 对 feature-envy 任务核对被依恋对象、访问成员、职责归属和建议重构形态；确认原入口契约、对象身份、条件边界、读取时机、累加/替换语义和依赖方向没有变化，并检查依恋是否只是被搬到新的方法或工具类。
+
+判定必须自洽：异味未实质消除、行为不等价或存在 blocking issue 时必须 FAIL；证据不足时必须 UNCERTAIN；PASS 不得包含 blocking issue。不得使用“通常”“应该”“可能一致”等推测作为 passed 证据。
 
 最终只输出一个 JSON 对象，不要使用 Markdown 代码围栏：
 
@@ -90,8 +90,39 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
   'smellRemoved': True,
   'behaviorEquivalent': True,
   'riskChecks': [{'riskCode': '风险编号', 'status': 'passed | failed | uncertain', 'evidence': '代码证据'}],
-  'issues': [{'category': '问题类型', 'filePath': '路径', 'line': 1, 'reason': '原因'}]
+  'issues': [{'severity': 'blocking | warning', 'category': '问题类型', 'filePath': '路径', 'line': 1, 'reason': '原因', 'requiredFix': '阻断问题的修复要求'}]
 }, ensure_ascii=False, indent=2)}
+"""
+
+
+def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[str, Any], attempt: int) -> str:
+    issues = "\n".join(
+        f"- {item.get('category', failure.get('classification', 'failure'))}: {item.get('reason') or item.get('evidence') or '见失败日志'}"
+        for item in failure.get("issues", [])
+    ) or f"- {failure.get('summary', '见失败报告与对应日志')}"
+    return f"""你正在执行 ArkTS 重构的第 {attempt} 轮定向修复。直接修改工作区中的生产代码并保存。
+
+## 原任务
+
+- 异味：{task.smell_type}
+- 目标文件：{task.target.file_path}
+- 目标符号：{task.target.symbol or '未解析'}
+- 原始消息：{task.message}
+
+## 本轮唯一修复目标
+
+失败阶段：{failure.get('stage', 'unknown')}
+{issues}
+
+## 强制边界
+
+- 只修复 failure-report.json 中列出的本轮阻断问题，不重新设计已经通过的部分。
+- 保持原条件边界、默认值、null/undefined、对象身份、数组累加/替换语义、响应式读取时机和副作用顺序。
+- 不读取或修改测试代码、构建配置、依赖及无关生产文件。
+- 不通过改名、挪行或按阈值拆小方法逃避异味检测。
+- 本轮最多执行两次 `build_project`：修复后允许第一次；只有第一次失败且确认是本轮修改导致的编译错误，才允许继续修复并执行第二次。第二次后禁止继续构建，失败交由平台重新分析。
+
+完成后简要说明修复了哪条失败证据、修改文件和实际验证。
 """
 
 

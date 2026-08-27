@@ -18,7 +18,7 @@ IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_m
 GENERATED_FILES = {"buildprofile.ets", "oh-package-lock.json5"}
 
 
-def refactor_gate(task_dir: Path, source_root: Path, deveco: Path) -> int:
+def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: Path | None = None) -> int:
     """Run the refactor agent in a production-only mirror, then copy back code only."""
     task = read_json(task_dir / "task.json")
     workspace = task_dir / "refactor-workspace"
@@ -29,7 +29,7 @@ def refactor_gate(task_dir: Path, source_root: Path, deveco: Path) -> int:
     except ValueError:
         print("目标文件不在检测到的 Harmony 工程内", file=sys.stderr)
         return 3
-    prompt = (task_dir / "refactor-prompt.md").read_text(encoding="utf-8")
+    prompt = (prompt_file or (task_dir / "refactor-prompt.md")).read_text(encoding="utf-8")
     prompt = prompt.replace(task["target"]["file_path"], target_relative.as_posix())
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
@@ -163,13 +163,16 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
             forbidden.append(relative.as_posix())
             continue
         allowed_changes.append((mirror_file, source_file, relative))
-    write_json(mirror.parent / "refactor-changes.json", {"changedProductionFiles": [x[2].as_posix() for x in allowed_changes], "rejectedFiles": forbidden})
+    changes_file = mirror.parent / "refactor-changes.json"
+    previous = read_json(changes_file).get("changedProductionFiles", []) if changes_file.exists() else []
+    combined = list(dict.fromkeys([*previous, *[x[2].as_posix() for x in allowed_changes]]))
+    write_json(changes_file, {"changedProductionFiles": combined, "rejectedFiles": forbidden})
     if forbidden:
         print("Refactor Agent 尝试修改非生产代码或配置：" + ", ".join(forbidden), file=sys.stderr)
         return 4
     for mirror_file, source_file, relative in allowed_changes:
         baseline_file = mirror.parent / "baseline-production" / relative
-        if source_file.exists():
+        if source_file.exists() and not baseline_file.exists():
             baseline_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, baseline_file)
         source_file.parent.mkdir(parents=True, exist_ok=True)
@@ -178,8 +181,34 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
     if not changed:
         print("Refactor Agent 未产生允许的生产代码修改", file=sys.stderr)
         return 5
+    _prepare_review_materials(mirror.parent, source, combined)
     print("已同步生产代码修改：" + ", ".join(changed))
     return 0
+
+
+def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) -> None:
+    """Materialize a review-only evidence pack so the reviewer never needs project access."""
+    current_root = task_dir / "current-production"
+    if current_root.exists():
+        shutil.rmtree(current_root)
+    patch_parts: list[str] = []
+    for relative_text in changes:
+        relative = Path(relative_text)
+        baseline = task_dir / "baseline-production" / relative
+        current = source / relative
+        if current.is_file():
+            destination = current_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(current, destination)
+        before = baseline.read_text(encoding="utf-8", errors="replace").splitlines() if baseline.is_file() else []
+        after = current.read_text(encoding="utf-8", errors="replace").splitlines() if current.is_file() else []
+        patch_parts.extend(difflib.unified_diff(
+            before, after,
+            fromfile=f"baseline/{relative.as_posix()}",
+            tofile=f"current/{relative.as_posix()}",
+            lineterm="",
+        ))
+    (task_dir / "review-diff.patch").write_text("\n".join(patch_parts) + "\n", encoding="utf-8")
 
 
 def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
@@ -270,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     refactor.add_argument("--task-dir", required=True, type=Path)
     refactor.add_argument("--source-root", required=True, type=Path)
     refactor.add_argument("--deveco", required=True, type=Path)
+    refactor.add_argument("--prompt-file", type=Path)
     hvigor = sub.add_parser("hvigor")
     hvigor.add_argument("--task-dir", required=True, type=Path)
     hvigor.add_argument("--source-root", required=True, type=Path)
@@ -286,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smell":
         return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve())
     if args.command == "refactor":
-        return refactor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve())
+        return refactor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(), args.prompt_file.resolve() if args.prompt_file else None)
     if args.command == "linter":
         return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve() if args.config else None)
     return hvigor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None, args.task, args.module)

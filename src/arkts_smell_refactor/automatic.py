@@ -69,11 +69,11 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         risk = analyze_risks(task)
         write_json(task_dir / "task.json", task.to_dict())
         write_json(task_dir / "risk-report.json", risk)
+        write_json(task_dir / "review-risk.json", _review_risk(risk))
         write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
         review_prompt = build_review_prompt(task, risk)
         review_prompt += f"\n\n本次直接重构本地当前代码，commitHash 仅为元信息，不得用它作为语义基线。"
-        review_prompt += f"\n平台在重构时把每个实际改动文件的原内容保存于：{task_dir / 'baseline-production'}"
-        review_prompt += f"\n实际同步的生产文件清单位于：{task_dir / 'refactor-changes.json'}。请逐文件对照这些基线评审。\n"
+        review_prompt += "\n平台会在任务目录生成 baseline-production、current-production 与 review-diff.patch。只允许使用这些材料评审，禁止访问原项目。\n"
         write_text(task_dir / "review-prompt.md", review_prompt)
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")
@@ -97,6 +97,20 @@ def _discover_workspace(data: list[dict[str, Any]], start: Path) -> Path:
             if projects and all((candidate / project).is_dir() for project in projects):
                 return candidate.resolve()
     raise ValueError("无法自动定位 sourceProject 本地仓库；请在包含这些仓库的目录或其上级目录启动工具")
+
+
+def _review_risk(risk: dict[str, Any]) -> dict[str, Any]:
+    """Remove caller/test evidence already covered by compile and test gates."""
+    hidden_codes = {"CALL_SITE_BREAK", "TEST_REFERENCE_BREAK", "TEST_CALLERS"}
+    return {
+        key: value for key, value in risk.items() if key != "callers"
+    } | {
+        "risks": [item for item in risk.get("risks", []) if item.get("code") not in hidden_codes],
+        "recommendedConstraints": [
+            item for item in risk.get("recommendedConstraints", [])
+            if item.get("code") not in {"KEEP_COMPATIBILITY_ENTRY"}
+        ],
+    }
 
 
 def _discover_tools(workspace: Path) -> dict[str, str | None]:
@@ -129,7 +143,13 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
         "blockedOutputRegex": "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable",
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
-    review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{project_root}", "--format", "json", "--dangerously-skip-permissions"], "timeoutSeconds": 3600} if tools["deveco"] else None
+    repair = {
+        "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"], "--prompt-file", "{repair_prompt_file}"],
+        "cwd": "{task_dir}",
+        "blockedOutputRegex": "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable",
+        "timeoutSeconds": 3600,
+    } if tools["deveco"] and harmony_root else None
+    review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{task_dir}", "--format", "json", "--dangerously-skip-permissions"], "cwd": "{task_dir}", "timeoutSeconds": 3600} if tools["deveco"] else None
     smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] else missing("HomeCheck")
     environment_blockers = (
         "Invalid project path|Permissions Error|signing|signature|SignHap|"
@@ -147,7 +167,7 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
         linter = {"command": linter_command, "cwd": "{task_dir}", "timeoutSeconds": 1200}
     else:
         linter = missing("codelinter 或 Harmony 工程根目录")
-    return {"refactorAgent": refactor, "gates": {"smell": smell, "build": build, "test": test, "linter": linter}, "reviewAgent": review}
+    return {"refactorAgent": refactor, "repairAgent": repair, "maxRepairAttempts": 3, "gates": {"smell": smell, "build": build, "test": test, "linter": linter}, "reviewAgent": review}
 
 
 def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, str | None], task_name: str, module: str | None = None) -> list[str]:

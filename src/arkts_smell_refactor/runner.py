@@ -19,6 +19,7 @@ PLACEHOLDERS = {
     "risk_file",
     "prompt_file",
     "review_prompt_file",
+    "repair_prompt_file",
     "project_root",
     "workspace_root",
     "target_file",
@@ -59,42 +60,133 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         write_json(task_dir / "result.json", result)
         return result
 
-    gate_results: list[CommandResult] = []
-    for gate_name in ("smell", "build", "test", "linter"):
-        spec = config.get("gates", {}).get(gate_name)
-        if not spec or not spec.get("enabled", True):
-            gate_results.append(CommandResult(gate_name, "SKIPPED", reason="未配置或已禁用"))
-            continue
-        if progress: progress(gate_name, "开始")
-        gate_results.append(_run_spec(gate_name, spec, context, task.project_root, task_dir, dry_run))
-        if progress: progress(gate_name, gate_results[-1].status)
+    max_repairs = int(config.get("maxRepairAttempts", 3))
+    repair_spec = config.get("repairAgent")
+    attempts: list[dict[str, Any]] = []
+    terminal: list[CommandResult] = []
+    repair_number = 0
 
-    preliminary = {
-        "schemaVersion": "1.0",
-        "taskId": task.task_id,
-        "gates": [item.to_dict() for item in gate_results],
-    }
-    write_json(task_dir / "gates.json", preliminary)
-    results.extend(gate_results)
+    while True:
+        suffix = "" if repair_number == 0 else f"-repair-{repair_number}"
+        gate_results = _run_gates_fail_fast(task_dir, task, config, context, dry_run, progress, suffix)
+        results.extend(gate_results)
+        write_json(task_dir / "gates.json", {
+            "schemaVersion": "1.0", "taskId": task.task_id,
+            "attempt": repair_number, "gates": [item.to_dict() for item in gate_results],
+        })
 
-    review = config.get("reviewAgent")
-    if review:
-        if progress: progress("评审 Agent", "开始")
-        review_result = _run_spec("review-agent", review, context, task.project_root, task_dir, dry_run)
-        results.append(review_result)
-        if review_result.status == "PASS" and not dry_run:
-            review_json = _extract_review_json(task_dir / "review-agent.log", task_dir / "review.json")
-            if review_json:
-                verdict = str(review_json.get("verdict", "UNCERTAIN")).upper()
-                review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
-                review_result.reason = None if verdict in {"PASS", "FAIL"} else "评审输出为 UNCERTAIN 或缺少有效 verdict"
-        if progress: progress("评审 Agent", review_result.status)
-    else:
-        results.append(CommandResult("review-agent", "SKIPPED", reason="config 未配置 reviewAgent"))
+        active_gates = [item for item in gate_results if item.status != "SKIPPED"]
+        all_four_pass = len(active_gates) == 4 and all(item.status in ({"PASS", "DRY_RUN"} if dry_run else {"PASS"}) for item in active_gates)
+        if all_four_pass:
+            review = config.get("reviewAgent")
+            if review:
+                review_name = "review-agent" + suffix
+                if progress: progress("评审 Agent", "开始")
+                review_result = _run_spec(review_name, review, context, str(task_dir), task_dir, dry_run)
+                if review_result.status == "PASS" and not dry_run:
+                    review_path = task_dir / f"{review_name}.log"
+                    review_json = _extract_review_json(review_path, task_dir / "review.json")
+                    if review_json:
+                        verdict = str(review_json.get("verdict", "UNCERTAIN")).upper()
+                        review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
+                        review_result.reason = None if verdict in {"PASS", "FAIL"} else "评审输出为 UNCERTAIN 或缺少有效 verdict"
+                results.append(review_result)
+                terminal = [*gate_results, review_result]
+                if progress: progress("评审 Agent", review_result.status)
+            else:
+                skipped = CommandResult("review-agent" + suffix, "SKIPPED", reason="config 未配置 reviewAgent")
+                results.append(skipped)
+                terminal = [*gate_results, skipped]
+        else:
+            reason = "前四层门禁未全部通过，Review 不执行"
+            skipped = CommandResult("review-agent" + suffix, "SKIPPED", reason=reason)
+            results.append(skipped)
+            terminal = [*gate_results, skipped]
 
-    result = _final_result(task.task_id, results, dry_run)
+        failed = next((item for item in terminal if item.status in {"FAIL", "BLOCKED"}), None)
+        attempts.append({"attempt": repair_number, "steps": [item.to_dict() for item in terminal]})
+        if dry_run or not failed or failed.status == "BLOCKED" or repair_number >= max_repairs or not repair_spec:
+            break
+
+        failure = _build_failure_report(task_dir, task, failed, repair_number + 1)
+        write_json(task_dir / "failure-report.json", failure)
+        write_json(task_dir / f"failure-report-{repair_number + 1}.json", failure)
+        if not failure["repairable"]:
+            break
+        from .prompts import build_repair_prompt
+        risk = read_json(task_dir / "risk-report.json")
+        repair_number += 1
+        repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
+        write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
+        context["repair_prompt_file"] = str(repair_prompt.resolve())
+        if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
+        repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
+        results.append(repair_result)
+        if progress: progress(f"修复 Agent 第{repair_number}轮", repair_result.status)
+        if repair_result.status != "PASS":
+            terminal = [repair_result]
+            attempts.append({"attempt": repair_number, "steps": [repair_result.to_dict()]})
+            break
+
+    result = _final_result(task.task_id, results, dry_run, terminal)
+    result["repairAttempts"] = repair_number
+    result["attempts"] = attempts
     write_json(task_dir / "result.json", result)
     return result
+
+
+def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, Any], context: dict[str, str], dry_run: bool, progress, suffix: str) -> list[CommandResult]:
+    gate_results: list[CommandResult] = []
+    stopped_by: str | None = None
+    for gate_name in ("smell", "build", "test", "linter"):
+        display = gate_name
+        result_name = gate_name + suffix
+        if stopped_by:
+            gate_results.append(CommandResult(result_name, "SKIPPED", reason=f"{stopped_by} 未通过，fail-fast 跳过"))
+            continue
+        spec = config.get("gates", {}).get(gate_name)
+        if not spec or not spec.get("enabled", True):
+            gate_results.append(CommandResult(result_name, "SKIPPED", reason="未配置或已禁用"))
+            continue
+        if progress: progress(display, "开始")
+        current = _run_spec(result_name, spec, context, task.project_root, task_dir, dry_run)
+        gate_results.append(current)
+        if progress: progress(display, current.status)
+        if not dry_run and current.status != "PASS":
+            stopped_by = display
+    return gate_results
+
+
+def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
+    logical_stage = failed.name.split("-repair-", 1)[0]
+    review = read_json(task_dir / "review.json") if logical_stage == "review-agent" and (task_dir / "review.json").exists() else {}
+    issues = review.get("issues", []) if isinstance(review, dict) else []
+    log_text = ""
+    if failed.output_file and Path(failed.output_file).is_file():
+        log_text = Path(failed.output_file).read_text(encoding="utf-8", errors="replace")[-12000:]
+    changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
+    attributable = any(Path(item).name.lower() in log_text.lower() or item.lower() in log_text.lower() for item in changes)
+    if logical_stage in {"smell", "linter", "review-agent"}:
+        repairable = True
+    elif logical_stage in {"build", "test"}:
+        repairable = attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower())
+    else:
+        repairable = False
+    classification = {
+        "smell": "SMELL_REMAINS_OR_MOVED",
+        "build": "INTRODUCED_BUILD_FAILURE" if repairable else "UNATTRIBUTED_BUILD_FAILURE",
+        "test": "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE",
+        "linter": "INTRODUCED_LINTER_FAILURE",
+        "review-agent": "SEMANTIC_REVIEW_FAILURE",
+    }.get(logical_stage, "UNSUPPORTED_FAILURE")
+    summary = review.get("summary") if isinstance(review, dict) else None
+    return {
+        "schemaVersion": "1.0", "attempt": next_attempt, "stage": logical_stage,
+        "classification": classification, "repairable": repairable,
+        "summary": summary or failed.reason or f"{logical_stage} 未通过",
+        "changedProductionFiles": changes, "issues": issues,
+        "logTail": log_text,
+    }
 
 
 def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_cwd: str, task_dir: Path, dry_run: bool) -> CommandResult:
@@ -207,6 +299,7 @@ def _context(task_dir: Path, task: RefactorTask) -> dict[str, str]:
         "risk_file": str((task_dir / "risk-report.json").resolve()),
         "prompt_file": str((task_dir / "refactor-prompt.md").resolve()),
         "review_prompt_file": str((task_dir / "review-prompt.md").resolve()),
+        "repair_prompt_file": str((task_dir / "repair-prompt.md").resolve()),
         "project_root": task.project_root,
         "workspace_root": task.workspace_root,
         "target_file": str(task.target_path.resolve()),
@@ -273,8 +366,8 @@ def _extract_review_json(log_path: Path, output_path: Path) -> dict[str, Any] | 
     return data
 
 
-def _final_result(task_id: str, results: list[CommandResult], dry_run: bool) -> dict[str, Any]:
-    statuses = [item.status for item in results]
+def _final_result(task_id: str, results: list[CommandResult], dry_run: bool, terminal: list[CommandResult] | None = None) -> dict[str, Any]:
+    statuses = [item.status for item in (terminal or results)]
     if dry_run:
         verdict = "DRY_RUN"
     elif "FAIL" in statuses:

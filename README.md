@@ -196,6 +196,7 @@ python -m arkts_smell_refactor start --workspace "D:\ROG\Documents\harmonyos\fea
 → Local Test 或 Instrument Test
 → Code Linter
 → 独立 DevEco Code 评审
+→ 失败时生成定向失败报告并最多修复 3 轮
 → 汇总 PASS / FAIL / BLOCKED
 ```
 
@@ -216,7 +217,7 @@ Agent 在隔离区执行 Hvigor 验证时自动产生的模块级 `BuildProfile.
 
 默认重构规范是保留原方法、所属类、签名和调用关系，优先使用 Extract Method、Extract Class 或 Introduce Delegate。也就是把依恋外部对象的逻辑提取出去，由原方法委托，而不是删除/搬走原方法再批量修改调用方。
 
-Review Agent 与 Refactor Agent 相互独立。Review Agent 可以读取已有测试代码，用测试作为验收证据，但仍禁止修改测试。
+Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、风险报告和前四层结果，并把其工作目录限制在任务目录；它不读取原项目、调用点或测试代码，也不重复运行构建和测试。
 
 工具会自动从 PATH 查找实际安装的 `deveco`、`hvigorw`、`codelinter`，并自动定位同一工作区下的 `homecheck-extrule`。缺少工具时对应步骤记为 `BLOCKED/INCOMPLETE`，不会要求使用者临时拼接命令。
 
@@ -420,6 +421,10 @@ DevEco Code Refactor Agent
   → 独立 DevEco Code Review Agent
 ```
 
+流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在前四层全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的修复 Agent，最多修复 3 轮。每轮代码修改后重新从异味复检开始执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+
+Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
+
 每一步的标准输出和错误输出保存在任务目录下，例如：
 
 ```text
@@ -429,6 +434,11 @@ build.log
 test.log
 linter.log
 review-agent.log
+failure-report-1.json
+repair-prompt-1.md
+repair-agent-1.log
+review-diff.patch
+current-production/
 gates.json
 review.json
 result.json
@@ -446,10 +456,11 @@ skills/arkts-refactor-review/SKILL.md
 
 该 Skill 固化了评审方法，包括：
 
-- 必须对照 Git 基线和完整 diff；
+- 必须对照平台保存的本地基线和完整 diff；
 - 必须检查所有修改文件和新增实现；
 - 必须逐项核对 `risk-report.json`；
-- 必须检查调用点、响应式状态、UI ID、对象身份和副作用；
+- 必须检查语义异味、响应式状态、UI ID、对象身份和副作用；
+- 禁止扫描原项目、测试代码或重复执行前四层工具；
 - 不允许用“构建通过”或“检测器清零”代替语义评审；
 - 只输出 `PASS / FAIL / UNCERTAIN` 结构化 JSON。
 
@@ -500,8 +511,8 @@ python -m unittest discover -s tests -v
 1. DevEco Code CLI 参数由使用者配置，尚未绑定特定版本。
 2. 异味门禁需要项目提供能以退出码表达“目标异味是否消失”的包装命令。
 3. 静态调用点与条件分支分析是文本/词法级近似，后续可接入 ArkTS AST/类型分析提高符号、类型和闭包捕获精度。
-4. 暂未自动返修；当前会完整保存失败证据，可在下一版把失败门禁转换成定向返修 Prompt。
+4. 自动返修最多 3 轮；当前 build/test 归因依据错误日志是否命中本次修改文件或目标符号，复杂跨模块错误仍可能被保守判为不可返修。
 5. 暂未接入 Data Clumps 和循环依赖的特殊输入格式。
 6. 当前按任务顺序执行门禁，不并行运行构建和测试。
 
-推荐下一步优先实现“HomeCheck 结果判定包装器”和“失败证据生成返修 Prompt”，再考虑批量调度和可视化报告。
+后续可进一步用 ArkTS 编译诊断结构化输出增强 build/test 的失败归因，再考虑批量调度和可视化报告。

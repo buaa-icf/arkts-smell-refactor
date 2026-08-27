@@ -93,6 +93,7 @@ def doctor(args: argparse.Namespace) -> int:
 
 
 def prepare(args: argparse.Namespace) -> int:
+    from .automatic import _review_risk
     tasks = load_dataset_tasks(args.dataset.resolve(), args.workspace.resolve(), args.index)
     args.output.mkdir(parents=True, exist_ok=True)
     index: list[dict[str, str]] = []
@@ -102,6 +103,7 @@ def prepare(args: argparse.Namespace) -> int:
         risk = analyze_risks(task)
         write_json(task_dir / "task.json", task.to_dict())
         write_json(task_dir / "risk-report.json", risk)
+        write_json(task_dir / "review-risk.json", _review_risk(risk))
         write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
         write_text(task_dir / "review-prompt.md", build_review_prompt(task, risk))
         index.append({"taskId": task.task_id, "taskDir": str(task_dir.resolve())})
