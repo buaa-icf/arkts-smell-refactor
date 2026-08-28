@@ -221,6 +221,18 @@ Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供�
 
 工具会自动从 PATH 查找实际安装的 `deveco`、`hvigorw`、`codelinter`，并自动定位同一工作区下的 `homecheck-extrule`。缺少工具时对应步骤记为 `BLOCKED/INCOMPLETE`，不会要求使用者临时拼接命令。
 
+### HomeCheck 精确复检范围
+
+异味门禁通过 HomeCheck 的公开文件级入口 `scan:files -- --files=...` 执行，不再用 `**/*.ets`、`**/*.ts` 扫描整个仓库。每个任务只传入：
+
+- 阳性样本中的原异味文件；
+- `refactor-changes.json` 记录的本次修改生产文件；
+- 本次新增的生产文件。
+
+数据集行号只用于重构前定位，不参与重构后的异味身份判断。结果判定检查原目标方法，以及本次实际修改或新增的方法；方法体发生修改时，即使 HomeCheck 把问题报在未改动的方法声明行，也会按当前方法范围正确归属。这样既不会把旧行号当前位置的无关方法算进来，也能发现把异味转移到新 Helper、Mapper 或委托类的情况。
+
+ArkAnalyzer 为匿名函数生成的内部名称 `%AM<序号>$<外层方法名>` 会归属到外层方法。例如 `%AM2$initialiseUserInfoTextField` 会被视为 `initialiseUserInfoTextField` 内部的匿名函数异味。
+
 对于包含多个独立 Harmony 工程的大仓（例如 `agc-template-market-harmonyos-demos`），工具不会在仓库总目录直接运行 hvigor。它会从目标源文件向上寻找最近的、同时包含 `hvigor/hvigor-config.json5` 与 `build-profile.json5` 的实际工程根目录，并在该目录执行构建和测试。
 
 如果真实工程路径包含 hvigor 不支持的中文字符，平台会把当前工程同步到工具根目录下的纯英文、短路径 `v/<短哈希>`，自动安装该验证副本的 ohpm 依赖，并在副本中执行构建和测试。短路径同时规避 Windows/Hvigor 的259字符路径上限。重构结果仍回写到用户指定的真实本地仓库。
