@@ -12,7 +12,8 @@ This change adds three framework-level capabilities:
 
 1. Static planning evidence for God Class tasks.
 2. Directory-edge evidence for cyclic-dependency tasks.
-3. A risk-triggered public runtime smoke gate for ordinary object construction.
+3. A conservative public export/member compatibility gate.
+4. A risk-triggered public runtime smoke gate for ordinary object construction.
 
 The change does not introduce a planning agent, a fixed refactoring recipe, hidden tests, project-specific datasets, model selection, or experiment policies.
 
@@ -101,9 +102,19 @@ The same generated check runs against a production-only snapshot taken before re
 
 This prevents pre-existing environment or construction limitations from being attributed to the refactoring.
 
+## Public contract gate
+
+Before refactoring, the framework snapshots module `Index.ets` exports and public members of exported target classes. After build it reports:
+
+- removed export names;
+- removed public fields/methods;
+- changes to static/readonly status, parameter optionality/types and return/field types.
+
+Additive members are allowed. The first version is lexical and deliberately does not guess dynamic registrations, package aliases or complex re-export semantics. Contract failures are public repair evidence.
+
 ## Pipeline integration
 
-When enabled, runtime smoke is inserted after build and before the existing test/linter gates. It participates in fail-fast and repair reporting. When not enabled, the original four-gate pipeline and review condition are unchanged.
+The contract gate runs after build. When enabled, runtime smoke follows contract and precedes existing test/linter gates. Both participate in fail-fast and repair reporting. When optional gates are not enabled, the original four-gate pipeline and review condition are unchanged.
 
 ## Known limitations
 

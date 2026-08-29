@@ -208,6 +208,19 @@ class RunnerTests(unittest.TestCase):
             self.assertTrue(failure["repairable"])
             self.assertEqual("INTRODUCED_RUNTIME_INITIALIZATION_FAILURE", failure["classification"])
 
+    def test_contract_failure_is_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (root / "refactor-changes.json").write_text('{"changedProductionFiles":["Foo.ets"]}', encoding="utf-8")
+            (root / "public-contract-results.json").write_text(json.dumps({
+                "passed": False, "removedExports": ["Foo"], "changedMembers": [],
+            }), encoding="utf-8")
+            from arkts_smell_refactor.runner import _build_failure_report, _task_from_file
+            from arkts_smell_refactor.models import CommandResult
+            failure = _build_failure_report(root, _task_from_file(root / "task.json"), CommandResult("contract", "FAIL"), 1)
+            self.assertTrue(failure["repairable"])
+            self.assertEqual("PUBLIC_CONTRACT_BREAK", failure["classification"])
+
     def test_runtime_gate_does_not_replace_missing_core_gate_for_review(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")

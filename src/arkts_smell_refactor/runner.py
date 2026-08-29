@@ -49,6 +49,8 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
     if refactor and not dry_run and results[-1].status != "PASS":
         reason = "重构 Agent 未成功，后续验证没有可验证的重构结果"
         gate_names = ["smell", "build"]
+        if "contract" in config.get("gates", {}):
+            gate_names.append("contract")
         if "runtime" in config.get("gates", {}):
             gate_names.append("runtime")
         gate_names.extend(["test", "linter"])
@@ -85,7 +87,9 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         core_pass = all(name in by_name and by_name[name].status in accepted for name in core_names)
         runtime_name = "runtime" + suffix
         runtime_pass = runtime_name not in by_name or by_name[runtime_name].status in accepted
-        if core_pass and runtime_pass:
+        contract_name = "contract" + suffix
+        contract_pass = contract_name not in by_name or by_name[contract_name].status in accepted
+        if core_pass and contract_pass and runtime_pass:
             review = config.get("reviewAgent")
             if review:
                 review_name = "review-agent" + suffix
@@ -147,6 +151,8 @@ def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, A
     gate_results: list[CommandResult] = []
     stopped_by: str | None = None
     gate_names = ["smell", "build"]
+    if "contract" in config.get("gates", {}):
+        gate_names.append("contract")
     if "runtime" in config.get("gates", {}):
         gate_names.append("runtime")
     gate_names.extend(["test", "linter"])
@@ -180,9 +186,11 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         current = read_json(task_dir / "runtime-smoke-results.json").get("current") or {}
         runtime_log = Path(str(current.get("log", "")))
         if runtime_log.is_file(): log_text = runtime_log.read_text(encoding="utf-8", errors="replace")[-12000:]
+    if logical_stage == "contract" and (task_dir / "public-contract-results.json").is_file():
+        log_text = json.dumps(read_json(task_dir / "public-contract-results.json"), ensure_ascii=False, indent=2)
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
     attributable = any(Path(item).name.lower() in log_text.lower() or item.lower() in log_text.lower() for item in changes)
-    if logical_stage in {"smell", "runtime", "linter", "review-agent"}:
+    if logical_stage in {"smell", "contract", "runtime", "linter", "review-agent"}:
         repairable = True
     elif logical_stage in {"build", "test"}:
         repairable = attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower())
@@ -194,6 +202,7 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         "test": "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE",
         "linter": "INTRODUCED_LINTER_FAILURE",
         "runtime": "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
+        "contract": "PUBLIC_CONTRACT_BREAK",
         "review-agent": "SEMANTIC_REVIEW_FAILURE",
     }.get(logical_stage, "UNSUPPORTED_FAILURE")
     summary = review.get("summary") if isinstance(review, dict) else None

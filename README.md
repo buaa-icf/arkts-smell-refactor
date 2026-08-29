@@ -425,6 +425,8 @@ DevEco Code Refactor Agent
 
 对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。
 
+框架同时冻结模块导出和目标类公共成员的词法契约。build 之后会检查旧导出/公共成员是否被删除，以及静态性、参数和类型签名是否变化；新增公共成员不会失败。复杂别名与动态 re-export 仍作为已知限制记录。
+
 Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
 
 每一步的标准输出和错误输出保存在任务目录下，例如：
@@ -442,6 +444,8 @@ repair-agent-1.log
 runtime-smoke-plan.json
 runtime-smoke-generated/
 runtime-smoke-results.json
+public-contract-before.json
+public-contract-results.json
 review-diff.patch
 current-production/
 review-context-production/

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .runtime_smoke import render_runtime_smoke_list, render_runtime_smoke_test
+from .public_contract import compare_public_contract, snapshot_public_contract
 from .utils import read_json, write_json
 
 
@@ -114,6 +115,29 @@ def runtime_smoke_gate(
         print("Runtime smoke regression: baseline passes, current source throws or cannot run", file=sys.stderr)
         return 1
     print("Runtime smoke passed")
+    return 0
+
+
+def public_contract_gate(task_dir: Path, source_root: Path) -> int:
+    plan_path = task_dir / "public-contract-plan.json"
+    before_path = task_dir / "public-contract-before.json"
+    if not plan_path.is_file() or not before_path.is_file():
+        print("PUBLIC_CONTRACT_DISABLED: no baseline")
+        return 0
+    plan = read_json(plan_path)
+    if not plan.get("enabled"):
+        print("PUBLIC_CONTRACT_DISABLED: " + str(plan.get("reason", "no public surface")))
+        return 0
+    task = read_json(task_dir / "task.json")
+    from .runner import _task_from_file
+    current = snapshot_public_contract(_task_from_file(task_dir / "task.json"), source_root, plan)
+    write_json(task_dir / "public-contract-current.json", current)
+    result = compare_public_contract(read_json(before_path), current)
+    write_json(task_dir / "public-contract-results.json", result)
+    if not result["passed"]:
+        print("Public contract regression: export or public member removed/changed", file=sys.stderr)
+        return 1
+    print("Public contract passed")
     return 0
 
 
@@ -503,6 +527,9 @@ def main(argv: list[str] | None = None) -> int:
     runtime.add_argument("--source-root", required=True, type=Path)
     runtime.add_argument("--hvigorw", required=True, type=Path)
     runtime.add_argument("--ohpm", type=Path)
+    contract = sub.add_parser("public-contract")
+    contract.add_argument("--task-dir", required=True, type=Path)
+    contract.add_argument("--source-root", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.command == "smell":
         return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve())
@@ -512,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
         return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve() if args.config else None)
     if args.command == "runtime-smoke":
         return runtime_smoke_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None)
+    if args.command == "public-contract":
+        return public_contract_gate(args.task_dir.resolve(), args.source_root.resolve())
     return hvigor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None, args.task, args.module)
 
 

@@ -9,6 +9,7 @@ from typing import Any
 
 from .dataset import load_dataset_tasks
 from .prompts import build_refactor_prompt, build_review_prompt
+from .public_contract import prepare_public_contract
 from .risk import analyze_risks
 from .runtime_smoke import prepare_runtime_smoke
 from .runner import execute_pipeline
@@ -72,6 +73,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         write_json(task_dir / "risk-report.json", risk)
         write_json(task_dir / "review-risk.json", _review_risk(risk))
         smoke_plan = prepare_runtime_smoke(task, risk, task_dir)
+        contract_plan = prepare_public_contract(task, task_dir)
         write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
         review_prompt = build_review_prompt(task, risk)
         review_prompt += f"\n\n本次直接重构本地当前代码，commitHash 仅为元信息，不得用它作为语义基线。"
@@ -79,7 +81,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         write_text(task_dir / "review-prompt.md", review_prompt)
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")
-        config = _auto_config(task, task_dir, risk, tools, smoke_plan)
+        config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan)
         result = execute_pipeline(task_dir, config, progress=lambda name, status: print(f"  {name}: {status}"))
         print(f"  最终结果：{result['verdict']}")
         summary.append({"taskId": task.task_id, "target": task.target.symbol or task.target.file_path, "verdict": result["verdict"], "taskDir": str(task_dir)})
@@ -134,7 +136,10 @@ def _find_homecheck(workspace: Path) -> Path | None:
     return None
 
 
-def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, str | None], smoke_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+def _auto_config(
+    task, task_dir: Path, risk: dict[str, Any], tools: dict[str, str | None],
+    smoke_plan: dict[str, Any] | None = None, contract_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     def missing(name: str) -> dict[str, Any]:
         return {"enabled": False, "reason": f"未找到 {name}"}
 
@@ -175,6 +180,15 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
             "blockedOutputRegex": "RUNTIME_SMOKE_BASELINE_UNAVAILABLE|Invalid project path|Permissions Error",
             "timeoutSeconds": 3600,
         }
+    contract = None
+    if (contract_plan or {}).get("enabled") and harmony_root:
+        contract = {
+            "command": [
+                sys.executable, "-m", "arkts_smell_refactor.gate", "public-contract",
+                "--task-dir", "{task_dir}", "--source-root", str(harmony_root),
+            ],
+            "cwd": "{task_dir}", "timeoutSeconds": 300,
+        }
     linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
     if tools["codelinter"] and harmony_root:
         linter_command = [sys.executable, "-m", "arkts_smell_refactor.gate", "linter", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--codelinter", tools["codelinter"]]
@@ -184,6 +198,8 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
     else:
         linter = missing("codelinter 或 Harmony 工程根目录")
     gates = {"smell": smell, "build": build, "test": test, "linter": linter}
+    if contract:
+        gates["contract"] = contract
     if runtime:
         gates["runtime"] = runtime
     return {"refactorAgent": refactor, "repairAgent": repair, "maxRepairAttempts": 3, "gates": gates, "reviewAgent": review}
