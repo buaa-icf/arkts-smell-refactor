@@ -24,7 +24,10 @@ IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_m
 GENERATED_FILES = {"buildprofile.ets", "oh-package-lock.json5"}
 
 
-def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: Path | None = None) -> int:
+def refactor_gate(
+    task_dir: Path, source_root: Path, deveco: Path,
+    prompt_file: Path | None = None, model: str | None = None,
+) -> int:
     """Run the refactor agent in a production-only mirror, then copy back code only."""
     task = read_json(task_dir / "task.json")
     workspace = task_dir / "refactor-workspace"
@@ -39,11 +42,15 @@ def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: 
     prompt = prompt.replace(task["target"]["file_path"], target_relative.as_posix())
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
-    completed = subprocess.run(
-        [str(deveco), "run", "严格执行附件中的重构任务。", "-f", str(agent_prompt),
-         "--dir", str(workspace), "--format", "json", "--dangerously-skip-permissions"],
-        cwd=workspace,
-    )
+    command = [str(deveco), "run"]
+    if model:
+        command.extend(["-m", model])
+    command.extend([
+        "--dir", str(workspace), "--format", "json",
+        "--title", str(task.get("task_id", task.get("taskId", "refactor"))),
+        "--dangerously-skip-permissions", prompt,
+    ])
+    completed = subprocess.run(command, cwd=workspace)
     if completed.returncode != 0:
         return completed.returncode
     return _sync_production_changes(workspace, source_root)
@@ -510,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
     refactor.add_argument("--source-root", required=True, type=Path)
     refactor.add_argument("--deveco", required=True, type=Path)
     refactor.add_argument("--prompt-file", type=Path)
+    refactor.add_argument("--model")
     hvigor = sub.add_parser("hvigor")
     hvigor.add_argument("--task-dir", required=True, type=Path)
     hvigor.add_argument("--source-root", required=True, type=Path)
@@ -534,7 +542,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smell":
         return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve())
     if args.command == "refactor":
-        return refactor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(), args.prompt_file.resolve() if args.prompt_file else None)
+        return refactor_gate(
+            args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(),
+            args.prompt_file.resolve() if args.prompt_file else None, args.model,
+        )
     if args.command == "linter":
         return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve() if args.config else None)
     if args.command == "runtime-smoke":

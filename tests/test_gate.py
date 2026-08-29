@@ -2,10 +2,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arkts_smell_refactor.gate import _changed_current_lines, _fresh_copy, _owner_at_line, _sync_production_changes
+from unittest.mock import patch
+
+from arkts_smell_refactor.gate import _changed_current_lines, _fresh_copy, _owner_at_line, _sync_production_changes, refactor_gate
 
 
 class GateTests(unittest.TestCase):
+    def test_refactor_prompt_is_inline_and_model_is_configurable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source = root / "source"; task_dir = root / "task"
+            target = source / "feature/src/main/ets/Foo.ets"
+            target.parent.mkdir(parents=True); target.write_text("export class Foo {}", encoding="utf-8")
+            task_dir.mkdir(); (task_dir / "task.json").write_text(
+                '{"task_id":"T","workspace_root":"' + str(source) + '","target":{"file_path":"feature/src/main/ets/Foo.ets"}}',
+                encoding="utf-8",
+            )
+            (task_dir / "refactor-prompt.md").write_text("full prompt", encoding="utf-8")
+            with patch("arkts_smell_refactor.gate.subprocess.run") as run, patch(
+                "arkts_smell_refactor.gate._sync_production_changes", return_value=0
+            ):
+                run.return_value.returncode = 0
+                self.assertEqual(0, refactor_gate(task_dir, source, Path("deveco"), model="provider/model"))
+                command = run.call_args.args[0]
+                self.assertIn("provider/model", command)
+                self.assertEqual("full prompt", command[-1])
+                self.assertNotIn("-f", command)
+
     def test_smell_identity_distinguishes_same_method_name_by_owner(self):
         source = """class TotalCashMapper {
   static getTotalCash() {}
