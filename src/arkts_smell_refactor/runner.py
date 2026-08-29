@@ -48,7 +48,11 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
 
     if refactor and not dry_run and results[-1].status != "PASS":
         reason = "重构 Agent 未成功，后续验证没有可验证的重构结果"
-        gate_results = [CommandResult(name, "SKIPPED", reason=reason) for name in ("smell", "build", "test", "linter")]
+        gate_names = ["smell", "build"]
+        if "runtime" in config.get("gates", {}):
+            gate_names.append("runtime")
+        gate_names.extend(["test", "linter"])
+        gate_results = [CommandResult(name, "SKIPPED", reason=reason) for name in gate_names]
         write_json(task_dir / "gates.json", {
             "schemaVersion": "1.0",
             "taskId": task.task_id,
@@ -75,9 +79,13 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
             "attempt": repair_number, "gates": [item.to_dict() for item in gate_results],
         })
 
-        active_gates = [item for item in gate_results if item.status != "SKIPPED"]
-        all_four_pass = len(active_gates) == 4 and all(item.status in ({"PASS", "DRY_RUN"} if dry_run else {"PASS"}) for item in active_gates)
-        if all_four_pass:
+        accepted = {"PASS", "DRY_RUN"} if dry_run else {"PASS"}
+        by_name = {item.name: item for item in gate_results}
+        core_names = [name + suffix for name in ("smell", "build", "test", "linter")]
+        core_pass = all(name in by_name and by_name[name].status in accepted for name in core_names)
+        runtime_name = "runtime" + suffix
+        runtime_pass = runtime_name not in by_name or by_name[runtime_name].status in accepted
+        if core_pass and runtime_pass:
             review = config.get("reviewAgent")
             if review:
                 review_name = "review-agent" + suffix
@@ -138,7 +146,11 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
 def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, Any], context: dict[str, str], dry_run: bool, progress, suffix: str) -> list[CommandResult]:
     gate_results: list[CommandResult] = []
     stopped_by: str | None = None
-    for gate_name in ("smell", "build", "test", "linter"):
+    gate_names = ["smell", "build"]
+    if "runtime" in config.get("gates", {}):
+        gate_names.append("runtime")
+    gate_names.extend(["test", "linter"])
+    for gate_name in gate_names:
         display = gate_name
         result_name = gate_name + suffix
         if stopped_by:
@@ -164,9 +176,13 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     log_text = ""
     if failed.output_file and Path(failed.output_file).is_file():
         log_text = Path(failed.output_file).read_text(encoding="utf-8", errors="replace")[-12000:]
+    if logical_stage == "runtime" and (task_dir / "runtime-smoke-results.json").is_file():
+        current = read_json(task_dir / "runtime-smoke-results.json").get("current") or {}
+        runtime_log = Path(str(current.get("log", "")))
+        if runtime_log.is_file(): log_text = runtime_log.read_text(encoding="utf-8", errors="replace")[-12000:]
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
     attributable = any(Path(item).name.lower() in log_text.lower() or item.lower() in log_text.lower() for item in changes)
-    if logical_stage in {"smell", "linter", "review-agent"}:
+    if logical_stage in {"smell", "runtime", "linter", "review-agent"}:
         repairable = True
     elif logical_stage in {"build", "test"}:
         repairable = attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower())
@@ -177,6 +193,7 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         "build": "INTRODUCED_BUILD_FAILURE" if repairable else "UNATTRIBUTED_BUILD_FAILURE",
         "test": "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE",
         "linter": "INTRODUCED_LINTER_FAILURE",
+        "runtime": "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
         "review-agent": "SEMANTIC_REVIEW_FAILURE",
     }.get(logical_stage, "UNSUPPORTED_FAILURE")
     summary = review.get("summary") if isinstance(review, dict) else None

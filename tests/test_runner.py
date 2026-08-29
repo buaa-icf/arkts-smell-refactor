@@ -196,6 +196,35 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual("PASS", initial["smell-repair-1"]["status"])
             self.assertEqual("PASS", initial["review-agent-repair-1"]["status"])
 
+    def test_runtime_failure_is_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (root / "refactor-changes.json").write_text('{"changedProductionFiles":["Foo.ets"]}', encoding="utf-8")
+            log = root / "runtime.log"; log.write_text("resourceManager is undefined at Foo.ets", encoding="utf-8")
+            (root / "runtime-smoke-results.json").write_text(json.dumps({"current": {"log": str(log)}}), encoding="utf-8")
+            from arkts_smell_refactor.runner import _build_failure_report, _task_from_file
+            from arkts_smell_refactor.models import CommandResult
+            failure = _build_failure_report(root, _task_from_file(root / "task.json"), CommandResult("runtime", "FAIL"), 1)
+            self.assertTrue(failure["repairable"])
+            self.assertEqual("INTRODUCED_RUNTIME_INITIALIZATION_FAILURE", failure["classification"])
+
+    def test_runtime_gate_does_not_replace_missing_core_gate_for_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            python = __import__('sys').executable
+            config = {
+                "gates": {
+                    "smell": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "build": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "runtime": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "test": {"command": [python, "-c", "raise SystemExit(0)"]},
+                },
+                "reviewAgent": {"command": ["must-not-run"]},
+            }
+            result = execute_pipeline(root, config)
+            review = next(item for item in result["steps"] if item["name"] == "review-agent")
+            self.assertEqual("SKIPPED", review["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

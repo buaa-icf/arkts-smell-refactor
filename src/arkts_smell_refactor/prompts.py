@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from .models import RefactorTask
@@ -12,6 +13,7 @@ SMELL_GUIDANCE = {
     "code-clone": "先比较所有克隆片段的差异，再提取共享实现；保持 UI ID、默认值、事件和副作用逐项一致。",
     "switch-statement": "按静态分析建议选择 Map<K, V>、Set<K>、Map<K, Handler> 或具名策略/方法提取；不要为了统一使用 Map 而制造更长的内联闭包表。保持 default、分组 case、可执行 fall-through、return/throw、短路求值与副作用顺序。",
     "cyclic-dependency": "先枚举全部环，再说明每条环切断哪条依赖边；共享类型优先下沉到中立层。",
+    "god-class": "结合字段读写、状态所有权和副作用证据自行判断职责边界；不要把大类原样搬到新的大 Helper。",
 }
 
 
@@ -79,6 +81,8 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 6. 对 switch-statement 任务逐项核对 selector、每个 case 标签、default/无 default、分组 case 和可执行 fall-through；确认 Map/Set 的键语义以及 0、false、空串、null/undefined 等值没有被错误当成缺失。
 7. 若使用函数/策略表，核对 this 绑定、闭包捕获、表创建时机、await/异常传播和每次调用的状态读取；若重构的是 if/else if，核对条件从左到右求值与短路行为。
 8. 对 feature-envy 任务核对被依恋对象、访问成员、职责归属和建议重构形态；确认原入口契约、对象身份、条件边界、读取时机、累加/替换语义和依赖方向没有变化，并检查依恋是否只是被搬到新的方法或工具类。
+9. 对 God Class 任务核对每组可变状态的唯一所有者、旧入口与新类是否读写同一份状态、初始化/清理/回调/异步副作用是否完整迁移，并检查异味是否转移到新类或 Helper。
+10. 对循环依赖任务核对每个基线环是否消失、是否产生新环、符号移动后的职责归属，以及原模块入口和公共导出是否仍兼容。
 
 判定必须自洽：异味未实质消除、行为不等价或存在 blocking issue 时必须 FAIL；证据不足时必须 UNCERTAIN；PASS 不得包含 blocking issue。不得使用“通常”“应该”“可能一致”等推测作为 passed 证据。
 
@@ -100,6 +104,7 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
         f"- {item.get('category', failure.get('classification', 'failure'))}: {item.get('reason') or item.get('evidence') or '见失败日志'}"
         for item in failure.get("issues", [])
     ) or f"- {failure.get('summary', '见失败报告与对应日志')}"
+    evidence = _repair_evidence(failure)
     return f"""你正在执行 ArkTS 重构的第 {attempt} 轮定向修复。直接修改工作区中的生产代码并保存。
 
 ## 原任务
@@ -113,6 +118,7 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
 
 失败阶段：{failure.get('stage', 'unknown')}
 {issues}
+{evidence}
 
 ## 强制边界
 
@@ -124,6 +130,23 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
 
 完成后简要说明修复了哪条失败证据、修改文件和实际验证。
 """
+
+
+def _repair_evidence(failure: dict[str, Any]) -> str:
+    log_tail = str(failure.get("logTail", ""))
+    if not log_tail.strip():
+        return ""
+    changed_names = {Path(item).name.lower() for item in failure.get("changedProductionFiles", [])}
+    selected = []
+    for line in log_tail.splitlines():
+        lowered = line.lower()
+        if (
+            any(token in lowered for token in ("error", "exception", "undefined", "failed"))
+            or any(name in lowered for name in changed_names)
+        ):
+            selected.append(line)
+    text = "\n".join(selected[-80:])[-6000:]
+    return f"\n## Public failure evidence\n\n```text\n{text}\n```" if text else ""
 
 
 def _conditional_analysis_text(risk: dict[str, Any]) -> str:
@@ -187,6 +210,12 @@ def _feature_envy_analysis_text(risk: dict[str, Any]) -> str:
 
 
 def _smell_analysis_text(risk: dict[str, Any]) -> tuple[str, str]:
+    god_class = _god_class_analysis_text(risk)
+    if god_class:
+        return god_class, "God Class state and responsibility evidence"
+    cyclic = _cyclic_dependency_analysis_text(risk)
+    if cyclic:
+        return cyclic, "Cyclic-dependency edge evidence"
     feature_envy = _feature_envy_analysis_text(risk)
     if feature_envy:
         return feature_envy, "Feature Envy 静态画像"
@@ -194,3 +223,45 @@ def _smell_analysis_text(risk: dict[str, Any]) -> tuple[str, str]:
     if conditional:
         return conditional, "条件分支静态画像"
     return "", "专项静态画像"
+
+
+def _god_class_analysis_text(risk: dict[str, Any]) -> str:
+    analysis = risk.get("godClassAnalysis")
+    if not analysis:
+        return ""
+    mutable = ", ".join(analysis.get("mutableStaticFields", [])) or "none"
+    high_risk = "; ".join(
+        f"{item['name']}({','.join(item.get('signals', [])) or 'name-risk'})"
+        for item in analysis.get("highRiskMethods", [])[:12]
+    ) or "none"
+    groups = "; ".join(
+        f"fields[{', '.join(item.get('sharedFields', []))}] -> methods[{', '.join(item.get('methods', []))}]"
+        for item in analysis.get("responsibilityCandidates", [])[:8]
+    ) or "no stable cluster"
+    callers = ", ".join(
+        f"{item.get('filePath')}:{item.get('line')}"
+        for item in analysis.get("externalCallers", [])[:12]
+    ) or "none located"
+    return "\n".join([
+        f"- target: {analysis.get('targetClass')}; lines={analysis.get('lineCount', 0)}; fields={analysis.get('fieldCount', 0)}; methods={analysis.get('methodCount', 0)}",
+        f"- mutable static state: {mutable}", f"- high-risk methods: {high_risk}",
+        f"- field-coupling responsibility candidates: {groups}", f"- external callers: {callers}",
+        f"- candidate hint (non-binding): {analysis.get('candidateHint')}",
+    ])
+
+
+def _cyclic_dependency_analysis_text(risk: dict[str, Any]) -> str:
+    analysis = risk.get("cyclicDependencyAnalysis")
+    if not analysis:
+        return ""
+    cycles = "; ".join(" -> ".join(item) for item in analysis.get("baselineCycles", [])) or "none"
+    edges = []
+    for item in analysis.get("cycleEdges", []):
+        evidence = ", ".join(f"{row.get('filePath')}:{row.get('line')}" for row in item.get("evidence", [])) or "not located"
+        edges.append(f"{item.get('from')} -> {item.get('to')} ({evidence})")
+    return "\n".join([
+        f"- module: {analysis.get('module')} ({analysis.get('modulePath')})",
+        f"- declared cycles: {cycles}", f"- cycle edges: {'; '.join(edges) or 'none'}",
+        f"- public entries: {', '.join(analysis.get('publicEntryFiles', [])) or 'none located'}",
+        f"- candidate hint (non-binding): {analysis.get('candidateHint')}",
+    ])

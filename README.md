@@ -423,6 +423,8 @@ DevEco Code Refactor Agent
 
 流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在前四层全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的修复 Agent，最多修复 3 轮。每轮代码修改后重新从异味复检开始执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
 
+对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。
+
 Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
 
 每一步的标准输出和错误输出保存在任务目录下，例如：
@@ -437,6 +439,9 @@ review-agent.log
 failure-report-1.json
 repair-prompt-1.md
 repair-agent-1.log
+runtime-smoke-plan.json
+runtime-smoke-generated/
+runtime-smoke-results.json
 review-diff.patch
 current-production/
 review-context-production/
