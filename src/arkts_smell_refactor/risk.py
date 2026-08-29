@@ -6,6 +6,8 @@ from typing import Any
 
 from .models import RefactorTask
 from .analysis.feature_envy import analyze_feature_envy, feature_envy_risks_and_constraints
+from .analysis.god_class import analyze_god_class, risks_and_constraints as god_class_risks
+from .analysis.cyclic_dependency import analyze_cyclic_dependency, risks_and_constraints as cycle_risks
 from .analysis.switch_statement import analyze_switch_statement
 from .utils import iter_source_files, normalized_relative
 
@@ -20,6 +22,14 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
     workspace = Path(task.workspace_root)
     target_path = workspace / task.target.file_path
     target_text = _read(target_path)
+    if task.smell_type == "god-class":
+        analysis = analyze_god_class(task, target_text, Path(task.project_root))
+        risks, constraints = god_class_risks(analysis, task.target.file_path)
+        return _specialized_report(task, risks, constraints, "godClassAnalysis", analysis)
+    if task.smell_type == "cyclic-dependency":
+        analysis = analyze_cyclic_dependency(task, Path(task.project_root))
+        risks, constraints = cycle_risks(analysis)
+        return _specialized_report(task, risks, constraints, "cyclicDependencyAnalysis", analysis)
     symbol = task.target.symbol
     scan_root = Path(task.project_root)
     owner = _symbol_owner(target_text, symbol, target_path.stem) if symbol else target_path.stem
@@ -104,6 +114,27 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
             "调用点采用文本级静态扫描，反射、字符串注册和跨语言调用可能无法识别",
             "ArkTS 类型解析器尚未接入，public/export 判断为保守近似",
         ],
+    }
+
+
+def _specialized_report(
+    task: RefactorTask,
+    risks: list[dict[str, Any]],
+    constraints: list[dict[str, str]],
+    key: str,
+    analysis: dict[str, Any],
+) -> dict[str, Any]:
+    rank = {"low": 1, "medium": 2, "high": 3}
+    level = max((item["level"] for item in risks), key=rank.get, default="low")
+    callers = analysis.get("externalCallers", [])
+    return {
+        "schemaVersion": "1.2", "taskId": task.task_id, "riskLevel": level,
+        "target": {"filePath": task.target.file_path, "symbol": task.target.symbol},
+        "callers": {
+            "total": len(callers), "production": len(callers), "test": 0, "items": callers,
+        },
+        "risks": risks, "recommendedConstraints": constraints, key: analysis,
+        "analysisLimitations": analysis.get("analysisLimitations", []),
     }
 
 
