@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import RefactorTask
+from .analysis.code_clone import analyze_code_clone, code_clone_risks_and_constraints
 from .analysis.feature_envy import analyze_feature_envy, feature_envy_risks_and_constraints
 from .analysis.switch_statement import analyze_switch_statement
 from .utils import iter_source_files, normalized_relative
@@ -100,6 +101,7 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
         "recommendedConstraints": constraints,
         **({"switchStatementAnalysis": smell_analysis} if task.smell_type == "switch-statement" and smell_analysis else {}),
         **({"featureEnvyAnalysis": smell_analysis} if task.smell_type == "feature-envy" and smell_analysis else {}),
+        **({"codeCloneAnalysis": smell_analysis} if task.smell_type == "code-clone" and smell_analysis else {}),
         "analysisLimitations": [
             "调用点采用文本级静态扫描，反射、字符串注册和跨语言调用可能无法识别",
             "ArkTS 类型解析器尚未接入，public/export 判断为保守近似",
@@ -191,10 +193,11 @@ def _add_smell_specific(
     reactive_names: set[str],
 ) -> dict[str, Any] | None:
     if task.smell_type == "code-clone":
-        if task.target.related_targets:
-            risks.append(_risk("CLONE_VARIATION", "high", f"目标克隆涉及 {1 + len(task.target.related_targets)} 个片段，必须逐项保留差异", [task.target.file_path] + [x["filePath"] for x in task.target.related_targets]))
-        if ".id(" in range_text:
-            risks.append(_risk("UI_SELECTOR_CHANGE", "high", "克隆片段包含 .id(...)，自动化测试可能依赖其字面值", [task.target.file_path]))
+        analysis = analyze_code_clone(task, target_text)
+        clone_risks, clone_constraints = code_clone_risks_and_constraints(task, analysis)
+        risks.extend(clone_risks)
+        constraints.extend(clone_constraints)
+        return analysis
     elif task.smell_type == "long-method":
         if "@Builder" in range_text or "build()" in range_text:
             risks.append(_risk("UI_STRUCTURE_CHANGE", "high", "目标可能包含 ArkUI Builder/组件树", [task.target.file_path]))

@@ -9,7 +9,7 @@ from .models import RefactorTask
 SMELL_GUIDANCE = {
     "feature-envy": "结合源码确认静态画像给出的职责归属；不得只改名、挪行、按检测阈值拆小方法，或把依恋整体复制到无关工具类。",
     "long-method": "按职责拆分，保持局部变量作用域、闭包捕获、ArkUI 状态读取和组件树不变；避免产生新克隆。",
-    "code-clone": "先比较所有克隆片段的差异，再提取共享实现；保持 UI ID、默认值、事件和副作用逐项一致。",
+    "code-clone": "以 Code Clone 静态画像的完整克隆组为最小处理单元：同轮处理每个已知实例，再按 UI ID、文案/资源、状态和回调显式传入差异。不得只处理报告片段、移动原样代码，或把不同页面的事件/导航强行统一。",
     "switch-statement": "按静态分析建议选择 Map<K, V>、Set<K>、Map<K, Handler> 或具名策略/方法提取；不要为了统一使用 Map 而制造更长的内联闭包表。保持 default、分组 case、可执行 fall-through、return/throw、短路求值与副作用顺序。",
     "cyclic-dependency": "先枚举全部环，再说明每条环切断哪条依赖边；共享类型优先下沉到中立层。",
 }
@@ -79,6 +79,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 6. 对 switch-statement 任务逐项核对 selector、每个 case 标签、default/无 default、分组 case 和可执行 fall-through；确认 Map/Set 的键语义以及 0、false、空串、null/undefined 等值没有被错误当成缺失。
 7. 若使用函数/策略表，核对 this 绑定、闭包捕获、表创建时机、await/异常传播和每次调用的状态读取；若重构的是 if/else if，核对条件从左到右求值与短路行为。
 8. 对 feature-envy 任务核对被依恋对象、访问成员、职责归属和建议重构形态；确认原入口契约、对象身份、条件边界、读取时机、累加/替换语义和依赖方向没有变化，并检查依恋是否只是被搬到新的方法或工具类。
+9. 对 code-clone 任务逐项核对静态画像中的全部实例均被实质处理；共享实现必须将 UI ID、文案/资源、回调、状态读写等差异显式保留。不得为了共用组件新增整行点击、导航、默认状态或额外副作用；若某个实例的证据不足，输出 UNCERTAIN。
 
 判定必须自洽：异味未实质消除、行为不等价或存在 blocking issue 时必须 FAIL；证据不足时必须 UNCERTAIN；PASS 不得包含 blocking issue。不得使用“通常”“应该”“可能一致”等推测作为 passed 证据。
 
@@ -100,6 +101,8 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
         f"- {item.get('category', failure.get('classification', 'failure'))}: {item.get('reason') or item.get('evidence') or '见失败日志'}"
         for item in failure.get("issues", [])
     ) or f"- {failure.get('summary', '见失败报告与对应日志')}"
+    analysis_text, analysis_title = _smell_analysis_text(risk)
+    analysis_section = f"\n## {analysis_title}\n\n{analysis_text}\n" if analysis_text else ""
     return f"""你正在执行 ArkTS 重构的第 {attempt} 轮定向修复。直接修改工作区中的生产代码并保存。
 
 ## 原任务
@@ -121,6 +124,7 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
 - 不读取或修改测试代码、构建配置、依赖及无关生产文件。
 - 不通过改名、挪行或按阈值拆小方法逃避异味检测。
 - 本轮最多执行两次 `build_project`：修复后允许第一次；只有第一次失败且确认是本轮修改导致的编译错误，才允许继续修复并执行第二次。第二次后禁止继续构建，失败交由平台重新分析。
+{analysis_section}
 
 完成后简要说明修复了哪条失败证据、修改文件和实际验证。
 """
@@ -186,7 +190,35 @@ def _feature_envy_analysis_text(risk: dict[str, Any]) -> str:
     ])
 
 
+def _code_clone_analysis_text(risk: dict[str, Any]) -> str:
+    analysis = risk.get("codeCloneAnalysis")
+    if not analysis:
+        return ""
+    instances = analysis.get("instances", [])
+    instance_text = "；".join(
+        f"{item.get('role', 'instance')}：{item.get('filePath')}:{item.get('startLine')}-{item.get('endLine')}"
+        + ("（已解析）" if item.get("resolved") else "（未解析）")
+        for item in instances
+    ) or "未解析"
+    dimensions = "；".join(item.get("kind", "unknown") for item in analysis.get("variationDimensions", [])) or "未发现词法差异或未解析"
+    preserve = "；".join(analysis.get("mustPreserve", [])) or "逐实例核对原行为"
+    boundary = analysis.get("modificationBoundary", {})
+    required_files = "，".join(boundary.get("requiredFiles", [])) or "仅目标文件"
+    return "\n".join([
+        f"- 克隆组：{analysis.get('groupId', 'unknown')}；检测器类型：{analysis.get('detectorCloneKind') or '未解析'} {analysis.get('detectorContext') or ''}",
+        f"- 实例：{instance_text}",
+        f"- 当前分类：{analysis.get('classification', 'unknown')}；形态相似度：{analysis.get('similarity') if analysis.get('similarity') is not None else '未计算'}",
+        f"- 差异维度：{dimensions}",
+        f"- 建议形态：{analysis.get('recommendedPattern', '人工判断')}（{analysis.get('recommendationReason', '需结合源码确认')}）",
+        f"- 必须处理文件：{required_files}；跨文件：{boundary.get('crossFile', False)}",
+        f"- 必须保持：{preserve}",
+    ])
+
+
 def _smell_analysis_text(risk: dict[str, Any]) -> tuple[str, str]:
+    code_clone = _code_clone_analysis_text(risk)
+    if code_clone:
+        return code_clone, "Code Clone 静态画像"
     feature_envy = _feature_envy_analysis_text(risk)
     if feature_envy:
         return feature_envy, "Feature Envy 静态画像"

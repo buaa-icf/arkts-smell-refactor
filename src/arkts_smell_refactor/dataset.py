@@ -13,7 +13,7 @@ SYMBOL_PATTERNS = [
     re.compile(r"method '([^']+)'", re.IGNORECASE),
 ]
 CLONE_RE = re.compile(
-    r"similar to\s+(.+?\.(?:ets|ts)):(\d+)-(\d+)", re.IGNORECASE
+    r"similar to\s+(.+?\.(?:ets|ts))(?:\s*>\s*[^:]+)?:(\d+)-(\d+)", re.IGNORECASE
 )
 
 
