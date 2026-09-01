@@ -437,6 +437,12 @@ DevEco Code Refactor Agent
 
 Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
 
+Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证书、签名、依赖下载或网络环境错误会停止内部验证，不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
+
+当前 DevEco Code CLI 没有提供本工具可用的“仅允许工作目录”无人值守权限参数，因此 Refactor/Repair Agent 的工作区隔离属于复制隔离和回写白名单，不是操作系统级沙箱。提示词已禁止工作区外操作，平台也只会回写白名单生产源码，但无法自动撤销 Agent 对工作区外文件已经发生的修改；应使用专用系统账户或受限执行环境运行不受信任的模型。
+
+证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
+
 每一步的标准输出和错误输出保存在任务目录下，例如：
 
 ```text
@@ -455,6 +461,8 @@ review-context-production/
 review-context.json
 gates.json
 review.json
+review-repair-1.json
+linter-after.json
 result.json
 ```
 

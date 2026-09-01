@@ -17,6 +17,10 @@ from .utils import read_json, write_json
 
 IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
 GENERATED_FILES = {"buildprofile.ets", "oh-package-lock.json5"}
+DISPOSABLE_VALIDATION_FILES = {
+    "local.properties", "hvigorw", "hvigorw.bat", "hvigorw.js",
+    "package-lock.json", "pnpm-lock.yaml",
+}
 
 
 def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: Path | None = None) -> int:
@@ -75,7 +79,7 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
 def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Path | None) -> int:
     """Fail only for linter defects introduced on changed production lines."""
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", [])
-    introduced: list[str] = []
+    introduced: list[dict[str, object]] = []
     for relative_text in changes:
         relative = Path(relative_text)
         current = source_root / relative
@@ -91,16 +95,19 @@ def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Pat
         )
         output = (completed.stdout or "") + (completed.stderr or "")
         print(output, end="" if output.endswith("\n") else "\n")
-        defect_lines = [int(match.group(1)) for match in re.finditer(r"(?m)^\s*(\d+):(\d+)\s+(?:error|warn|suggestion)\b", output)]
+        defects = _parse_linter_issues(output, relative.as_posix())
         baseline = task_dir / "baseline-production" / relative
         changed_lines = _changed_current_lines(baseline, current)
-        for line in defect_lines:
+        for issue in defects:
+            line = int(issue["line"])
             if not baseline.exists() or line in changed_lines:
-                introduced.append(f"{relative.as_posix()}:{line}")
+                introduced.append(issue)
         if completed.returncode not in {0, 1}:
             return completed.returncode
+    write_json(task_dir / "linter-after.json", introduced)
     if introduced:
-        print("本次变更新增或触及 Linter 缺陷：" + ", ".join(introduced), file=sys.stderr)
+        locations = [f"{item['filePath']}:{item['line']}" for item in introduced]
+        print("本次变更新增或触及 Linter 缺陷：" + ", ".join(locations), file=sys.stderr)
         return 1
     print("本次变更范围未引入 Linter 缺陷")
     return 0
@@ -161,6 +168,7 @@ def _ignore(exclude_tests: bool):
 
 def _sync_production_changes(mirror: Path, source: Path) -> int:
     forbidden: list[str] = []
+    discarded: list[str] = []
     changed: list[str] = []
     allowed_changes: list[tuple[Path, Path, Path]] = []
     for mirror_file in mirror.rglob("*"):
@@ -176,6 +184,9 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         differs = not source_file.exists() or not filecmp.cmp(mirror_file, source_file, shallow=False)
         if not differs:
             continue
+        if _is_disposable_validation_file(relative):
+            discarded.append(relative.as_posix())
+            continue
         normalized = relative.as_posix().lower()
         is_main_source = mirror_file.suffix.lower() in {".ets", ".ts"} and "/src/main/" in f"/{normalized}"
         # Harmony modules expose their production API through a module-root
@@ -190,7 +201,11 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
     changes_file = mirror.parent / "refactor-changes.json"
     previous = read_json(changes_file).get("changedProductionFiles", []) if changes_file.exists() else []
     combined = list(dict.fromkeys([*previous, *[x[2].as_posix() for x in allowed_changes]]))
-    write_json(changes_file, {"changedProductionFiles": combined, "rejectedFiles": forbidden})
+    write_json(changes_file, {
+        "changedProductionFiles": combined,
+        "discardedValidationFiles": discarded,
+        "rejectedFiles": forbidden,
+    })
     if forbidden:
         print("Refactor Agent 尝试修改非生产代码或配置：" + ", ".join(forbidden), file=sys.stderr)
         return 4
@@ -208,6 +223,34 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
     _prepare_review_materials(mirror.parent, source, combined)
     print("已同步生产代码修改：" + ", ".join(changed))
     return 0
+
+
+def _is_disposable_validation_file(relative: Path) -> bool:
+    """Files internal validation may create but which never belong to a refactor."""
+    return relative.name.lower() in DISPOSABLE_VALIDATION_FILES
+
+
+def _parse_linter_issues(output: str, fallback_file: str) -> list[dict[str, object]]:
+    """Parse CodeLinter locations into structured repair evidence."""
+    issues: list[dict[str, object]] = []
+    pattern = re.compile(
+        r"(?m)^\s*(?:(.*?\.(?:ets|ts))[:(])?(\d+)[,:](\d+)\)?\s+"
+        r"(error|warn|warning|suggestion)\s+(.*)$",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(output):
+        file_path, line, column, severity, detail = match.groups()
+        detail = detail.strip()
+        rule_match = re.search(r"\s+(@\S+)\s*$", detail)
+        rule = rule_match.group(1) if rule_match else ""
+        message = detail[:rule_match.start()].rstrip() if rule_match else detail
+        issues.append({
+            "filePath": (file_path or fallback_file).strip(),
+            "line": int(line), "column": int(column),
+            "severity": severity.lower().replace("warning", "warn"),
+            "rule": rule, "message": message,
+        })
+    return issues
 
 
 def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) -> None:
