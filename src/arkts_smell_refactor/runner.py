@@ -85,7 +85,8 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
                 review_result = _run_spec(review_name, review, context, str(task_dir), task_dir, dry_run)
                 if review_result.status == "PASS" and not dry_run:
                     review_path = task_dir / f"{review_name}.log"
-                    review_json = _extract_review_json(review_path, task_dir / "review.json")
+                    review_output = task_dir / ("review.json" if not suffix else f"review{suffix}.json")
+                    review_json = _extract_review_json(review_path, review_output)
                     if review_json:
                         verdict = str(review_json.get("verdict", "UNCERTAIN")).upper()
                         review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
@@ -161,7 +162,9 @@ def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, A
 
 def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
     logical_stage = failed.name.split("-repair-", 1)[0]
-    review = read_json(task_dir / "review.json") if logical_stage == "review-agent" and (task_dir / "review.json").exists() else {}
+    review_suffix = failed.name.removeprefix("review-agent")
+    review_path = task_dir / ("review.json" if not review_suffix else f"review{review_suffix}.json")
+    review = read_json(review_path) if logical_stage == "review-agent" and review_path.exists() else {}
     issues = review.get("issues", []) if isinstance(review, dict) else []
     if logical_stage == "smell" and (task_dir / "smell-after.json").exists():
         issues = [
@@ -172,6 +175,16 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
                 "reason": item.get("message", "目标异味仍存在"),
             }
             for item in read_json(task_dir / "smell-after.json")
+        ]
+    if logical_stage == "linter" and (task_dir / "linter-after.json").exists():
+        issues = [
+            {
+                "category": "introduced-linter-defect",
+                "filePath": item.get("filePath"), "line": item.get("line"),
+                "column": item.get("column"), "rule": item.get("rule"),
+                "reason": item.get("message", "本次变更触及 Linter 缺陷"),
+            }
+            for item in read_json(task_dir / "linter-after.json")
         ]
     log_text = ""
     if failed.output_file and Path(failed.output_file).is_file():

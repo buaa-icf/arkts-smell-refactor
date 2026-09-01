@@ -6,6 +6,7 @@ from arkts_smell_refactor.gate import (
     _changed_current_lines,
     _fresh_copy,
     _owner_at_line,
+    _parse_linter_issues,
     _reported_symbol,
     _issue_touches_changed_symbol,
     _smell_changed_lines,
@@ -148,6 +149,51 @@ class OrderVM {
             self.assertEqual(0, _sync_production_changes(mirror, source))
             self.assertEqual("after", source_file.read_text(encoding="utf-8"))
             self.assertFalse((source / "feature/oh-package-lock.json5").exists())
+
+    def test_validation_files_are_discarded_without_losing_source_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            for name in ("local.properties", "hvigorw.bat", "package-lock.json", "pnpm-lock.yaml"):
+                (mirror / name).write_text("temporary", encoding="utf-8")
+
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            self.assertEqual("after", source_file.read_text(encoding="utf-8"))
+            changes = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
+            self.assertEqual(4, len(changes["discardedValidationFiles"]))
+            self.assertEqual([], changes["rejectedFiles"])
+
+    def test_real_configuration_change_rejects_all_source_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            config = mirror / "feature/build-profile.json5"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            config.parent.mkdir(parents=True, exist_ok=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            config.write_text("changed", encoding="utf-8")
+
+            self.assertEqual(4, _sync_production_changes(mirror, source))
+            self.assertEqual("before", source_file.read_text(encoding="utf-8"))
+
+    def test_linter_output_is_structured(self):
+        issues = _parse_linter_issues("12:3 error unexpected any @rule/no-any", "feature/Foo.ets")
+        self.assertEqual(1, len(issues))
+        self.assertEqual("feature/Foo.ets", issues[0]["filePath"])
+        self.assertEqual(12, issues[0]["line"])
+        self.assertEqual("@rule/no-any", issues[0]["rule"])
 
     def test_module_index_is_synchronized_as_production_source(self):
         with tempfile.TemporaryDirectory() as temp:

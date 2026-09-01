@@ -137,21 +137,28 @@ def _auto_config(task, task_dir: Path, risk: dict[str, Any], tools: dict[str, st
         return {"enabled": False, "reason": f"未找到 {name}"}
 
     harmony_root = _find_harmony_project_root(Path(task.target_path), Path(task.project_root))
+    agent_blockers = (
+        "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|"
+        "certificate verification|unable to verify.*certificate|self[- ]signed certificate|SSL|TLS|CERT_|"
+        "authentication failed|unauthorized|ECONNRESET|ENETUNREACH|ETIMEDOUT|network.*unavailable"
+    )
     refactor = {
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"]],
         "cwd": "{task_dir}",
-        "blockedOutputRegex": "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable",
+        "blockedOutputRegex": agent_blockers,
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
     repair = {
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"], "--prompt-file", "{repair_prompt_file}"],
         "cwd": "{task_dir}",
-        "blockedOutputRegex": "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable",
+        "blockedOutputRegex": agent_blockers,
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
     review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{task_dir}", "--format", "json", "--dangerously-skip-permissions"], "cwd": "{task_dir}", "timeoutSeconds": 3600} if tools["deveco"] else None
     smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
     environment_blockers = (
+        "certificate verification|unable to verify.*certificate|self[- ]signed certificate|"
+        "SSL|TLS|CERT_|authentication failed|unauthorized|ECONNRESET|ENETUNREACH|ETIMEDOUT|network.*unavailable|"
         "Invalid project path|Permissions Error|signing|signature|SignHap|"
         "Invalid storeFile value|device not found|no devices"
     )

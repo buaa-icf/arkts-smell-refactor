@@ -44,6 +44,8 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 - 根据风险报告和专项静态画像选择 Extract Method、Move Method、Extract Class、Mapper、Builder、Adapter、Delegate 或其他最小重构；不要机械套用同一种手法。
 - 不把原条件分支内的操作无条件移到分支外；提取前后必须保持条件和副作用边界。
 - 不要把“检测器不再命中”当作行为等价的证明。
+- 验证只能调用 DevEco Code 内置的 `build_project`；禁止手工运行 hvigor、npm、pnpm 或 ohpm，禁止创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。
+- 第一次构建若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止验证，不得修改环境文件来绕过。
 - 每轮重构最多执行两次 `build_project`：重构后允许第一次；只有第一次失败且确认是本轮修改导致的编译错误，才允许修复后执行第二次。第二次后不得继续构建，失败交由平台 loop 处理。
 {analysis_section}
 
@@ -120,6 +122,8 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
 - 保持原条件边界、默认值、null/undefined、对象身份、数组累加/替换语义、响应式读取时机和副作用顺序。
 - 不读取或修改测试代码、构建配置、依赖及无关生产文件。
 - 不通过改名、挪行或按阈值拆小方法逃避异味检测。
+- 验证只能调用 DevEco Code 内置的 `build_project`；禁止手工运行 hvigor、npm、pnpm 或 ohpm，禁止创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。
+- 第一次构建若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止验证，不得修改环境文件来绕过。
 - 本轮最多执行两次 `build_project`：修复后允许第一次；只有第一次失败且确认是本轮修改导致的编译错误，才允许继续修复并执行第二次。第二次后禁止继续构建，失败交由平台重新分析。
 
 完成后简要说明修复了哪条失败证据、修改文件和实际验证。

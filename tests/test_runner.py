@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arkts_smell_refactor.runner import _extract_review_json, execute_pipeline
+from arkts_smell_refactor.models import CommandResult
+from arkts_smell_refactor.runner import _build_failure_report, _extract_review_json, _task_from_file, execute_pipeline
 
 
 class RunnerTests(unittest.TestCase):
@@ -195,6 +196,34 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual("SKIPPED", initial["build"]["status"])
             self.assertEqual("PASS", initial["smell-repair-1"]["status"])
             self.assertEqual("PASS", initial["review-agent-repair-1"]["status"])
+
+    def test_review_failure_report_uses_current_repair_round(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "review.json").write_text('{"summary":"stale","issues":[]}', encoding="utf-8")
+            (task_dir / "review-repair-3.json").write_text(
+                '{"summary":"current","issues":[{"reason":"guard changed"}]}', encoding="utf-8"
+            )
+            task = _task_from_file(task_dir / "task.json")
+            report = _build_failure_report(task_dir, task, CommandResult("review-agent-repair-3", "FAIL"), 4)
+            self.assertEqual("current", report["summary"])
+            self.assertEqual("guard changed", report["issues"][0]["reason"])
+
+    def test_unattributed_test_failure_is_not_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["pages/EditNamePage.ets"]}', encoding="utf-8"
+            )
+            log = task_dir / "test.log"
+            log.write_text("EditPhonePageVM.test.ets: 'vm.userInfo' is possibly undefined", encoding="utf-8")
+            task = _task_from_file(task_dir / "task.json")
+            failed = CommandResult("test", "FAIL", output_file=str(log))
+            report = _build_failure_report(task_dir, task, failed, 1)
+            self.assertFalse(report["repairable"])
+            self.assertEqual("UNATTRIBUTED_TEST_FAILURE", report["classification"])
 
 
 if __name__ == "__main__":
