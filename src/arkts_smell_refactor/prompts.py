@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from .models import RefactorTask
@@ -16,9 +17,12 @@ SMELL_GUIDANCE = {
 
 
 def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
-    risks = "\n".join(f"- [{x['level']}] {x['code']}: {x['evidence']}" for x in risk.get("risks", [])) or "- 未发现额外静态风险。"
+    risks = "\n".join(
+        f"- [{x['level']}] {x['code']}: {_normalize_task_paths(task, str(x['evidence']))}"
+        for x in risk.get("risks", [])
+    ) or "- 未发现额外静态风险。"
     constraints = "\n".join(f"- {x['instruction']}（原因：{x['reason']}）" for x in risk.get("recommendedConstraints", [])) or "- 采用最小、行为保持的修改。"
-    analysis_text, analysis_title = _smell_analysis_text(risk)
+    analysis_text, analysis_title = _smell_analysis_text(risk, task)
     analysis_section = f"\n## {analysis_title}\n\n{analysis_text}\n" if analysis_text else ""
     target_range = task.target.source_range
     return f"""你正在重构一个 ArkTS 代码异味。请直接修改工作区中的生产代码并保存修改。
@@ -27,10 +31,10 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 
 - 异味类型：{task.smell_type}
 - 检测规则：{task.rule}
-- 文件：{task.target.file_path}
+- 文件：{_project_relative_path(task, task.target.file_path)}
 - 符号：{task.target.symbol or '检测消息未提供，请按行号定位'}
 - 范围：{target_range.start_line or '?'}-{target_range.end_line or '?'}
-- 检测消息：{task.message}
+- 检测消息：{_normalize_task_paths(task, task.message)}
 
 ## 重构前风险
 
@@ -58,16 +62,16 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 
 
 def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: str = "gates.json") -> str:
-    analysis_text, analysis_title = _smell_analysis_text(risk)
+    analysis_text, analysis_title = _smell_analysis_text(risk, task)
     analysis_section = f"\n{analysis_title}：\n{analysis_text}\n" if analysis_text else ""
     return f"""你是独立的 ArkTS 重构评审 Agent。该任务仅做只读评审，禁止修改任何文件。
 
 只使用任务目录中平台提供的 `review-diff.patch`、`baseline-production`、`current-production`、`review-context-production`、review-context.json、task.json、review-risk.json、refactor-changes.json 和 {gates_file} 评审以下重构。`review-context-production` 包含本次 diff 直接依赖的只读生产实现，必须核对新增委托、Mapper、Builder、Helper 等被调用实现。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或任何写入命令。`commitHash` 只是输入元信息，不得替代本地重构前基线：
 
 - 异味：{task.smell_type}
-- 文件：{task.target.file_path}
+- 文件：{_project_relative_path(task, task.target.file_path)}
 - 符号：{task.target.symbol or '未解析'}
-- 原始证据：{task.message}
+- 原始证据：{_normalize_task_paths(task, task.message)}
 {analysis_section}
 
 必须执行以下检查：
@@ -100,19 +104,20 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 
 def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[str, Any], attempt: int) -> str:
     issues = "\n".join(
-        f"- {item.get('category', failure.get('classification', 'failure'))}: {item.get('reason') or item.get('evidence') or '见失败日志'}"
+        f"- {item.get('category', failure.get('classification', 'failure'))}: "
+        f"{_normalize_task_paths(task, str(item.get('reason') or item.get('evidence') or '见失败日志'))}"
         for item in failure.get("issues", [])
-    ) or f"- {failure.get('summary', '见失败报告与对应日志')}"
-    analysis_text, analysis_title = _smell_analysis_text(risk)
+    ) or f"- {_normalize_task_paths(task, str(failure.get('summary', '见失败报告与对应日志')))}"
+    analysis_text, analysis_title = _smell_analysis_text(risk, task)
     analysis_section = f"\n## {analysis_title}\n\n{analysis_text}\n" if analysis_text else ""
     return f"""你正在执行 ArkTS 重构的第 {attempt} 轮定向修复。直接修改工作区中的生产代码并保存。
 
 ## 原任务
 
 - 异味：{task.smell_type}
-- 目标文件：{task.target.file_path}
+- 目标文件：{_project_relative_path(task, task.target.file_path)}
 - 目标符号：{task.target.symbol or '未解析'}
-- 原始消息：{task.message}
+- 原始消息：{_normalize_task_paths(task, task.message)}
 
 ## 本轮唯一修复目标
 
@@ -194,20 +199,25 @@ def _feature_envy_analysis_text(risk: dict[str, Any]) -> str:
     ])
 
 
-def _code_clone_analysis_text(risk: dict[str, Any]) -> str:
+def _code_clone_analysis_text(risk: dict[str, Any], task: RefactorTask | None = None) -> str:
     analysis = risk.get("codeCloneAnalysis")
     if not analysis:
         return ""
     instances = analysis.get("instances", [])
     instance_text = "；".join(
-        f"{item.get('role', 'instance')}：{item.get('filePath')}:{item.get('startLine')}-{item.get('endLine')}"
+        f"{item.get('role', 'instance')}："
+        f"{_project_relative_path(task, str(item.get('filePath', ''))) if task else item.get('filePath')}:"
+        f"{item.get('startLine')}-{item.get('endLine')}"
         + ("（已解析）" if item.get("resolved") else "（未解析）")
         for item in instances
     ) or "未解析"
     dimensions = "；".join(item.get("kind", "unknown") for item in analysis.get("variationDimensions", [])) or "未发现词法差异或未解析"
     preserve = "；".join(analysis.get("mustPreserve", [])) or "逐实例核对原行为"
     boundary = analysis.get("modificationBoundary", {})
-    required_files = "，".join(boundary.get("requiredFiles", [])) or "仅目标文件"
+    required_files = "，".join(
+        _project_relative_path(task, str(path)) if task else str(path)
+        for path in boundary.get("requiredFiles", [])
+    ) or "仅目标文件"
     return "\n".join([
         f"- 克隆组：{analysis.get('groupId', 'unknown')}；检测器类型：{analysis.get('detectorCloneKind') or '未解析'} {analysis.get('detectorContext') or ''}",
         f"- 实例：{instance_text}",
@@ -219,8 +229,8 @@ def _code_clone_analysis_text(risk: dict[str, Any]) -> str:
     ])
 
 
-def _smell_analysis_text(risk: dict[str, Any]) -> tuple[str, str]:
-    code_clone = _code_clone_analysis_text(risk)
+def _smell_analysis_text(risk: dict[str, Any], task: RefactorTask | None = None) -> tuple[str, str]:
+    code_clone = _code_clone_analysis_text(risk, task)
     if code_clone:
         return code_clone, "Code Clone 静态画像"
     feature_envy = _feature_envy_analysis_text(risk)
@@ -230,3 +240,33 @@ def _smell_analysis_text(risk: dict[str, Any]) -> tuple[str, str]:
     if conditional:
         return conditional, "条件分支静态画像"
     return "", "专项静态画像"
+
+
+def _project_relative_path(task: RefactorTask | None, file_path: str) -> str:
+    """Render dataset paths relative to the current Harmony project for agents."""
+    normalized = file_path.replace("\\", "/")
+    if not task or not normalized:
+        return normalized
+    project_prefix = task.source_project.replace("\\", "/").strip("/")
+    if project_prefix and normalized.startswith(project_prefix + "/"):
+        return normalized[len(project_prefix) + 1:]
+    try:
+        candidate = Path(file_path)
+        if candidate.is_absolute():
+            return candidate.resolve().relative_to(Path(task.project_root).resolve()).as_posix()
+    except (OSError, ValueError):
+        pass
+    return normalized
+
+
+def _normalize_task_paths(task: RefactorTask, text: str) -> str:
+    """Replace every detector path known to this task with the agent workspace path."""
+    replacements = [task.target.file_path, *(
+        str(item.get("filePath", "")) for item in task.target.related_targets
+    )]
+    normalized = text
+    for source in sorted({path for path in replacements if path}, key=len, reverse=True):
+        relative = _project_relative_path(task, source)
+        for variant in {source, source.replace("\\", "/"), source.replace("/", "\\")}:
+            normalized = normalized.replace(variant, relative)
+    return normalized

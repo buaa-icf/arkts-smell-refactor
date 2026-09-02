@@ -5,7 +5,7 @@ from pathlib import Path
 
 from arkts_smell_refactor.analysis.code_clone import analyze_code_clone
 from arkts_smell_refactor.dataset import load_dataset_tasks
-from arkts_smell_refactor.prompts import build_refactor_prompt, build_review_prompt
+from arkts_smell_refactor.prompts import build_refactor_prompt, build_repair_prompt, build_review_prompt
 from arkts_smell_refactor.risk import analyze_risks
 
 
@@ -74,6 +74,28 @@ class CodeCloneAnalysisTests(unittest.TestCase):
             self.assertIn("Code Clone 静态画像", refactor_prompt)
             self.assertIn("克隆组", refactor_prompt)
             self.assertIn("全部实例均被实质处理", review_prompt)
+
+    def test_prompts_render_all_clone_paths_relative_to_project_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "demo/src/main/ets/First.ets"
+            second = root / "demo/src/main/ets/Second.ets"
+            first.parent.mkdir(parents=True)
+            first.write_text("\nText('one')\n", encoding="utf-8")
+            second.write_text("\nText('two')\n", encoding="utf-8")
+            task = self._task(root)
+            report = analyze_risks(task)
+
+            refactor_prompt = build_refactor_prompt(task, report)
+            review_prompt = build_review_prompt(task, report)
+            repair_prompt = build_repair_prompt(task, report, {
+                "stage": "smell",
+                "issues": [{"category": "remaining-smell", "reason": task.message}],
+            }, 1)
+
+            for prompt in (refactor_prompt, review_prompt, repair_prompt):
+                self.assertIn("src/main/ets/Second.ets:2-8", prompt)
+                self.assertNotIn("demo/src/main/ets/Second.ets", prompt)
 
     def test_dataset_parses_counterpart_with_method_qualifier(self):
         with tempfile.TemporaryDirectory() as temp:
