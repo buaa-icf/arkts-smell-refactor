@@ -188,6 +188,51 @@ class OrderVM {
             self.assertEqual(4, _sync_production_changes(mirror, source))
             self.assertEqual("before", source_file.read_text(encoding="utf-8"))
 
+    def test_production_resources_are_allowed_transactionally_for_all_smells(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            resource = mirror / "common/src/main/resources/base/media/icon.png"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            resource.parent.mkdir(parents=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            resource.write_bytes(b"png-data")
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            self.assertEqual(b"png-data", (source / "common/src/main/resources/base/media/icon.png").read_bytes())
+            changes = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
+            self.assertEqual(["common/src/main/resources/base/media/icon.png"], changes["changedProductionResources"])
+            self.assertEqual(64, len(changes["productionResourceManifest"][0]["sha256"]))
+
+    def test_rejected_attempt_does_not_pollute_committed_change_list(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace-repair-1"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            forbidden = mirror / "build-profile.json5"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            forbidden.write_text("forbidden", encoding="utf-8")
+            (mirror.parent / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["previous.ets"]}', encoding="utf-8"
+            )
+
+            self.assertEqual(4, _sync_production_changes(mirror, source))
+            committed = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
+            self.assertEqual(["previous.ets"], committed["changedProductionFiles"])
+            attempt = __import__("json").loads(
+                (mirror.parent / "agent-change-attempt-refactor-workspace-repair-1.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(["build-profile.json5"], attempt["rejectedFiles"])
+
     def test_linter_output_is_structured(self):
         issues = _parse_linter_issues("12:3 error unexpected any @rule/no-any", "feature/Foo.ets")
         self.assertEqual(1, len(issues))

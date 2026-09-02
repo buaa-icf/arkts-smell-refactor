@@ -441,6 +441,10 @@ Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证
 
 当前 DevEco Code CLI 没有提供本工具可用的“仅允许工作目录”无人值守权限参数，因此 Refactor/Repair Agent 的工作区隔离属于复制隔离和回写白名单，不是操作系统级沙箱。提示词已禁止工作区外操作，平台也只会回写白名单生产源码，但无法自动撤销 Agent 对工作区外文件已经发生的修改；应使用专用系统账户或受限执行环境运行不受信任的模型。
 
+所有异味统一允许回写工程内的生产 ArkTS 源码、模块 `Index.ets` 和模块 `src/main/resources/**`。生产资源是通用重构内容，不作为风险报告中的专项权限。该边界不会放开测试、AppScope、构建配置、依赖配置、签名文件或工程外路径。资源变更在 `refactor-changes.json` 中与源码分开记录，并保存大小、变更类型和 SHA-256。
+
+同步采用事务式变更清单：平台先扫描并分类整轮修改，存在未授权文件时不回写任何文件，也不更新正式的 `changedProductionFiles`；候选修改和拒绝原因单独写入 `agent-change-attempt-*.json`。Refactor/Repair Agent 自身失败也会生成失败报告，区分 `MODIFICATION_BOUNDARY_VIOLATION`、`NO_ALLOWED_PRODUCTION_CHANGE` 和一般执行失败。可重新规划的边界失败会把拒绝文件和平台边界交给下一轮，而不是再次使用旧的 smell 报告。
+
 证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
 
 每一步的标准输出和错误输出保存在任务目录下，例如：

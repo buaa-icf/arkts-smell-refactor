@@ -171,6 +171,7 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
     discarded: list[str] = []
     changed: list[str] = []
     allowed_changes: list[tuple[Path, Path, Path]] = []
+    allowed_resources: list[tuple[Path, Path, Path]] = []
     for mirror_file in mirror.rglob("*"):
         if not mirror_file.is_file() or any(part in IGNORED_DIRS for part in mirror_file.parts):
             continue
@@ -193,23 +194,34 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         # Index.ets. Moving logic into an owning module commonly requires a
         # matching export here, so it is production source rather than config.
         is_module_entry = mirror_file.name.lower() == "index.ets" and len(relative.parts) >= 2
-        allowed = is_main_source or is_module_entry
+        is_production_resource = "/src/main/resources/" in f"/{normalized}"
+        allowed = is_main_source or is_module_entry or is_production_resource
         if not allowed:
             forbidden.append(relative.as_posix())
             continue
-        allowed_changes.append((mirror_file, source_file, relative))
+        if is_production_resource:
+            allowed_resources.append((mirror_file, source_file, relative))
+        else:
+            allowed_changes.append((mirror_file, source_file, relative))
     changes_file = mirror.parent / "refactor-changes.json"
-    previous = read_json(changes_file).get("changedProductionFiles", []) if changes_file.exists() else []
-    combined = list(dict.fromkeys([*previous, *[x[2].as_posix() for x in allowed_changes]]))
-    write_json(changes_file, {
-        "changedProductionFiles": combined,
+    attempt_file = mirror.parent / f"agent-change-attempt-{mirror.name}.json"
+    write_json(attempt_file, {
+        "candidateProductionFiles": [x[2].as_posix() for x in allowed_changes],
+        "candidateProductionResources": [x[2].as_posix() for x in allowed_resources],
         "discardedValidationFiles": discarded,
         "rejectedFiles": forbidden,
     })
     if forbidden:
         print("Refactor Agent 尝试修改非生产代码或配置：" + ", ".join(forbidden), file=sys.stderr)
         return 4
-    for mirror_file, source_file, relative in allowed_changes:
+    previous_data = read_json(changes_file) if changes_file.exists() else {}
+    previous_files = previous_data.get("changedProductionFiles", [])
+    previous_resources = previous_data.get("changedProductionResources", [])
+    combined = list(dict.fromkeys([*previous_files, *[x[2].as_posix() for x in allowed_changes]]))
+    combined_resources = list(dict.fromkeys([*previous_resources, *[x[2].as_posix() for x in allowed_resources]]))
+    resource_manifest: list[dict[str, object]] = []
+    for mirror_file, source_file, relative in [*allowed_changes, *allowed_resources]:
+        existed = source_file.exists()
         baseline_file = mirror.parent / "baseline-production" / relative
         if source_file.exists() and not baseline_file.exists():
             baseline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -217,9 +229,23 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         source_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(mirror_file, source_file)
         changed.append(relative.as_posix())
+        if (mirror_file, source_file, relative) in allowed_resources:
+            resource_manifest.append({
+                "filePath": relative.as_posix(),
+                "size": mirror_file.stat().st_size,
+                "sha256": hashlib.sha256(mirror_file.read_bytes()).hexdigest(),
+                "changeType": "modified" if existed else "added",
+            })
     if not changed:
         print("Refactor Agent 未产生允许的生产代码修改", file=sys.stderr)
         return 5
+    write_json(changes_file, {
+        "changedProductionFiles": combined,
+        "changedProductionResources": combined_resources,
+        "productionResourceManifest": resource_manifest,
+        "discardedValidationFiles": discarded,
+        "rejectedFiles": [],
+    })
     _prepare_review_materials(mirror.parent, source, combined)
     print("已同步生产代码修改：" + ", ".join(changed))
     return 0

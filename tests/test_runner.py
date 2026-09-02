@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from arkts_smell_refactor.models import CommandResult
-from arkts_smell_refactor.runner import _build_failure_report, _extract_review_json, _task_from_file, execute_pipeline
+from arkts_smell_refactor.runner import _build_agent_failure_report, _build_failure_report, _extract_review_json, _task_from_file, execute_pipeline
 
 
 class RunnerTests(unittest.TestCase):
@@ -224,6 +224,22 @@ class RunnerTests(unittest.TestCase):
             report = _build_failure_report(task_dir, task, failed, 1)
             self.assertFalse(report["repairable"])
             self.assertEqual("UNATTRIBUTED_TEST_FAILURE", report["classification"])
+
+    def test_agent_boundary_failure_has_its_own_repair_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "agent-change-attempt-refactor-workspace-repair-1.json").write_text(
+                json.dumps({
+                    "candidateProductionFiles": ["src/main/ets/Foo.ets"],
+                    "candidateProductionResources": [],
+                    "rejectedFiles": ["build-profile.json5"],
+                }), encoding="utf-8"
+            )
+            failed = CommandResult("repair-agent-1", "FAIL", exit_code=4)
+            report = _build_agent_failure_report(task_dir, failed, 2)
+            self.assertEqual("MODIFICATION_BOUNDARY_VIOLATION", report["classification"])
+            self.assertTrue(report["repairable"])
+            self.assertEqual("build-profile.json5", report["issues"][0]["filePath"])
 
 
 if __name__ == "__main__":

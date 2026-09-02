@@ -47,6 +47,9 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         results.append(CommandResult("refactor-agent", "SKIPPED", reason="config 未配置 refactorAgent"))
 
     if refactor and not dry_run and results[-1].status != "PASS":
+        agent_failure = _build_agent_failure_report(task_dir, results[-1], 0)
+        write_json(task_dir / "failure-report.json", agent_failure)
+        write_json(task_dir / "failure-report-agent.json", agent_failure)
         reason = "重构 Agent 未成功，后续验证没有可验证的重构结果"
         gate_results = [CommandResult(name, "SKIPPED", reason=reason) for name in ("smell", "build", "test", "linter")]
         write_json(task_dir / "gates.json", {
@@ -116,20 +119,27 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
             break
         from .prompts import build_repair_prompt
         risk = read_json(task_dir / "risk-report.json")
-        repair_number += 1
-        repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
-        write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
-        context["repair_prompt_file"] = str(repair_prompt.resolve())
-        if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
-        repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
-        results.append(repair_result)
-        if progress: progress(f"修复 Agent 第{repair_number}轮", repair_result.status)
-        if repair_result.status != "PASS":
+        repair_result: CommandResult | None = None
+        while failure["repairable"] and repair_number < max_repairs:
+            repair_number += 1
+            repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
+            write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
+            context["repair_prompt_file"] = str(repair_prompt.resolve())
+            if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
+            repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
+            results.append(repair_result)
+            if progress: progress(f"修复 Agent 第{repair_number}轮", repair_result.status)
+            if repair_result.status == "PASS":
+                break
             terminal = [repair_result]
             attempts.append({"attempt": repair_number, "steps": [repair_result.to_dict()]})
-            if repair_result.status == "BLOCKED" or repair_number >= max_repairs:
+            failure = _build_agent_failure_report(task_dir, repair_result, repair_number + 1)
+            write_json(task_dir / "failure-report.json", failure)
+            write_json(task_dir / f"failure-report-{repair_number + 1}.json", failure)
+            if repair_result.status == "BLOCKED" or not failure["repairable"]:
                 break
-            continue
+        if not repair_result or repair_result.status != "PASS":
+            break
 
     result = _final_result(task.task_id, results, dry_run, terminal)
     result["repairAttempts"] = repair_number
@@ -210,6 +220,55 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         "classification": classification, "repairable": repairable,
         "summary": summary or failed.reason or f"{logical_stage} 未通过",
         "changedProductionFiles": changes, "issues": issues,
+        "logTail": log_text,
+    }
+
+
+def _build_agent_failure_report(task_dir: Path, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
+    """Explain Refactor/Repair Agent execution failures before another agent run."""
+    attempts = sorted(
+        task_dir.glob("agent-change-attempt-*.json"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    changes = read_json(attempts[0]) if attempts else {}
+    rejected = changes.get("rejectedFiles", [])
+    log_text = ""
+    if failed.output_file and Path(failed.output_file).is_file():
+        log_text = Path(failed.output_file).read_text(encoding="utf-8", errors="replace")[-12000:]
+    if rejected:
+        classification = "MODIFICATION_BOUNDARY_VIOLATION"
+        summary = "Agent 修改了本任务未授权的文件；下一轮必须在授权范围内重新设计"
+        issues = [
+            {
+                "category": "unauthorized-file-change",
+                "filePath": path,
+                "reason": "该文件不属于允许回写的生产源码、模块入口或生产资源",
+            }
+            for path in rejected
+        ]
+        repairable = True
+    elif "未产生允许的生产代码修改" in log_text or failed.exit_code == 5:
+        classification = "NO_ALLOWED_PRODUCTION_CHANGE"
+        summary = "Agent 未完成可同步的生产变更"
+        issues = [{"category": "no-change", "reason": summary}]
+        repairable = True
+    else:
+        classification = "AGENT_EXECUTION_FAILURE"
+        summary = failed.reason or "Agent 执行失败，未形成可验证的生产变更"
+        issues = [{"category": "agent-execution", "reason": summary}]
+        repairable = False
+    return {
+        "schemaVersion": "1.0",
+        "attempt": next_attempt,
+        "stage": "repair-agent",
+        "classification": classification,
+        "repairable": repairable,
+        "summary": summary,
+        "candidateProductionFiles": changes.get("candidateProductionFiles", []),
+        "candidateProductionResources": changes.get("candidateProductionResources", []),
+        "rejectedFiles": rejected,
+        "issues": issues,
         "logTail": log_text,
     }
 
