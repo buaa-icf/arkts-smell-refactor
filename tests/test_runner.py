@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arkts_smell_refactor.runner import _extract_review_json, execute_pipeline
+from arkts_smell_refactor.models import CommandResult
+from arkts_smell_refactor.runner import _build_agent_failure_report, _build_failure_report, _extract_review_json, _task_from_file, execute_pipeline
 
 
 class RunnerTests(unittest.TestCase):
@@ -198,46 +199,237 @@ class RunnerTests(unittest.TestCase):
 
     def test_runtime_failure_is_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
-            (root / "refactor-changes.json").write_text('{"changedProductionFiles":["Foo.ets"]}', encoding="utf-8")
-            log = root / "runtime.log"; log.write_text("resourceManager is undefined at Foo.ets", encoding="utf-8")
-            (root / "runtime-smoke-results.json").write_text(json.dumps({"current": {"log": str(log)}}), encoding="utf-8")
-            from arkts_smell_refactor.runner import _build_failure_report, _task_from_file
+            root = Path(temp)
+            (root / "task.json").write_text(
+                json.dumps(self._task(temp)),
+                encoding="utf-8",
+            )
+            (root / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["Foo.ets"]}',
+                encoding="utf-8",
+            )
+            log = root / "runtime.log"
+            log.write_text(
+                "resourceManager is undefined at Foo.ets",
+                encoding="utf-8",
+            )
+            (root / "runtime-smoke-results.json").write_text(
+                json.dumps({
+                    "current": {
+                        "log": str(log),
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            from arkts_smell_refactor.runner import (
+                _build_failure_report,
+                _task_from_file,
+            )
             from arkts_smell_refactor.models import CommandResult
-            failure = _build_failure_report(root, _task_from_file(root / "task.json"), CommandResult("runtime", "FAIL"), 1)
+
+            failure = _build_failure_report(
+                root,
+                _task_from_file(root / "task.json"),
+                CommandResult("runtime", "FAIL"),
+                1,
+            )
             self.assertTrue(failure["repairable"])
-            self.assertEqual("INTRODUCED_RUNTIME_INITIALIZATION_FAILURE", failure["classification"])
+            self.assertEqual(
+                "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
+                failure["classification"],
+            )
 
     def test_contract_failure_is_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
-            (root / "refactor-changes.json").write_text('{"changedProductionFiles":["Foo.ets"]}', encoding="utf-8")
-            (root / "public-contract-results.json").write_text(json.dumps({
-                "passed": False, "removedExports": ["Foo"], "changedMembers": [],
-            }), encoding="utf-8")
-            from arkts_smell_refactor.runner import _build_failure_report, _task_from_file
+            root = Path(temp)
+            (root / "task.json").write_text(
+                json.dumps(self._task(temp)),
+                encoding="utf-8",
+            )
+            (root / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["Foo.ets"]}',
+                encoding="utf-8",
+            )
+            (root / "public-contract-results.json").write_text(
+                json.dumps({
+                    "passed": False,
+                    "removedExports": ["Foo"],
+                    "changedMembers": [],
+                }),
+                encoding="utf-8",
+            )
+
+            from arkts_smell_refactor.runner import (
+                _build_failure_report,
+                _task_from_file,
+            )
             from arkts_smell_refactor.models import CommandResult
-            failure = _build_failure_report(root, _task_from_file(root / "task.json"), CommandResult("contract", "FAIL"), 1)
+
+            failure = _build_failure_report(
+                root,
+                _task_from_file(root / "task.json"),
+                CommandResult("contract", "FAIL"),
+                1,
+            )
             self.assertTrue(failure["repairable"])
-            self.assertEqual("PUBLIC_CONTRACT_BREAK", failure["classification"])
+            self.assertEqual(
+                "PUBLIC_CONTRACT_BREAK",
+                failure["classification"],
+            )
 
     def test_runtime_gate_does_not_replace_missing_core_gate_for_review(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
-            python = __import__('sys').executable
+            root = Path(temp)
+            (root / "task.json").write_text(
+                json.dumps(self._task(temp)),
+                encoding="utf-8",
+            )
+            python = __import__("sys").executable
             config = {
                 "gates": {
-                    "smell": {"command": [python, "-c", "raise SystemExit(0)"]},
-                    "build": {"command": [python, "-c", "raise SystemExit(0)"]},
-                    "runtime": {"command": [python, "-c", "raise SystemExit(0)"]},
-                    "test": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "smell": {
+                        "command": [
+                            python,
+                            "-c",
+                            "raise SystemExit(0)",
+                        ]
+                    },
+                    "build": {
+                        "command": [
+                            python,
+                            "-c",
+                            "raise SystemExit(0)",
+                        ]
+                    },
+                    "runtime": {
+                        "command": [
+                            python,
+                            "-c",
+                            "raise SystemExit(0)",
+                        ]
+                    },
                 },
-                "reviewAgent": {"command": ["must-not-run"]},
+                "reviewAgent": {
+                    "command": ["must-not-run"]
+                },
             }
+
             result = execute_pipeline(root, config)
-            review = next(item for item in result["steps"] if item["name"] == "review-agent")
+            review = next(
+                item
+                for item in result["steps"]
+                if item["name"] == "review-agent"
+            )
             self.assertEqual("SKIPPED", review["status"])
 
+    def test_review_failure_report_uses_current_repair_round(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(
+                json.dumps(self._task(temp)),
+                encoding="utf-8",
+            )
+            (task_dir / "review.json").write_text(
+                '{"summary":"stale","issues":[]}',
+                encoding="utf-8",
+            )
+            (task_dir / "review-repair-3.json").write_text(
+                '{"summary":"current","issues":'
+                '[{"reason":"guard changed"}]}',
+                encoding="utf-8",
+            )
+
+            task = _task_from_file(task_dir / "task.json")
+            report = _build_failure_report(
+                task_dir,
+                task,
+                CommandResult(
+                    "review-agent-repair-3",
+                    "FAIL",
+                ),
+                4,
+            )
+            self.assertEqual("current", report["summary"])
+            self.assertEqual(
+                "guard changed",
+                report["issues"][0]["reason"],
+            )
+
+    def test_unattributed_test_failure_is_not_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(
+                json.dumps(self._task(temp)),
+                encoding="utf-8",
+            )
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":'
+                '["pages/EditNamePage.ets"]}',
+                encoding="utf-8",
+            )
+            log = task_dir / "test.log"
+            log.write_text(
+                "EditPhonePageVM.test.ets: "
+                "'vm.userInfo' is possibly undefined",
+                encoding="utf-8",
+            )
+
+            task = _task_from_file(task_dir / "task.json")
+            failed = CommandResult(
+                "test",
+                "FAIL",
+                output_file=str(log),
+            )
+            report = _build_failure_report(
+                task_dir,
+                task,
+                failed,
+                1,
+            )
+            self.assertFalse(report["repairable"])
+            self.assertEqual(
+                "UNATTRIBUTED_TEST_FAILURE",
+                report["classification"],
+            )
+    def test_agent_boundary_failure_has_its_own_repair_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (
+                task_dir
+                / "agent-change-attempt-refactor-workspace-repair-1.json"
+            ).write_text(
+                json.dumps({
+                    "candidateProductionFiles": [
+                        "src/main/ets/Foo.ets"
+                    ],
+                    "candidateProductionResources": [],
+                    "rejectedFiles": [
+                        "build-profile.json5"
+                    ],
+                }),
+                encoding="utf-8",
+            )
+
+            failed = CommandResult(
+                "repair-agent-1",
+                "FAIL",
+                exit_code=4,
+            )
+            report = _build_agent_failure_report(
+                task_dir,
+                failed,
+                2,
+            )
+            self.assertEqual(
+                "MODIFICATION_BOUNDARY_VIOLATION",
+                report["classification"],
+            )
+            self.assertTrue(report["repairable"])
+            self.assertEqual(
+                "build-profile.json5",
+                report["issues"][0]["filePath"],
+            )
 
 if __name__ == "__main__":
     unittest.main()

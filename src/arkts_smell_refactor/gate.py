@@ -22,6 +22,10 @@ from .utils import read_json, write_json
 
 IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
 GENERATED_FILES = {"buildprofile.ets", "oh-package-lock.json5"}
+DISPOSABLE_VALIDATION_FILES = {
+    "local.properties", "hvigorw", "hvigorw.bat", "hvigorw.js",
+    "package-lock.json", "pnpm-lock.yaml",
+}
 
 
 def refactor_gate(
@@ -30,7 +34,8 @@ def refactor_gate(
 ) -> int:
     """Run the refactor agent in a production-only mirror, then copy back code only."""
     task = read_json(task_dir / "task.json")
-    workspace = task_dir / "refactor-workspace"
+    workspace_name = "refactor-workspace" if prompt_file is None else f"refactor-workspace-{prompt_file.stem}"
+    workspace = task_dir / workspace_name
     _fresh_copy(source_root, workspace, exclude_tests=True)
     target_file = Path(task["workspace_root"]) / task["target"]["file_path"]
     try:
@@ -220,7 +225,7 @@ def _deveco_environment(hvigorw: Path) -> dict[str, str]:
 def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Path | None) -> int:
     """Fail only for linter defects introduced on changed production lines."""
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", [])
-    introduced: list[str] = []
+    introduced: list[dict[str, object]] = []
     for relative_text in changes:
         relative = Path(relative_text)
         current = source_root / relative
@@ -236,16 +241,19 @@ def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Pat
         )
         output = (completed.stdout or "") + (completed.stderr or "")
         print(output, end="" if output.endswith("\n") else "\n")
-        defect_lines = [int(match.group(1)) for match in re.finditer(r"(?m)^\s*(\d+):(\d+)\s+(?:error|warn|suggestion)\b", output)]
+        defects = _parse_linter_issues(output, relative.as_posix())
         baseline = task_dir / "baseline-production" / relative
         changed_lines = _changed_current_lines(baseline, current)
-        for line in defect_lines:
+        for issue in defects:
+            line = int(issue["line"])
             if not baseline.exists() or line in changed_lines:
-                introduced.append(f"{relative.as_posix()}:{line}")
+                introduced.append(issue)
         if completed.returncode not in {0, 1}:
             return completed.returncode
+    write_json(task_dir / "linter-after.json", introduced)
     if introduced:
-        print("本次变更新增或触及 Linter 缺陷：" + ", ".join(introduced), file=sys.stderr)
+        locations = [f"{item['filePath']}:{item['line']}" for item in introduced]
+        print("本次变更新增或触及 Linter 缺陷：" + ", ".join(locations), file=sys.stderr)
         return 1
     print("本次变更范围未引入 Linter 缺陷")
     return 0
@@ -306,8 +314,10 @@ def _ignore(exclude_tests: bool):
 
 def _sync_production_changes(mirror: Path, source: Path) -> int:
     forbidden: list[str] = []
+    discarded: list[str] = []
     changed: list[str] = []
     allowed_changes: list[tuple[Path, Path, Path]] = []
+    allowed_resources: list[tuple[Path, Path, Path]] = []
     for mirror_file in mirror.rglob("*"):
         if not mirror_file.is_file() or any(part in IGNORED_DIRS for part in mirror_file.parts):
             continue
@@ -321,25 +331,43 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         differs = not source_file.exists() or not filecmp.cmp(mirror_file, source_file, shallow=False)
         if not differs:
             continue
+        if _is_disposable_validation_file(relative):
+            discarded.append(relative.as_posix())
+            continue
         normalized = relative.as_posix().lower()
         is_main_source = mirror_file.suffix.lower() in {".ets", ".ts"} and "/src/main/" in f"/{normalized}"
         # Harmony modules expose their production API through a module-root
         # Index.ets. Moving logic into an owning module commonly requires a
         # matching export here, so it is production source rather than config.
         is_module_entry = mirror_file.name.lower() == "index.ets" and len(relative.parts) >= 2
-        allowed = is_main_source or is_module_entry
+        is_production_resource = "/src/main/resources/" in f"/{normalized}"
+        allowed = is_main_source or is_module_entry or is_production_resource
         if not allowed:
             forbidden.append(relative.as_posix())
             continue
-        allowed_changes.append((mirror_file, source_file, relative))
+        if is_production_resource:
+            allowed_resources.append((mirror_file, source_file, relative))
+        else:
+            allowed_changes.append((mirror_file, source_file, relative))
     changes_file = mirror.parent / "refactor-changes.json"
-    previous = read_json(changes_file).get("changedProductionFiles", []) if changes_file.exists() else []
-    combined = list(dict.fromkeys([*previous, *[x[2].as_posix() for x in allowed_changes]]))
-    write_json(changes_file, {"changedProductionFiles": combined, "rejectedFiles": forbidden})
+    attempt_file = mirror.parent / f"agent-change-attempt-{mirror.name}.json"
+    write_json(attempt_file, {
+        "candidateProductionFiles": [x[2].as_posix() for x in allowed_changes],
+        "candidateProductionResources": [x[2].as_posix() for x in allowed_resources],
+        "discardedValidationFiles": discarded,
+        "rejectedFiles": forbidden,
+    })
     if forbidden:
         print("Refactor Agent 尝试修改非生产代码或配置：" + ", ".join(forbidden), file=sys.stderr)
         return 4
-    for mirror_file, source_file, relative in allowed_changes:
+    previous_data = read_json(changes_file) if changes_file.exists() else {}
+    previous_files = previous_data.get("changedProductionFiles", [])
+    previous_resources = previous_data.get("changedProductionResources", [])
+    combined = list(dict.fromkeys([*previous_files, *[x[2].as_posix() for x in allowed_changes]]))
+    combined_resources = list(dict.fromkeys([*previous_resources, *[x[2].as_posix() for x in allowed_resources]]))
+    resource_manifest: list[dict[str, object]] = []
+    for mirror_file, source_file, relative in [*allowed_changes, *allowed_resources]:
+        existed = source_file.exists()
         baseline_file = mirror.parent / "baseline-production" / relative
         if source_file.exists() and not baseline_file.exists():
             baseline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -347,12 +375,54 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         source_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(mirror_file, source_file)
         changed.append(relative.as_posix())
+        if (mirror_file, source_file, relative) in allowed_resources:
+            resource_manifest.append({
+                "filePath": relative.as_posix(),
+                "size": mirror_file.stat().st_size,
+                "sha256": hashlib.sha256(mirror_file.read_bytes()).hexdigest(),
+                "changeType": "modified" if existed else "added",
+            })
     if not changed:
         print("Refactor Agent 未产生允许的生产代码修改", file=sys.stderr)
         return 5
+    write_json(changes_file, {
+        "changedProductionFiles": combined,
+        "changedProductionResources": combined_resources,
+        "productionResourceManifest": resource_manifest,
+        "discardedValidationFiles": discarded,
+        "rejectedFiles": [],
+    })
     _prepare_review_materials(mirror.parent, source, combined)
     print("已同步生产代码修改：" + ", ".join(changed))
     return 0
+
+
+def _is_disposable_validation_file(relative: Path) -> bool:
+    """Files internal validation may create but which never belong to a refactor."""
+    return relative.name.lower() in DISPOSABLE_VALIDATION_FILES
+
+
+def _parse_linter_issues(output: str, fallback_file: str) -> list[dict[str, object]]:
+    """Parse CodeLinter locations into structured repair evidence."""
+    issues: list[dict[str, object]] = []
+    pattern = re.compile(
+        r"(?m)^\s*(?:(.*?\.(?:ets|ts))[:(])?(\d+)[,:](\d+)\)?\s+"
+        r"(error|warn|warning|suggestion)\s+(.*)$",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(output):
+        file_path, line, column, severity, detail = match.groups()
+        detail = detail.strip()
+        rule_match = re.search(r"\s+(@\S+)\s*$", detail)
+        rule = rule_match.group(1) if rule_match else ""
+        message = detail[:rule_match.start()].rstrip() if rule_match else detail
+        issues.append({
+            "filePath": (file_path or fallback_file).strip(),
+            "line": int(line), "column": int(column),
+            "severity": severity.lower().replace("warning", "warn"),
+            "rule": rule, "message": message,
+        })
+    return issues
 
 
 def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) -> None:
@@ -414,9 +484,10 @@ def _collect_review_dependencies(source: Path, changed_files: list[Path], added_
     write_json(destination.parent / "review-context.json", {"productionDependencies": list(dict.fromkeys(copied))})
 
 
-def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
+def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = None) -> int:
     task = read_json(task_dir / "task.json")
     project_root = Path(task.get("project_root", task.get("projectRoot", "")))
+    source_root = source_root or project_root
     source_project = task.get("source_project", task.get("sourceProject", project_root.name))
     rule = task["rule"]
     target = task["target"]
@@ -426,14 +497,26 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
     expected_owner = risk.get("target", {}).get("owner")
     target_source = Path(task.get("workspace_root", task.get("workspaceRoot", ""))) / target_file
     target_text = target_source.read_text(encoding="utf-8", errors="replace") if target_source.is_file() else ""
+    if not target_source.is_file():
+        print(f"HomeCheck 指定文件不存在：{target_source}", file=sys.stderr)
+        return 3
+    try:
+        target_source.resolve().relative_to(source_root.resolve())
+    except ValueError:
+        print(f"HomeCheck 指定文件不在工程目录内：{target_source}", file=sys.stderr)
+        return 3
 
     base_project = read_json(homecheck_root / "config" / "projectConfig.json")
     base_rule = read_json(homecheck_root / "config" / "ruleConfig.json")
     report_dir = task_dir / "homecheck-report"
+    scan_files = _smell_scan_files(task_dir, source_root, target_source)
+    relative_scan_files = [path.resolve().relative_to(source_root.resolve()).as_posix() for path in scan_files]
     project_config = {
         **base_project,
         "projectName": source_project,
-        "projectPath": str(project_root.resolve()) + "\\",
+        "projectPath": str(source_root.parent.resolve()),
+        "repos": [f"{source_project}={source_root.resolve()}"],
+        "checkFiles": relative_scan_files,
         "datasetDir": "",
         "reportDir": str(report_dir.resolve()),
         "logPath": str((report_dir / "HomeCheck.log").resolve()),
@@ -442,6 +525,7 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
     package_path = homecheck_root / "extrulesproject-1.0.0.tgz"
     rule_config = {
         **base_rule,
+        "files": relative_scan_files,
         "extRuleSet": [
             {
                 "ruleSetName": "extrulesproject",
@@ -456,9 +540,19 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
     write_json(project_path, project_config)
     write_json(rule_path, rule_config)
 
-    runner = homecheck_root / "node_modules" / "homecheck" / "lib" / "run.js"
+    runner = homecheck_root / "scripts" / "gitcodeArktsPerfTest.js"
+    npm = shutil.which("npm")
+    if not runner.is_file() or not npm:
+        print(f"HomeCheck 文件级扫描入口或 npm 不存在：{runner}", file=sys.stderr)
+        return 3
+    smell_name = rule.rsplit("/", 1)[-1].removesuffix("-check")
     completed = subprocess.run(
-        ["node", str(runner), "--configPath", str(rule_path), "--projectConfigPath", str(project_path)],
+        [
+            npm, "run", "scan:files", "--", "--f1=false", "--dashboard=false",
+            f"--files={','.join(relative_scan_files)}",
+            f"--baseProjectConfig={project_path}", f"--baseRuleConfig={rule_path}",
+            f"--includeRules={smell_name}", f"--outputDir={report_dir}",
+        ],
         cwd=homecheck_root,
         text=True,
         encoding="utf-8",
@@ -466,27 +560,40 @@ def smell_gate(task_dir: Path, homecheck_root: Path) -> int:
     )
     if completed.returncode != 0:
         return completed.returncode
-    issues_path = report_dir / "issuesReport.json"
+    issue_candidates = list((report_dir / "runs").glob("*/issuesReport.json"))
+    issues_path = issue_candidates[0] if len(issue_candidates) == 1 else report_dir / "issuesReport.json"
     if not issues_path.exists():
         print(f"HomeCheck 未生成 {issues_path}", file=sys.stderr)
         return 3
     issues = read_json(issues_path)
     remaining = []
     short_target = _strip_project(target_file, source_project)
+    scan_by_suffix = {
+        path.resolve().relative_to(source_root.resolve()).as_posix(): path for path in scan_files
+    }
+    changed_lines = _smell_changed_lines(task_dir, source_root, scan_files)
     for item in issues if isinstance(issues, list) else []:
         item_path = str(item.get("filePath", "")).replace("\\", "/")
-        if not (item_path.endswith(short_target) or item_path.endswith(target_file)):
+        relative = next((key for key in scan_by_suffix if item_path.endswith(key)), None)
+        if relative is None:
             continue
         for message in item.get("messages", []):
             if message.get("rule") != rule:
                 continue
             text = str(message.get("message", ""))
-            if symbol and not re.search(rf"['\"]{re.escape(symbol)}['\"]", text):
-                continue
-            issue_owner = _owner_at_line(target_text, int(message.get("line", 1)), target_source.stem)
-            if expected_owner and issue_owner != expected_owner:
-                continue
-            remaining.append(message)
+            issue_line = int(message.get("line", message.get("rangeStart", 1)))
+            is_target_file = item_path.endswith(short_target) or item_path.endswith(target_file)
+            reported = _reported_symbol(text)
+            same_target = is_target_file and _symbol_matches(reported, symbol)
+            if same_target and expected_owner:
+                issue_owner = _owner_at_line(target_text, issue_line, target_source.stem)
+                same_target = issue_owner == expected_owner
+            current_text = scan_by_suffix[relative].read_text(encoding="utf-8", errors="replace")
+            changed_symbol = _issue_touches_changed_symbol(
+                current_text, reported, issue_line, changed_lines.get(relative, set())
+            )
+            if same_target or changed_symbol:
+                remaining.append({**message, "filePath": item_path})
     write_json(task_dir / "smell-after.json", remaining)
     if remaining:
         print(f"目标异味仍存在：{len(remaining)} 条", file=sys.stderr)
@@ -506,12 +613,95 @@ def _owner_at_line(text: str, line: int, fallback: str) -> str:
     return owners[-1].group(1) if owners else fallback
 
 
+def _smell_scan_files(task_dir: Path, source_root: Path, target_source: Path) -> list[Path]:
+    """Return only the original smell file and changed/new production files."""
+    selected = [target_source.resolve()]
+    changes_path = task_dir / "refactor-changes.json"
+    changes = read_json(changes_path).get("changedProductionFiles", []) if changes_path.exists() else []
+    for relative in changes:
+        candidate = (source_root / relative).resolve()
+        try:
+            candidate.relative_to(source_root.resolve())
+        except ValueError:
+            continue
+        if candidate.is_file() and candidate.suffix.lower() in {".ets", ".ts"}:
+            selected.append(candidate)
+    return list(dict.fromkeys(selected))
+
+
+def _smell_changed_lines(task_dir: Path, source_root: Path, files: list[Path]) -> dict[str, set[int]]:
+    result: dict[str, set[int]] = {}
+    baseline_root = task_dir / "baseline-production"
+    for current in files:
+        relative = current.resolve().relative_to(source_root.resolve())
+        baseline = baseline_root / relative
+        key = relative.as_posix()
+        result[key] = _changed_current_lines(baseline, current) if baseline.exists() else set(range(1, len(current.read_text(encoding="utf-8", errors="replace").splitlines()) + 1))
+    return result
+
+
+def _reported_symbol(message: str) -> str | None:
+    match = re.search(r"(?:Method|Function)\s+['\"]([^'\"]+)['\"]", message)
+    return match.group(1) if match else None
+
+
+def _symbol_matches(reported: str | None, target: str | None) -> bool:
+    if not reported or not target:
+        return False
+    reported_short = reported.split(".")[-1]
+    target_short = target.split(".")[-1]
+    if reported_short == target_short:
+        return True
+    anonymous = re.fullmatch(r"%AM\d+\$(.+)", reported_short)
+    return bool(anonymous and anonymous.group(1) == target_short)
+
+
+def _issue_touches_changed_symbol(text: str, reported: str | None, issue_line: int, changed: set[int]) -> bool:
+    """Attribute an issue to the current diff, never to the dataset's stale line range."""
+    if issue_line in changed:
+        return True
+    span = _symbol_line_span(text, reported)
+    return bool(span and any(line in changed for line in range(span[0], span[1] + 1)))
+
+
+def _symbol_line_span(text: str, symbol: str | None) -> tuple[int, int] | None:
+    if not symbol:
+        return None
+    short = symbol.split(".")[-1]
+    anonymous = re.fullmatch(r"%AM\d+\$(.+)", short)
+    if anonymous:
+        short = anonymous.group(1)
+    escaped = re.escape(short)
+    patterns = (
+        rf"(?m)^\s*(?:(?:export|public|private|protected|static|async)\s+)*(?:function\s+)?{escaped}\s*\([^)]*\)[^{{;]*\{{",
+        rf"(?m)^\s*(?:(?:export|public|private|protected|static)\s+)*(?:const|let|var)?\s*{escaped}\s*=.*?=>\s*\{{",
+    )
+    match = next((found for pattern in patterns if (found := re.search(pattern, text))), None)
+    if not match:
+        return None
+    brace = text.find("{", match.start(), match.end())
+    if brace < 0:
+        return None
+    depth = 0
+    end = brace
+    for index in range(brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    return text.count("\n", 0, match.start()) + 1, text.count("\n", 0, end) + 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     smell = sub.add_parser("smell")
     smell.add_argument("--task-dir", required=True, type=Path)
     smell.add_argument("--homecheck-root", required=True, type=Path)
+    smell.add_argument("--source-root", type=Path)
     refactor = sub.add_parser("refactor")
     refactor.add_argument("--task-dir", required=True, type=Path)
     refactor.add_argument("--source-root", required=True, type=Path)
@@ -540,7 +730,7 @@ def main(argv: list[str] | None = None) -> int:
     contract.add_argument("--source-root", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.command == "smell":
-        return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve())
+        return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve(), args.source_root.resolve() if args.source_root else None)
     if args.command == "refactor":
         return refactor_gate(
             args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(),

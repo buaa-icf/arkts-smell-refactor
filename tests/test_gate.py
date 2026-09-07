@@ -2,31 +2,150 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import json
 from unittest.mock import patch
 
-from arkts_smell_refactor.gate import _changed_current_lines, _fresh_copy, _owner_at_line, _sync_production_changes, refactor_gate
+from arkts_smell_refactor.gate import (
+    _changed_current_lines,
+    _fresh_copy,
+    _issue_touches_changed_symbol,
+    _owner_at_line,
+    _parse_linter_issues,
+    _reported_symbol,
+    _smell_changed_lines,
+    _smell_scan_files,
+    _symbol_matches,
+    _sync_production_changes,
+    refactor_gate,
+)
 
 
 class GateTests(unittest.TestCase):
     def test_refactor_prompt_is_inline_and_model_is_configurable(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); source = root / "source"; task_dir = root / "task"
+            root = Path(temp)
+            source = root / "source"
+            task_dir = root / "task"
             target = source / "feature/src/main/ets/Foo.ets"
-            target.parent.mkdir(parents=True); target.write_text("export class Foo {}", encoding="utf-8")
-            task_dir.mkdir(); (task_dir / "task.json").write_text(
-                '{"task_id":"T","workspace_root":"' + str(source) + '","target":{"file_path":"feature/src/main/ets/Foo.ets"}}',
+
+            target.parent.mkdir(parents=True)
+            target.write_text("export class Foo {}", encoding="utf-8")
+            task_dir.mkdir()
+
+            (task_dir / "task.json").write_text(
+                json.dumps({
+                    "task_id": "T",
+                    "workspace_root": str(source),
+                    "target": {
+                        "file_path": "feature/src/main/ets/Foo.ets"
+                    }
+                }),
                 encoding="utf-8",
             )
-            (task_dir / "refactor-prompt.md").write_text("full prompt", encoding="utf-8")
-            with patch("arkts_smell_refactor.gate.subprocess.run") as run, patch(
-                "arkts_smell_refactor.gate._sync_production_changes", return_value=0
+            (task_dir / "refactor-prompt.md").write_text(
+                "full prompt",
+                encoding="utf-8",
+            )
+
+            with patch(
+                "arkts_smell_refactor.gate.subprocess.run"
+            ) as run, patch(
+                "arkts_smell_refactor.gate._sync_production_changes",
+                return_value=0,
             ):
                 run.return_value.returncode = 0
-                self.assertEqual(0, refactor_gate(task_dir, source, Path("deveco"), model="provider/model"))
-                command = run.call_args.args[0]
-                self.assertIn("provider/model", command)
-                self.assertEqual("full prompt", command[-1])
-                self.assertNotIn("-f", command)
+                self.assertEqual(
+                    0,
+                    refactor_gate(
+                        task_dir,
+                        source,
+                        Path("deveco"),
+                        model="provider/model",
+                    ),
+                )
+
+            command = run.call_args.args[0]
+            self.assertIn("provider/model", command)
+            self.assertEqual("full prompt", command[-1])
+            self.assertNotIn("-f", command)
+
+    def test_arkanalyzer_anonymous_method_belongs_to_outer_method(self):
+        message = "Method '%AM2$initialiseUserInfoTextField' is feature-envious toward 'UserInfo'"
+        reported = _reported_symbol(message)
+        self.assertEqual("%AM2$initialiseUserInfoTextField", reported)
+        self.assertTrue(
+            _symbol_matches(reported, "initialiseUserInfoTextField")
+        )
+        self.assertFalse(
+            _symbol_matches(reported, "initialiseEnumField")
+        )
+
+    def test_smell_scan_is_limited_to_target_and_changed_production_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            task_dir = root / "task"
+            target = source / "pages/Page.ets"
+            changed = source / "models/PageMapper.ets"
+            unrelated = source / "pages/Other.ets"
+
+            for path in (target, changed, unrelated):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("line\n", encoding="utf-8")
+
+            task_dir.mkdir()
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["models/PageMapper.ets"]}',
+                encoding="utf-8",
+            )
+
+            selected = _smell_scan_files(task_dir, source, target)
+            self.assertEqual(
+                [target.resolve(), changed.resolve()],
+                selected,
+            )
+
+    def test_new_smell_file_treats_all_lines_as_changed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            task_dir = root / "task"
+            added = source / "models/NewMapper.ets"
+
+            added.parent.mkdir(parents=True)
+            added.write_text("one\ntwo\n", encoding="utf-8")
+            task_dir.mkdir()
+
+            changed = _smell_changed_lines(task_dir, source, [added])
+            self.assertEqual(
+                {1, 2},
+                changed["models/NewMapper.ets"],
+            )
+
+    def test_stale_dataset_lines_do_not_match_an_unrelated_method(self):
+        source = """class Page {
+  build() {
+    this.oldLongMethodBody()
+  }
+
+  refactoredTarget() {
+    return Mapper.map(this.value)
+  }
+}
+"""
+        # HomeCheck reports build at its declaration, while only
+        # refactoredTarget changed.
+        self.assertFalse(
+            _issue_touches_changed_symbol(source, "build", 2, {6})
+        )
+        self.assertTrue(
+            _issue_touches_changed_symbol(
+                source,
+                "refactoredTarget",
+                5,
+                {6},
+            )
+        )
 
     def test_smell_identity_distinguishes_same_method_name_by_owner(self):
         source = """class TotalCashMapper {
@@ -108,6 +227,96 @@ class OrderVM {
             self.assertEqual(0, _sync_production_changes(mirror, source))
             self.assertEqual("after", source_file.read_text(encoding="utf-8"))
             self.assertFalse((source / "feature/oh-package-lock.json5").exists())
+
+    def test_validation_files_are_discarded_without_losing_source_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            for name in ("local.properties", "hvigorw.bat", "package-lock.json", "pnpm-lock.yaml"):
+                (mirror / name).write_text("temporary", encoding="utf-8")
+
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            self.assertEqual("after", source_file.read_text(encoding="utf-8"))
+            changes = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
+            self.assertEqual(4, len(changes["discardedValidationFiles"]))
+            self.assertEqual([], changes["rejectedFiles"])
+
+    def test_real_configuration_change_rejects_all_source_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            config = mirror / "feature/build-profile.json5"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            config.parent.mkdir(parents=True, exist_ok=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            config.write_text("changed", encoding="utf-8")
+
+            self.assertEqual(4, _sync_production_changes(mirror, source))
+            self.assertEqual("before", source_file.read_text(encoding="utf-8"))
+
+    def test_production_resources_are_allowed_transactionally_for_all_smells(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            resource = mirror / "common/src/main/resources/base/media/icon.png"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            resource.parent.mkdir(parents=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            resource.write_bytes(b"png-data")
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            self.assertEqual(b"png-data", (source / "common/src/main/resources/base/media/icon.png").read_bytes())
+            changes = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
+            self.assertEqual(["common/src/main/resources/base/media/icon.png"], changes["changedProductionResources"])
+            self.assertEqual(64, len(changes["productionResourceManifest"][0]["sha256"]))
+
+    def test_rejected_attempt_does_not_pollute_committed_change_list(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace-repair-1"
+            source_file = source / "feature/src/main/ets/Foo.ets"
+            mirror_file = mirror / "feature/src/main/ets/Foo.ets"
+            forbidden = mirror / "build-profile.json5"
+            source_file.parent.mkdir(parents=True)
+            mirror_file.parent.mkdir(parents=True)
+            source_file.write_text("before", encoding="utf-8")
+            mirror_file.write_text("after", encoding="utf-8")
+            forbidden.write_text("forbidden", encoding="utf-8")
+            (mirror.parent / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["previous.ets"]}', encoding="utf-8"
+            )
+
+            self.assertEqual(4, _sync_production_changes(mirror, source))
+            committed = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
+            self.assertEqual(["previous.ets"], committed["changedProductionFiles"])
+            attempt = __import__("json").loads(
+                (mirror.parent / "agent-change-attempt-refactor-workspace-repair-1.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(["build-profile.json5"], attempt["rejectedFiles"])
+
+    def test_linter_output_is_structured(self):
+        issues = _parse_linter_issues("12:3 error unexpected any @rule/no-any", "feature/Foo.ets")
+        self.assertEqual(1, len(issues))
+        self.assertEqual("feature/Foo.ets", issues[0]["filePath"])
+        self.assertEqual(12, issues[0]["line"])
+        self.assertEqual("@rule/no-any", issues[0]["rule"])
 
     def test_module_index_is_synchronized_as_production_source(self):
         with tempfile.TemporaryDirectory() as temp:

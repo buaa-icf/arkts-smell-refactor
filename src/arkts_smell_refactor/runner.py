@@ -47,6 +47,9 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         results.append(CommandResult("refactor-agent", "SKIPPED", reason="config 未配置 refactorAgent"))
 
     if refactor and not dry_run and results[-1].status != "PASS":
+        agent_failure = _build_agent_failure_report(task_dir, results[-1], 0)
+        write_json(task_dir / "failure-report.json", agent_failure)
+        write_json(task_dir / "failure-report-agent.json", agent_failure)
         reason = "重构 Agent 未成功，后续验证没有可验证的重构结果"
         gate_names = ["smell", "build"]
         if "contract" in config.get("gates", {}):
@@ -97,7 +100,8 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
                 review_result = _run_spec(review_name, review, context, str(task_dir), task_dir, dry_run)
                 if review_result.status == "PASS" and not dry_run:
                     review_path = task_dir / f"{review_name}.log"
-                    review_json = _extract_review_json(review_path, task_dir / "review.json")
+                    review_output = task_dir / ("review.json" if not suffix else f"review{suffix}.json")
+                    review_json = _extract_review_json(review_path, review_output)
                     if review_json:
                         verdict = str(review_json.get("verdict", "UNCERTAIN")).upper()
                         review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
@@ -127,17 +131,26 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
             break
         from .prompts import build_repair_prompt
         risk = read_json(task_dir / "risk-report.json")
-        repair_number += 1
-        repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
-        write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
-        context["repair_prompt_file"] = str(repair_prompt.resolve())
-        if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
-        repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
-        results.append(repair_result)
-        if progress: progress(f"修复 Agent 第{repair_number}轮", repair_result.status)
-        if repair_result.status != "PASS":
+        repair_result: CommandResult | None = None
+        while failure["repairable"] and repair_number < max_repairs:
+            repair_number += 1
+            repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
+            write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
+            context["repair_prompt_file"] = str(repair_prompt.resolve())
+            if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
+            repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
+            results.append(repair_result)
+            if progress: progress(f"修复 Agent 第{repair_number}轮", repair_result.status)
+            if repair_result.status == "PASS":
+                break
             terminal = [repair_result]
             attempts.append({"attempt": repair_number, "steps": [repair_result.to_dict()]})
+            failure = _build_agent_failure_report(task_dir, repair_result, repair_number + 1)
+            write_json(task_dir / "failure-report.json", failure)
+            write_json(task_dir / f"failure-report-{repair_number + 1}.json", failure)
+            if repair_result.status == "BLOCKED" or not failure["repairable"]:
+                break
+        if not repair_result or repair_result.status != "PASS":
             break
 
     result = _final_result(task.task_id, results, dry_run, terminal)
@@ -177,8 +190,30 @@ def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, A
 
 def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
     logical_stage = failed.name.split("-repair-", 1)[0]
-    review = read_json(task_dir / "review.json") if logical_stage == "review-agent" and (task_dir / "review.json").exists() else {}
+    review_suffix = failed.name.removeprefix("review-agent")
+    review_path = task_dir / ("review.json" if not review_suffix else f"review{review_suffix}.json")
+    review = read_json(review_path) if logical_stage == "review-agent" and review_path.exists() else {}
     issues = review.get("issues", []) if isinstance(review, dict) else []
+    if logical_stage == "smell" and (task_dir / "smell-after.json").exists():
+        issues = [
+            {
+                "category": "remaining-smell",
+                "filePath": task.target.file_path,
+                "line": item.get("line"),
+                "reason": item.get("message", "目标异味仍存在"),
+            }
+            for item in read_json(task_dir / "smell-after.json")
+        ]
+    if logical_stage == "linter" and (task_dir / "linter-after.json").exists():
+        issues = [
+            {
+                "category": "introduced-linter-defect",
+                "filePath": item.get("filePath"), "line": item.get("line"),
+                "column": item.get("column"), "rule": item.get("rule"),
+                "reason": item.get("message", "本次变更触及 Linter 缺陷"),
+            }
+            for item in read_json(task_dir / "linter-after.json")
+        ]
     log_text = ""
     if failed.output_file and Path(failed.output_file).is_file():
         log_text = Path(failed.output_file).read_text(encoding="utf-8", errors="replace")[-12000:]
@@ -211,6 +246,55 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         "classification": classification, "repairable": repairable,
         "summary": summary or failed.reason or f"{logical_stage} 未通过",
         "changedProductionFiles": changes, "issues": issues,
+        "logTail": log_text,
+    }
+
+
+def _build_agent_failure_report(task_dir: Path, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
+    """Explain Refactor/Repair Agent execution failures before another agent run."""
+    attempts = sorted(
+        task_dir.glob("agent-change-attempt-*.json"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    changes = read_json(attempts[0]) if attempts else {}
+    rejected = changes.get("rejectedFiles", [])
+    log_text = ""
+    if failed.output_file and Path(failed.output_file).is_file():
+        log_text = Path(failed.output_file).read_text(encoding="utf-8", errors="replace")[-12000:]
+    if rejected:
+        classification = "MODIFICATION_BOUNDARY_VIOLATION"
+        summary = "Agent 修改了本任务未授权的文件；下一轮必须在授权范围内重新设计"
+        issues = [
+            {
+                "category": "unauthorized-file-change",
+                "filePath": path,
+                "reason": "该文件不属于允许回写的生产源码、模块入口或生产资源",
+            }
+            for path in rejected
+        ]
+        repairable = True
+    elif "未产生允许的生产代码修改" in log_text or failed.exit_code == 5:
+        classification = "NO_ALLOWED_PRODUCTION_CHANGE"
+        summary = "Agent 未完成可同步的生产变更"
+        issues = [{"category": "no-change", "reason": summary}]
+        repairable = True
+    else:
+        classification = "AGENT_EXECUTION_FAILURE"
+        summary = failed.reason or "Agent 执行失败，未形成可验证的生产变更"
+        issues = [{"category": "agent-execution", "reason": summary}]
+        repairable = False
+    return {
+        "schemaVersion": "1.0",
+        "attempt": next_attempt,
+        "stage": "repair-agent",
+        "classification": classification,
+        "repairable": repairable,
+        "summary": summary,
+        "candidateProductionFiles": changes.get("candidateProductionFiles", []),
+        "candidateProductionResources": changes.get("candidateProductionResources", []),
+        "rejectedFiles": rejected,
+        "issues": issues,
         "logTail": log_text,
     }
 
