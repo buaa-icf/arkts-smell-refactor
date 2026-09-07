@@ -11,6 +11,7 @@ from .utils import read_json, slug
 SYMBOL_PATTERNS = [
     re.compile(r"Method '([^']+)'"),
     re.compile(r"method '([^']+)'", re.IGNORECASE),
+    re.compile(r"God Class\s+['\"]?([A-Za-z_$][\w$]*)", re.IGNORECASE),
 ]
 CLONE_RE = re.compile(
     r"similar to\s+(.+?\.(?:ets|ts)):(\d+)-(\d+)", re.IGNORECASE
@@ -94,7 +95,11 @@ def load_dataset_tasks(
                         ),
                         related_targets=_related_targets(str(message.get("message", ""))),
                     ),
-                    raw={"recordIndex": record_index, "messageIndex": message_index, **message},
+                    raw={
+                        "recordIndex": record_index, "messageIndex": message_index,
+                        **({"analysisContext": record["analysisContext"]} if isinstance(record.get("analysisContext"), dict) else {}),
+                        **message,
+                    },
                 )
             )
     if only_index is not None and not tasks:
@@ -107,4 +112,3 @@ def _int_or_none(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
-

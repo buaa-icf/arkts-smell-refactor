@@ -10,6 +10,8 @@ RULE_TYPES = {
     "@extrulesproject/long-method-check": "long-method",
     "@extrulesproject/switch-statement-check": "switch-statement",
     "@extrulesproject/code-clone-fragment-check": "code-clone",
+    "formal/god-class": "god-class",
+    "formal/directory-cycle": "cyclic-dependency",
 }
 
 
@@ -66,4 +68,3 @@ class CommandResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
