@@ -435,6 +435,10 @@ DevEco Code Refactor Agent
 
 流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在前四层全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新从异味复检开始执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
 
+对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。
+
+框架同时冻结模块导出和目标类公共成员的词法契约。build 之后会检查旧导出/公共成员是否被删除，以及静态性、参数和类型签名是否变化；新增公共成员不会失败。复杂别名与动态 re-export 仍作为已知限制记录。
+
 Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
 
 修复 Prompt 直接附带 build/test 失败日志尾部（最多 12000 字符）、本次修改文件，以及结构化问题中的文件、行列和修复要求，隔离 Agent 无需访问工作区外的日志。抽取辅助方法时要求核对调用处的真实可选类型与上下文；例如保留 `string | undefined` 参数或调整 `Date` 调用的抽取边界，避免用新增默认值或提前返回改变行为。修复成功后重新执行全部门禁，以最终一轮结果判定 PASS。
@@ -442,6 +446,10 @@ Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败
 Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证书、签名、依赖下载或网络环境错误会停止内部验证，不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
 
 当前 DevEco Code CLI 没有提供本工具可用的“仅允许工作目录”无人值守权限参数，因此 Refactor/Repair Agent 的工作区隔离属于复制隔离和回写白名单，不是操作系统级沙箱。提示词已禁止工作区外操作，平台也只会回写白名单生产源码，但无法自动撤销 Agent 对工作区外文件已经发生的修改；应使用专用系统账户或受限执行环境运行不受信任的模型。
+
+所有异味统一允许回写工程内的生产 ArkTS 源码、模块 `Index.ets` 和模块 `src/main/resources/**`。生产资源是通用重构内容，不作为风险报告中的专项权限。该边界不会放开测试、AppScope、构建配置、依赖配置、签名文件或工程外路径。资源变更在 `refactor-changes.json` 中与源码分开记录，并保存大小、变更类型和 SHA-256。
+
+同步采用事务式变更清单：平台先扫描并分类整轮修改，存在未授权文件时不回写任何文件，也不更新正式的 `changedProductionFiles`；候选修改和拒绝原因单独写入 `agent-change-attempt-*.json`。Refactor/Repair Agent 自身失败也会生成失败报告，区分 `MODIFICATION_BOUNDARY_VIOLATION`、`NO_ALLOWED_PRODUCTION_CHANGE` 和一般执行失败。可重新规划的边界失败会把拒绝文件和平台边界交给下一轮，而不是再次使用旧的 smell 报告。
 
 证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
 
@@ -459,6 +467,11 @@ review-agent.log
 failure-report-1.json
 repair-prompt-1.md
 repair-agent-1.log
+runtime-smoke-plan.json
+runtime-smoke-generated/
+runtime-smoke-results.json
+public-contract-before.json
+public-contract-results.json
 review-diff.patch
 current-production/
 review-context-production/

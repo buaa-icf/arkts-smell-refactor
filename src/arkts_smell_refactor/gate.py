@@ -5,13 +5,18 @@ import difflib
 import filecmp
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
+from .runtime_smoke import render_runtime_smoke_list, render_runtime_smoke_test
+from .public_contract import compare_public_contract, snapshot_public_contract
 from .utils import read_json, write_json
 
 
@@ -23,7 +28,10 @@ DISPOSABLE_VALIDATION_FILES = {
 }
 
 
-def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: Path | None = None) -> int:
+def refactor_gate(
+    task_dir: Path, source_root: Path, deveco: Path,
+    prompt_file: Path | None = None, model: str | None = None,
+) -> int:
     """Run the refactor agent in a production-only mirror, then copy back code only."""
     task = read_json(task_dir / "task.json")
     workspace_name = "refactor-workspace" if prompt_file is None else f"refactor-workspace-{prompt_file.stem}"
@@ -39,11 +47,15 @@ def refactor_gate(task_dir: Path, source_root: Path, deveco: Path, prompt_file: 
     prompt = prompt.replace(task["target"]["file_path"], target_relative.as_posix())
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
-    completed = subprocess.run(
-        [str(deveco), "run", "严格执行附件中的重构任务。", "-f", str(agent_prompt),
-         "--dir", str(workspace), "--format", "json", "--dangerously-skip-permissions"],
-        cwd=workspace,
-    )
+    command = [str(deveco), "run"]
+    if model:
+        command.extend(["-m", model])
+    command.extend([
+        "--dir", str(workspace), "--format", "json",
+        "--title", str(task.get("task_id", task.get("taskId", "refactor"))),
+        "--dangerously-skip-permissions", prompt,
+    ])
+    completed = subprocess.run(command, cwd=workspace)
     if completed.returncode != 0:
         return completed.returncode
     return _sync_production_changes(workspace, source_root)
@@ -74,6 +86,140 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
         command.extend(["-p", "coverage=true"])
     command.append("--no-daemon")
     return subprocess.run(command, cwd=workspace).returncode
+
+
+def runtime_smoke_gate(
+    task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | None,
+) -> int:
+    plan_path = task_dir / "runtime-smoke-plan.json"
+    if not plan_path.is_file():
+        print("RUNTIME_SMOKE_DISABLED: no plan")
+        return 0
+    plan = read_json(plan_path)
+    if not plan.get("enabled"):
+        print("RUNTIME_SMOKE_DISABLED: " + str(plan.get("reason", "risk not triggered")))
+        return 0
+    baseline = task_dir / "runtime-smoke-baseline"
+    if not baseline.is_dir():
+        print("RUNTIME_SMOKE_BASELINE_UNAVAILABLE: missing baseline", file=sys.stderr)
+        return 3
+    baseline_result_path = task_dir / "runtime-smoke-baseline-result.json"
+    if baseline_result_path.is_file():
+        baseline_result = read_json(baseline_result_path)
+    else:
+        baseline_result = _run_runtime_smoke_copy(task_dir, baseline, plan, hvigorw, ohpm, "baseline")
+        write_json(baseline_result_path, baseline_result)
+    if not baseline_result.get("passed"):
+        write_json(task_dir / "runtime-smoke-results.json", {
+            "schemaVersion": "1.0", "enabled": True, "baseline": baseline_result,
+            "current": None, "passed": None, "classification": "BASELINE_UNAVAILABLE",
+        })
+        print("RUNTIME_SMOKE_BASELINE_UNAVAILABLE: baseline did not pass the same smoke", file=sys.stderr)
+        return 3
+    current_result = _run_runtime_smoke_copy(task_dir, source_root, plan, hvigorw, ohpm, "current")
+    passed = bool(current_result.get("passed"))
+    write_json(task_dir / "runtime-smoke-results.json", {
+        "schemaVersion": "1.0", "enabled": True, "baseline": baseline_result,
+        "current": current_result, "passed": passed,
+        "classification": "PASS" if passed else "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
+    })
+    if not passed:
+        print("Runtime smoke regression: baseline passes, current source throws or cannot run", file=sys.stderr)
+        return 1
+    print("Runtime smoke passed")
+    return 0
+
+
+def public_contract_gate(task_dir: Path, source_root: Path) -> int:
+    plan_path = task_dir / "public-contract-plan.json"
+    before_path = task_dir / "public-contract-before.json"
+    if not plan_path.is_file() or not before_path.is_file():
+        print("PUBLIC_CONTRACT_DISABLED: no baseline")
+        return 0
+    plan = read_json(plan_path)
+    if not plan.get("enabled"):
+        print("PUBLIC_CONTRACT_DISABLED: " + str(plan.get("reason", "no public surface")))
+        return 0
+    task = read_json(task_dir / "task.json")
+    from .runner import _task_from_file
+    current = snapshot_public_contract(_task_from_file(task_dir / "task.json"), source_root, plan)
+    write_json(task_dir / "public-contract-current.json", current)
+    result = compare_public_contract(read_json(before_path), current)
+    write_json(task_dir / "public-contract-results.json", result)
+    if not result["passed"]:
+        print("Public contract regression: export or public member removed/changed", file=sys.stderr)
+        return 1
+    print("Public contract passed")
+    return 0
+
+
+def _run_runtime_smoke_copy(
+    task_dir: Path, source: Path, plan: dict[str, Any], hvigorw: Path,
+    ohpm: Path | None, label: str,
+) -> dict[str, Any]:
+    generated = task_dir / "runtime-smoke-generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    test_text, list_text = render_runtime_smoke_test(plan), render_runtime_smoke_list()
+    (generated / "PublicRuntimeSmoke.test.ets").write_text(test_text, encoding="utf-8")
+    (generated / "List.test.ets").write_text(list_text, encoding="utf-8")
+    short = hashlib.sha1((str(task_dir) + "-runtime-" + label).encode()).hexdigest()[:8]
+    workspace = Path(tempfile.gettempdir()) / "arkts-smell-refactor-runtime" / short
+    _fresh_copy(source, workspace, exclude_tests=False)
+    module_root = workspace / str(plan["modulePath"])
+    tests = module_root / "src" / "test"
+    if tests.exists():
+        shutil.rmtree(tests)
+    tests.mkdir(parents=True)
+    (tests / "PublicRuntimeSmoke.test.ets").write_text(test_text, encoding="utf-8")
+    (tests / "List.test.ets").write_text(list_text, encoding="utf-8")
+    if ohpm:
+        installed = subprocess.run([str(ohpm), "install"], cwd=workspace, capture_output=True, text=True)
+        install_log = task_dir / f"runtime-smoke-{label}-install.log"
+        install_log.write_text((installed.stdout or "") + (installed.stderr or ""), encoding="utf-8")
+        if installed.returncode != 0:
+            return {"passed": False, "phase": "dependency-install", "exitCode": installed.returncode, "log": str(install_log), "summary": None}
+    command = [*_hvigor_launcher(hvigorw), "test", "-p", f"module={plan['module']}", "-p", "coverage=false", "--no-daemon"]
+    completed = subprocess.run(command, cwd=workspace, capture_output=True, text=True, encoding="utf-8", errors="replace", env=_deveco_environment(hvigorw))
+    log = task_dir / f"runtime-smoke-{label}.log"
+    log.write_text((completed.stdout or "") + (completed.stderr or ""), encoding="utf-8")
+    result_file = module_root / ".test/default/intermediates/test/coverage_data/test_result.txt"
+    summary = _parse_hypium_result(result_file)
+    passed = bool(summary and summary["failures"] == 0 and summary["errors"] == 0)
+    return {"passed": passed, "phase": "runtime" if summary else "compile-or-run", "exitCode": completed.returncode, "log": str(log), "summary": summary}
+
+
+def _parse_hypium_result(path: Path) -> dict[str, int] | None:
+    if not path.is_file():
+        return None
+    match = re.search(
+        r"Tests run:\s*(\d+),\s*Failure:\s*(\d+),\s*Error:\s*(\d+),\s*Pass:\s*(\d+)",
+        path.read_text(encoding="utf-8", errors="replace"),
+    )
+    if not match:
+        return None
+    tests, failures, errors, passed = map(int, match.groups())
+    return {"tests": tests, "failures": failures, "errors": errors, "passed": passed}
+
+
+def _hvigor_launcher(hvigorw: Path) -> list[str]:
+    if hvigorw.suffix.lower() != ".js":
+        return [str(hvigorw)]
+    root = hvigorw.parents[3] if len(hvigorw.parents) >= 4 else None
+    bundled = root / "tools" / "node" / "bin" / "node" if root else None
+    return [str(bundled if bundled and bundled.is_file() else shutil.which("node") or "node"), str(hvigorw)]
+
+
+def _deveco_environment(hvigorw: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    root = hvigorw.parents[3] if len(hvigorw.parents) >= 4 else None
+    sdk = root / "sdk" if root else None
+    java = root / "jbr" / "Contents" / "Home" if root else None
+    if sdk and sdk.is_dir():
+        env["DEVECO_SDK_HOME"] = str(sdk)
+    if java and java.is_dir():
+        env["JAVA_HOME"] = str(java)
+        env["PATH"] = str(java / "bin") + os.pathsep + env.get("PATH", "")
+    return env
 
 
 def linter_gate(task_dir: Path, source_root: Path, codelinter: Path, config: Path | None) -> int:
@@ -171,6 +317,7 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
     discarded: list[str] = []
     changed: list[str] = []
     allowed_changes: list[tuple[Path, Path, Path]] = []
+    allowed_resources: list[tuple[Path, Path, Path]] = []
     for mirror_file in mirror.rglob("*"):
         if not mirror_file.is_file() or any(part in IGNORED_DIRS for part in mirror_file.parts):
             continue
@@ -193,23 +340,34 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         # Index.ets. Moving logic into an owning module commonly requires a
         # matching export here, so it is production source rather than config.
         is_module_entry = mirror_file.name.lower() == "index.ets" and len(relative.parts) >= 2
-        allowed = is_main_source or is_module_entry
+        is_production_resource = "/src/main/resources/" in f"/{normalized}"
+        allowed = is_main_source or is_module_entry or is_production_resource
         if not allowed:
             forbidden.append(relative.as_posix())
             continue
-        allowed_changes.append((mirror_file, source_file, relative))
+        if is_production_resource:
+            allowed_resources.append((mirror_file, source_file, relative))
+        else:
+            allowed_changes.append((mirror_file, source_file, relative))
     changes_file = mirror.parent / "refactor-changes.json"
-    previous = read_json(changes_file).get("changedProductionFiles", []) if changes_file.exists() else []
-    combined = list(dict.fromkeys([*previous, *[x[2].as_posix() for x in allowed_changes]]))
-    write_json(changes_file, {
-        "changedProductionFiles": combined,
+    attempt_file = mirror.parent / f"agent-change-attempt-{mirror.name}.json"
+    write_json(attempt_file, {
+        "candidateProductionFiles": [x[2].as_posix() for x in allowed_changes],
+        "candidateProductionResources": [x[2].as_posix() for x in allowed_resources],
         "discardedValidationFiles": discarded,
         "rejectedFiles": forbidden,
     })
     if forbidden:
         print("Refactor Agent 尝试修改非生产代码或配置：" + ", ".join(forbidden), file=sys.stderr)
         return 4
-    for mirror_file, source_file, relative in allowed_changes:
+    previous_data = read_json(changes_file) if changes_file.exists() else {}
+    previous_files = previous_data.get("changedProductionFiles", [])
+    previous_resources = previous_data.get("changedProductionResources", [])
+    combined = list(dict.fromkeys([*previous_files, *[x[2].as_posix() for x in allowed_changes]]))
+    combined_resources = list(dict.fromkeys([*previous_resources, *[x[2].as_posix() for x in allowed_resources]]))
+    resource_manifest: list[dict[str, object]] = []
+    for mirror_file, source_file, relative in [*allowed_changes, *allowed_resources]:
+        existed = source_file.exists()
         baseline_file = mirror.parent / "baseline-production" / relative
         if source_file.exists() and not baseline_file.exists():
             baseline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -217,9 +375,23 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         source_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(mirror_file, source_file)
         changed.append(relative.as_posix())
+        if (mirror_file, source_file, relative) in allowed_resources:
+            resource_manifest.append({
+                "filePath": relative.as_posix(),
+                "size": mirror_file.stat().st_size,
+                "sha256": hashlib.sha256(mirror_file.read_bytes()).hexdigest(),
+                "changeType": "modified" if existed else "added",
+            })
     if not changed:
         print("Refactor Agent 未产生允许的生产代码修改", file=sys.stderr)
         return 5
+    write_json(changes_file, {
+        "changedProductionFiles": combined,
+        "changedProductionResources": combined_resources,
+        "productionResourceManifest": resource_manifest,
+        "discardedValidationFiles": discarded,
+        "rejectedFiles": [],
+    })
     _prepare_review_materials(mirror.parent, source, combined)
     print("已同步生产代码修改：" + ", ".join(changed))
     return 0
@@ -535,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     refactor.add_argument("--source-root", required=True, type=Path)
     refactor.add_argument("--deveco", required=True, type=Path)
     refactor.add_argument("--prompt-file", type=Path)
+    refactor.add_argument("--model")
     hvigor = sub.add_parser("hvigor")
     hvigor.add_argument("--task-dir", required=True, type=Path)
     hvigor.add_argument("--source-root", required=True, type=Path)
@@ -547,13 +720,28 @@ def main(argv: list[str] | None = None) -> int:
     linter.add_argument("--source-root", required=True, type=Path)
     linter.add_argument("--codelinter", required=True, type=Path)
     linter.add_argument("--config", type=Path)
+    runtime = sub.add_parser("runtime-smoke")
+    runtime.add_argument("--task-dir", required=True, type=Path)
+    runtime.add_argument("--source-root", required=True, type=Path)
+    runtime.add_argument("--hvigorw", required=True, type=Path)
+    runtime.add_argument("--ohpm", type=Path)
+    contract = sub.add_parser("public-contract")
+    contract.add_argument("--task-dir", required=True, type=Path)
+    contract.add_argument("--source-root", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.command == "smell":
         return smell_gate(args.task_dir.resolve(), args.homecheck_root.resolve(), args.source_root.resolve() if args.source_root else None)
     if args.command == "refactor":
-        return refactor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(), args.prompt_file.resolve() if args.prompt_file else None)
+        return refactor_gate(
+            args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(),
+            args.prompt_file.resolve() if args.prompt_file else None, args.model,
+        )
     if args.command == "linter":
         return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve() if args.config else None)
+    if args.command == "runtime-smoke":
+        return runtime_smoke_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None)
+    if args.command == "public-contract":
+        return public_contract_gate(args.task_dir.resolve(), args.source_root.resolve())
     return hvigor_gate(args.task_dir.resolve(), args.source_root.resolve(), args.hvigorw.resolve(), args.ohpm.resolve() if args.ohpm else None, args.task, args.module)
 
 

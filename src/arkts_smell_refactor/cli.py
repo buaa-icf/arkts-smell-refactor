@@ -8,7 +8,9 @@ from pathlib import Path
 
 from .dataset import load_dataset_tasks
 from .prompts import build_refactor_prompt, build_review_prompt
+from .public_contract import prepare_public_contract
 from .risk import analyze_risks
+from .runtime_smoke import prepare_runtime_smoke
 from .runner import execute_pipeline, load_config
 from .utils import write_json, write_text
 
@@ -104,6 +106,8 @@ def prepare(args: argparse.Namespace) -> int:
         write_json(task_dir / "task.json", task.to_dict())
         write_json(task_dir / "risk-report.json", risk)
         write_json(task_dir / "review-risk.json", _review_risk(risk))
+        prepare_runtime_smoke(task, risk, task_dir)
+        prepare_public_contract(task, task_dir)
         write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
         write_text(task_dir / "review-prompt.md", build_review_prompt(task, risk))
         index.append({"taskId": task.task_id, "taskDir": str(task_dir.resolve())})
