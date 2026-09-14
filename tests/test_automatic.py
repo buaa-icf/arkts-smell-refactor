@@ -39,6 +39,7 @@ class AutomaticConfigTests(unittest.TestCase):
             "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
             "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
         })
+        self.config["reviewAgent"]["retryDelaySeconds"] = 0
 
     def _output_spec(self, spec, output, exit_code=1):
         return spec | {"command": [
@@ -87,6 +88,55 @@ class AutomaticConfigTests(unittest.TestCase):
                 self.assertEqual("BLOCKED", result.status)
                 self.assertIn("匹配：", result.reason)
                 self.assertTrue(any(word in result.reason for word in output.split()))
+
+    def test_all_agents_classify_certificate_errors_as_blocked(self):
+        output = json.dumps({"type": "error", "error": {
+            "name": "UnknownError", "data": {"message": "unknown certificate verification error"},
+        }})
+        for name in ("refactorAgent", "repairAgent", "reviewAgent"):
+            with self.subTest(agent=name):
+                result = self._run_output(name, self.config[name], output)
+                self.assertEqual("BLOCKED", result.status)
+                self.assertIn("certificate verification", result.reason)
+
+    def test_review_certificate_failure_does_not_start_code_repair(self):
+        config = self.config
+        config["refactorAgent"] = self._output_spec(config["refactorAgent"], "", 0)
+        config["repairAgent"]["command"] = ["must-not-run"]
+        for name, spec in config["gates"].items():
+            config["gates"][name] = self._output_spec(spec, "", 0)
+        config["reviewAgent"] = self._output_spec(
+            config["reviewAgent"], "UnknownError: unknown certificate verification error"
+        )
+        result = execute_pipeline(self.task_dir, config)
+        self.assertEqual("BLOCKED", result["verdict"])
+        self.assertEqual(0, result["repairAttempts"])
+        self.assertEqual(2, result["reviewRetries"])
+        self.assertEqual("BLOCKED", result["steps"][-1]["status"])
+        self.assertTrue(all(step["status"] == "PASS" for step in result["steps"][:5]))
+        self.assertEqual(3, sum(step["name"].startswith("review-agent") for step in result["steps"]))
+        self.assertFalse((self.task_dir / "failure-report-1.json").exists())
+        self.assertFalse(any(step["name"].startswith("repair-agent") for step in result["steps"]))
+
+    def test_review_certificate_retry_recovers_to_pass(self):
+        config = self.config
+        config["refactorAgent"] = self._output_spec(config["refactorAgent"], "", 0)
+        config["repairAgent"]["command"] = ["must-not-run"]
+        for name, spec in config["gates"].items():
+            config["gates"][name] = self._output_spec(spec, "", 0)
+        config["reviewAgent"]["command"] = [sys.executable, "-c",
+            "import json; from pathlib import Path; "
+            "marker = Path('review-retried'); first = not marker.exists(); marker.touch(); "
+            "print('unknown certificate verification error' if first else "
+            "json.dumps(dict(verdict='PASS', issues=[]))); raise SystemExit(1 if first else 0)"]
+        result = execute_pipeline(self.task_dir, config)
+        self.assertEqual("PASS", result["verdict"])
+        self.assertEqual(0, result["repairAttempts"])
+        self.assertEqual(1, result["reviewRetries"])
+        self.assertTrue((self.task_dir / "review-agent.log").exists())
+        self.assertTrue((self.task_dir / "review-agent-retry-1.log").exists())
+        self.assertTrue((self.task_dir / "review-retry-1.json").exists())
+        self.assertFalse((self.task_dir / "failure-report-1.json").exists())
 
     def test_attributed_compile_failure_enters_repair_and_restarts_gates(self):
         config = self.config

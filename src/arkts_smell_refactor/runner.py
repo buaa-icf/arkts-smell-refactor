@@ -65,6 +65,7 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
     attempts: list[dict[str, Any]] = []
     terminal: list[CommandResult] = []
     repair_number = 0
+    review_retries = 0
 
     while True:
         suffix = "" if repair_number == 0 else f"-repair-{repair_number}"
@@ -80,17 +81,28 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         if all_four_pass:
             review = config.get("reviewAgent")
             if review:
-                review_name = "review-agent" + suffix
                 if progress: progress("评审 Agent", "开始")
-                review_result = _run_spec(review_name, review, context, str(task_dir), task_dir, dry_run)
+                max_retries = max(0, int(review.get("maxEnvironmentRetries", 0))) if not dry_run else 0
+                for retry_number in range(max_retries + 1):
+                    retry_suffix = f"-retry-{retry_number}" if retry_number else ""
+                    review_name = "review-agent" + suffix + retry_suffix
+                    if retry_number:
+                        review_retries += 1
+                        if progress: progress(f"评审 Agent 环境重试第{retry_number}次", "开始")
+                        time.sleep(min(60, max(0, float(review.get("retryDelaySeconds", 2)))))
+                    review_result = _run_spec(review_name, review, context, str(task_dir), task_dir, dry_run)
+                    # Retry identified tool failures only; missing commands/timeouts have no exit code.
+                    if review_result.status != "BLOCKED" or review_result.exit_code is None or retry_number == max_retries:
+                        break
+                    results.append(review_result)
+                    if progress: progress("评审 Agent", review_result.status)
                 if review_result.status == "PASS" and not dry_run:
                     review_path = task_dir / f"{review_name}.log"
-                    review_output = task_dir / ("review.json" if not suffix else f"review{suffix}.json")
+                    review_output = task_dir / f"review{suffix}{retry_suffix}.json"
                     review_json = _extract_review_json(review_path, review_output)
-                    if review_json:
-                        verdict = str(review_json.get("verdict", "UNCERTAIN")).upper()
-                        review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
-                        review_result.reason = None if verdict in {"PASS", "FAIL"} else "评审输出为 UNCERTAIN 或缺少有效 verdict"
+                    verdict = str((review_json or {}).get("verdict", "UNCERTAIN")).upper()
+                    review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
+                    review_result.reason = None if verdict in {"PASS", "FAIL"} else "评审输出为 UNCERTAIN 或缺少有效 verdict JSON"
                 results.append(review_result)
                 terminal = [*gate_results, review_result]
                 if progress: progress("评审 Agent", review_result.status)
@@ -133,6 +145,7 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
 
     result = _final_result(task.task_id, results, dry_run, terminal)
     result["repairAttempts"] = repair_number
+    result["reviewRetries"] = review_retries
     result["attempts"] = attempts
     write_json(task_dir / "result.json", result)
     return result
@@ -161,7 +174,7 @@ def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, A
 
 
 def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
-    logical_stage = failed.name.split("-repair-", 1)[0]
+    logical_stage = re.sub(r"-retry-\d+$", "", failed.name).split("-repair-", 1)[0]
     review_suffix = failed.name.removeprefix("review-agent")
     review_path = task_dir / ("review.json" if not review_suffix else f"review{review_suffix}.json")
     review = read_json(review_path) if logical_stage == "review-agent" and review_path.exists() else {}
@@ -356,8 +369,7 @@ def _extract_review_json(log_path: Path, output_path: Path) -> dict[str, Any] | 
 
     def collect(value: Any) -> None:
         if isinstance(value, dict):
-            verdict = str(value.get("verdict", "")).upper()
-            if verdict in {"PASS", "FAIL", "UNCERTAIN"}:
+            if "verdict" in value:
                 candidates.append(value)
             for nested in value.values():
                 collect(nested)
@@ -378,13 +390,10 @@ def _extract_review_json(log_path: Path, output_path: Path) -> dict[str, Any] | 
                 continue
             collect(data)
 
-    # 支持旧版 default 文本日志，也支持 --format json 的 JSONL 事件日志。
-    for line in text.splitlines():
-        try:
-            collect(json.loads(line))
-        except json.JSONDecodeError:
-            collect_json_text(line)
+    # Scan the full text to support both multiline verdicts and JSONL text events.
+    collect_json_text(text)
     if not candidates:
+        output_path.unlink(missing_ok=True)
         return None
     data = candidates[-1]
     write_json(output_path, data)

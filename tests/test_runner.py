@@ -82,6 +82,63 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual("PASS", review["verdict"])
             self.assertTrue(output.exists())
 
+    def test_extracts_multiline_review_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log = root / "review-agent.log"
+            output = root / "review.json"
+            log.write_text("review complete\n" + json.dumps({
+                "verdict": "PASS", "summary": "equivalent", "issues": [],
+            }, indent=2), encoding="utf-8")
+            self.assertEqual("PASS", _extract_review_json(log, output)["verdict"])
+
+    def test_missing_or_invalid_review_verdict_is_blocked_without_repair(self):
+        for output in (
+            "", "review finished", '{"verdict":', '{"summary":"no verdict"}',
+            '{"verdict":"UNKNOWN"}', '{"verdict":"UNCERTAIN"}',
+            '{"verdict":"PASS"}\n{"verdict":"UNKNOWN"}',
+        ):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as temp:
+                task_dir = Path(temp)
+                (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+                # A previous run's verdict must not fill in for missing current evidence.
+                (task_dir / "review.json").write_text('{"verdict":"PASS"}', encoding="utf-8")
+                python = __import__('sys').executable
+                config = {
+                    "refactorAgent": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "gates": {name: {"command": [python, "-c", "raise SystemExit(0)"]}
+                              for name in ("smell", "build", "test", "linter")},
+                    "reviewAgent": {"command": [python, "-c", f"print({output!r})"]},
+                    "repairAgent": {"command": ["must-not-run"]},
+                }
+                result = execute_pipeline(task_dir, config)
+                self.assertEqual("BLOCKED", result["verdict"])
+                self.assertEqual("BLOCKED", result["steps"][-1]["status"])
+                self.assertEqual(0, result["repairAttempts"])
+
+    def test_semantic_review_failure_still_enters_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "risk-report.json").write_text("{}", encoding="utf-8")
+            python = __import__('sys').executable
+            config = {
+                "refactorAgent": {"command": [python, "-c", "raise SystemExit(0)"]},
+                "gates": {name: {"command": [python, "-c", "raise SystemExit(0)"]}
+                          for name in ("smell", "build", "test", "linter")},
+                "reviewAgent": {"command": [python, "-c",
+                    "import json; from pathlib import Path; "
+                    "print(json.dumps(dict(verdict='PASS' if Path('repaired').exists() else 'FAIL', "
+                    "summary='guard changed', issues=[])))"]},
+                "repairAgent": {"command": [python, "-c",
+                    "from pathlib import Path; Path('repaired').write_text('ok')"]},
+            }
+            result = execute_pipeline(task_dir, config)
+            self.assertEqual("PASS", result["verdict"])
+            self.assertEqual(1, result["repairAttempts"])
+            report = json.loads((task_dir / "failure-report-1.json").read_text(encoding="utf-8"))
+            self.assertEqual("SEMANTIC_REVIEW_FAILURE", report["classification"])
+
     def test_success_output_can_override_nonzero_exit(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)
@@ -206,9 +263,16 @@ class RunnerTests(unittest.TestCase):
                 '{"summary":"current","issues":[{"reason":"guard changed"}]}', encoding="utf-8"
             )
             task = _task_from_file(task_dir / "task.json")
-            report = _build_failure_report(task_dir, task, CommandResult("review-agent-repair-3", "FAIL"), 4)
-            self.assertEqual("current", report["summary"])
-            self.assertEqual("guard changed", report["issues"][0]["reason"])
+            for suffix in ("-repair-3", "-retry-1", "-repair-3-retry-1"):
+                with self.subTest(suffix=suffix):
+                    (task_dir / f"review{suffix}.json").write_text(
+                        '{"summary":"current","issues":[{"reason":"guard changed"}]}', encoding="utf-8"
+                    )
+                    report = _build_failure_report(task_dir, task, CommandResult("review-agent" + suffix, "FAIL"), 4)
+                    self.assertEqual("SEMANTIC_REVIEW_FAILURE", report["classification"])
+                    self.assertTrue(report["repairable"])
+                    self.assertEqual("current", report["summary"])
+                    self.assertEqual("guard changed", report["issues"][0]["reason"])
 
     def test_unattributed_test_failure_is_not_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
