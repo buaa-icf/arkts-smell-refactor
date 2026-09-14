@@ -487,6 +487,33 @@ class RunnerTests(unittest.TestCase):
                 "UNATTRIBUTED_TEST_FAILURE",
                 report["classification"],
             )
+
+    def test_changed_class_name_in_test_diagnostic_is_repairable_without_target_symbol(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            task_data = self._task(temp)
+            task_data["target"]["symbol"] = None
+            (task_dir / "task.json").write_text(json.dumps(task_data), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": [
+                    "features/business_mine/src/main/ets/viewModels/EditNamePageVM.ets",
+                ],
+            }), encoding="utf-8")
+            log = task_dir / "test.log"
+            log.write_text(
+                "Property 'nickname' does not exist on type 'EditNamePageVM'. "
+                "At File: features/business_mine/src/test/EditNamePageVM.test.ets:43:10",
+                encoding="utf-8",
+            )
+
+            report = _build_failure_report(
+                task_dir,
+                _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", output_file=str(log)),
+                1,
+            )
+            self.assertIs(report["repairable"], True)
+            self.assertEqual("RELATED_TEST_FAILURE", report["classification"])
     def test_agent_boundary_failure_has_its_own_repair_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)

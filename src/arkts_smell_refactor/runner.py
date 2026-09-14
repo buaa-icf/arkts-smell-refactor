@@ -237,11 +237,11 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     if logical_stage == "contract" and (task_dir / "public-contract-results.json").is_file():
         log_text = json.dumps(read_json(task_dir / "public-contract-results.json"), ensure_ascii=False, indent=2)
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
-    attributable = any(Path(item).name.lower() in log_text.lower() or item.lower() in log_text.lower() for item in changes)
+    attributable = _mentions_changed_production(log_text, changes)
     if logical_stage in {"smell", "contract", "runtime", "linter", "review-agent"}:
         repairable = True
     elif logical_stage in {"build", "test"}:
-        repairable = attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower())
+        repairable = bool(attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower()))
     else:
         repairable = False
     classification = {
@@ -261,6 +261,20 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         "changedProductionFiles": changes, "issues": issues,
         "logTail": log_text,
     }
+
+
+def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
+    """Match diagnostics to a changed path, filename, or declared type-style file stem."""
+    lowered = log_text.lower().replace("\\", "/")
+    for item in changes:
+        path = Path(item)
+        normalized = item.lower().replace("\\", "/")
+        if normalized in lowered or path.name.lower() in lowered:
+            return True
+        stem = path.stem
+        if stem and re.search(rf"(?<![\w$]){re.escape(stem)}(?![\w$])", log_text, re.IGNORECASE):
+            return True
+    return False
 
 
 def _build_agent_failure_report(task_dir: Path, failed: CommandResult, next_attempt: int) -> dict[str, Any]:

@@ -451,7 +451,7 @@ Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证
 
 同步采用事务式变更清单：平台先扫描并分类整轮修改，存在未授权文件时不回写任何文件，也不更新正式的 `changedProductionFiles`；候选修改和拒绝原因单独写入 `agent-change-attempt-*.json`。Refactor/Repair Agent 自身失败也会生成失败报告，区分 `MODIFICATION_BOUNDARY_VIOLATION`、`NO_ALLOWED_PRODUCTION_CHANGE` 和一般执行失败。可重新规划的边界失败会把拒绝文件和平台边界交给下一轮，而不是再次使用旧的 smell 报告。
 
-证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
+证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件、对应的类型名或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
 
 自动配置按完整 SSL/TLS 标记及明确的签名失败信息识别环境阻塞，避免把 `ProcessLibs`、成功的 `SignHap` 或类型诊断中的 `signature` 误分类。`result.json` 的阻塞步骤 `reason` 会记录正则实际命中的文本。ArkTS 类型错误保持 `FAIL`，可归因于本次修改时进入修复 loop；例如抽取方法后将 `string | undefined` 传给严格的 `string` 或 `Date` 参数。
 
