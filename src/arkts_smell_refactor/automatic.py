@@ -204,7 +204,7 @@ def _auto_config(
         contract = {
             "command": [
                 sys.executable, "-m", "arkts_smell_refactor.gate", "public-contract",
-                "--task-dir", "{task_dir}", "--source-root", str(harmony_root),
+                "--task-dir", "{task_dir}", "--source-root", str(Path(task.project_root).resolve()),
             ],
             "cwd": "{task_dir}", "timeoutSeconds": 300,
         }

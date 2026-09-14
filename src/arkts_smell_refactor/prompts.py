@@ -168,7 +168,7 @@ def _repair_evidence(task: RefactorTask, failure: dict[str, Any]) -> str:
         return ""
     log_tail = _normalize_task_paths(task, log_tail)
     changed_names = {Path(item).name.lower() for item in failure.get("changedProductionFiles", [])}
-    if failure.get("stage") in {"build", "test"}:
+    if failure.get("stage") in {"build", "test", "contract"}:
         text = log_tail[-12000:]
     else:
         selected = []

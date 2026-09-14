@@ -6,6 +6,7 @@ from pathlib import Path
 
 from arkts_smell_refactor.automatic import _auto_config
 from arkts_smell_refactor.models import RefactorTask, Target
+from arkts_smell_refactor.public_contract import prepare_public_contract
 from arkts_smell_refactor.runner import _context, _run_spec, execute_pipeline
 
 
@@ -98,6 +99,41 @@ class AutomaticConfigTests(unittest.TestCase):
                 result = self._run_output(name, self.config[name], output)
                 self.assertEqual("BLOCKED", result.status)
                 self.assertIn("certificate verification", result.reason)
+
+    def test_contract_gate_uses_the_root_that_owns_its_module_path(self):
+        workspace = self.root / "workspace"
+        repository = workspace / "demo"
+        harmony_root = repository / "ShoppingTemplate" / "Express"
+        module = harmony_root / "features" / "business_mine"
+        target = module / "src" / "main" / "ets" / "pages" / "EditNamePage.ets"
+        target.parent.mkdir(parents=True)
+        target.write_text("@ComponentV2\nexport struct EditNamePage {}", encoding="utf-8")
+        (harmony_root / "hvigor").mkdir()
+        (harmony_root / "hvigor" / "hvigor-config.json5").write_text("{}", encoding="utf-8")
+        (harmony_root / "build-profile.json5").write_text("{}", encoding="utf-8")
+        (module / "Index.ets").write_text(
+            "export { EditNamePage } from './src/main/ets/pages/EditNamePage'", encoding="utf-8"
+        )
+        task = RefactorTask(
+            schema_version="1.0", task_id="code-clone-0001-EditNamePage", source_project="demo",
+            commit_hash="", workspace_root=str(workspace), project_root=str(repository),
+            smell_type="code-clone", rule="@extrulesproject/code-clone-fragment-check",
+            severity="SUGGESTION", message="clone",
+            target=Target("demo/ShoppingTemplate/Express/features/business_mine/src/main/ets/pages/EditNamePage.ets"),
+            raw={},
+        )
+        task_dir = self.root / "nested-task"
+        task_dir.mkdir()
+        contract_plan = prepare_public_contract(task, task_dir)
+        config = _auto_config(task, task_dir, {}, {
+            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+            "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
+        }, contract_plan=contract_plan)
+
+        command = config["gates"]["contract"]["command"]
+        contract_root = Path(command[command.index("--source-root") + 1])
+        self.assertEqual("ShoppingTemplate/Express/features/business_mine", contract_plan["modulePath"])
+        self.assertEqual(repository.resolve(), contract_root)
 
     def test_review_certificate_failure_does_not_start_code_repair(self):
         config = self.config

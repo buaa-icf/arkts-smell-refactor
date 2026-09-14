@@ -334,6 +334,10 @@ class RunnerTests(unittest.TestCase):
                 "PUBLIC_CONTRACT_BREAK",
                 failure["classification"],
             )
+            from arkts_smell_refactor.prompts import build_repair_prompt
+            prompt = build_repair_prompt(_task_from_file(root / "task.json"), {}, failure, 1)
+            self.assertIn('"removedExports": [', prompt)
+            self.assertIn('"Foo"', prompt)
 
     def test_runtime_gate_does_not_replace_missing_core_gate_for_review(self):
         with tempfile.TemporaryDirectory() as temp:
