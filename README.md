@@ -443,6 +443,8 @@ Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证
 
 证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
 
+自动配置按完整 SSL/TLS 标记及明确的签名失败信息识别环境阻塞，避免把 `ProcessLibs`、成功的 `SignHap` 或类型诊断中的 `signature` 误分类。`result.json` 的阻塞步骤 `reason` 会记录正则实际命中的文本。ArkTS 类型错误保持 `FAIL`，可归因于本次修改时进入修复 loop；例如抽取方法后将 `string | undefined` 传给严格的 `string` 或 `Date` 参数。
+
 每一步的标准输出和错误输出保存在任务目录下，例如：
 
 ```text

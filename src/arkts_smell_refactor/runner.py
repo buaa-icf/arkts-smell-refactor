@@ -249,7 +249,7 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
         success_regex = spec.get("successOutputRegex")
         blocked_regex = spec.get("blockedOutputRegex")
         passed = process.returncode == 0 or bool(success_regex and re.search(str(success_regex), output, re.IGNORECASE))
-        blocked = bool(not passed and blocked_regex and re.search(str(blocked_regex), output, re.IGNORECASE))
+        blocked = re.search(str(blocked_regex), output, re.IGNORECASE) if not passed and blocked_regex else None
         return CommandResult(
             name=name,
             status="PASS" if passed else ("BLOCKED" if blocked else "FAIL"),
@@ -257,7 +257,7 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
             exit_code=process.returncode,
             duration_seconds=round(time.monotonic() - started, 3),
             output_file=str(log_file),
-            reason="环境或工具链阻塞" if blocked else None,
+            reason=f"环境或工具链阻塞（匹配：{blocked.group(0)}）" if blocked else None,
         )
     except subprocess.TimeoutExpired as error:
         _terminate_process_tree(process)
