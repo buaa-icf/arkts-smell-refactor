@@ -153,7 +153,10 @@ class AutomaticConfigTests(unittest.TestCase):
             "ScheduleForm.ets:419:44: string | undefined is not assignable'); "
             "raise SystemExit(0 if Path('repaired').exists() else 1)"]
         config["repairAgent"]["command"] = [sys.executable, "-c",
-            "from pathlib import Path; Path('repaired').write_text('ok')"]
+            "import sys; from pathlib import Path; "
+            "prompt = Path(sys.argv[1]).read_text(encoding='utf-8'); "
+            "assert 'ScheduleForm.ets:419:44: string | undefined is not assignable' in prompt; "
+            "Path('repaired').write_text('ok')", "{repair_prompt_file}"]
         result = execute_pipeline(self.task_dir, config)
         steps = {item["name"]: item["status"] for item in result["steps"]}
         self.assertEqual("PASS", result["verdict"])
