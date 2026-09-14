@@ -100,6 +100,37 @@ class AutomaticConfigTests(unittest.TestCase):
                 self.assertEqual("BLOCKED", result.status)
                 self.assertIn("certificate verification", result.reason)
 
+    def test_agent_output_identifier_is_not_an_environment_blocker(self):
+        output = json.dumps({
+            "type": "tool_use",
+            "part": {"type": "tool", "state": {"status": "completed", "output": (
+                'classification = "unauthorized-file-change"; '
+                'patterns = "certificate verification|authentication failed"'
+            )}},
+        })
+        for name in ("refactorAgent", "repairAgent", "reviewAgent"):
+            with self.subTest(agent=name):
+                result = self._run_output(name, self.config[name], output, 5)
+                self.assertEqual("FAIL", result.status)
+
+    def test_standalone_unauthorized_agent_error_remains_blocked(self):
+        for name in ("refactorAgent", "repairAgent", "reviewAgent"):
+            with self.subTest(agent=name):
+                result = self._run_output(name, self.config[name], "HTTP 401 Unauthorized", 1)
+                self.assertEqual("BLOCKED", result.status)
+
+    def test_agent_tool_error_event_remains_an_environment_blocker(self):
+        output = json.dumps({
+            "type": "tool_use",
+            "part": {"type": "tool", "state": {
+                "status": "error", "error": "unknown certificate verification error",
+            }},
+        })
+        for name in ("refactorAgent", "repairAgent", "reviewAgent"):
+            with self.subTest(agent=name):
+                result = self._run_output(name, self.config[name], output, 1)
+                self.assertEqual("BLOCKED", result.status)
+
     def test_contract_gate_uses_the_root_that_owns_its_module_path(self):
         workspace = self.root / "workspace"
         repository = workspace / "demo"

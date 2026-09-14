@@ -511,7 +511,7 @@ Review Agent 命令退出码为 0 只代表命令正常结束。工具还会读�
 - `verdict: FAIL` → 最终失败；
 - `verdict: UNCERTAIN`、缺失或非法 JSON → 记为 `BLOCKED`，不能猜测通过。
 
-支持多行 JSON 和 DevEco JSONL 文本事件。Refactor、Repair 和 Review Agent 使用相同的证书、网络、鉴权及服务不可用识别规则。Review 报 `unknown certificate verification error` 等已识别工具故障时，自动配置默认间隔 2 秒重试，最多额外重试 2 次；恢复后继续解析评审结论，可最终达到 PASS。仍失败时保留 BLOCKED 和前四层的 PASS，不启动代码修复或消耗修复轮数。命令缺失、超时、UNCERTAIN 和语义 FAIL 不触发环境重试。
+支持多行 JSON 和 DevEco JSONL 文本事件。Refactor、Repair 和 Review Agent 使用相同的证书、网络、鉴权及服务不可用识别规则；JSONL 模式只从真实错误事件和非 JSON 进程诊断中识别环境阻塞，不扫描 Agent 正常文本或工具读取结果，避免源码中的错误关键字触发误判。Review 报 `unknown certificate verification error` 等已识别工具故障时，自动配置默认间隔 2 秒重试，最多额外重试 2 次；恢复后继续解析评审结论，可最终达到 PASS。仍失败时保留 BLOCKED 和前四层的 PASS，不启动代码修复或消耗修复轮数。命令缺失、超时、UNCERTAIN 和语义 FAIL 不触发环境重试。
 
 可在 `reviewAgent` 配置中设置 `maxEnvironmentRetries`（自定义配置默认 0）和 `retryDelaySeconds`（上限 60 秒）。`result.json` 的 `reviewRetries` 记录实际重试次数，每次重试保留独立的 `review-agent-retry-N.log` 与 `review-retry-N.json`；代码修复后的评审文件还带有 `-repair-N` 标记。
 

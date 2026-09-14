@@ -347,7 +347,8 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
         success_regex = spec.get("successOutputRegex")
         blocked_regex = spec.get("blockedOutputRegex")
         passed = process.returncode == 0 or bool(success_regex and re.search(str(success_regex), output, re.IGNORECASE))
-        blocked = re.search(str(blocked_regex), output, re.IGNORECASE) if not passed and blocked_regex else None
+        blocker_output = _agent_error_output(output) if spec.get("blockedOutputScope") == "agent-errors" else output
+        blocked = re.search(str(blocked_regex), blocker_output, re.IGNORECASE) if not passed and blocked_regex else None
         return CommandResult(
             name=name,
             status="PASS" if passed else ("BLOCKED" if blocked else "FAIL"),
@@ -370,6 +371,37 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
         return CommandResult(name, "BLOCKED", _display_command(rendered), duration_seconds=round(time.monotonic() - started, 3), output_file=str(log_file), reason=f"超过 {timeout} 秒")
     except OSError as error:
         return CommandResult(name, "BLOCKED", _display_command(rendered), duration_seconds=round(time.monotonic() - started, 3), reason=str(error))
+
+
+def _agent_error_output(output: str) -> str:
+    """Keep only DevEco error events and non-JSON process diagnostics for blocker matching."""
+    selected: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            selected.append(line)
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type", "")).lower()
+        if event_type.endswith("error") or event.get("error"):
+            selected.append(json.dumps(event, ensure_ascii=False))
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            continue
+        part_type = str(part.get("type", "")).lower()
+        if part_type.endswith("error") or part.get("error"):
+            selected.append(json.dumps(part, ensure_ascii=False))
+            continue
+        state = part.get("state")
+        if isinstance(state, dict) and str(state.get("status", "")).lower() == "error":
+            selected.append(str(state.get("error") or state.get("output") or "tool error"))
+    return "\n".join(selected)
 
 
 def _terminate_process_tree(process: subprocess.Popen) -> None:

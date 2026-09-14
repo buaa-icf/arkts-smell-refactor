@@ -148,7 +148,7 @@ def _auto_config(
     network_blockers = (
         r"certificate verification|unable to verify[^\r\n]*certificate|self[- ]signed certificate|"
         r"\b(?:SSL|TLS)(?:Error\b|_[A-Z0-9_]+\b|\b)|\b(?:CERT_[A-Z0-9_]+|CERTIFICATE_VERIFY_FAILED)\b|"
-        r"authentication failed|\bunauthorized\b|\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\b|"
+        r"authentication failed|\bunauthorized\b(?![-_])|\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\b|"
         r"network[^\r\n]*unavailable"
     )
     agent_blockers = (
@@ -158,18 +158,21 @@ def _auto_config(
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"]],
         "cwd": "{task_dir}",
         "blockedOutputRegex": agent_blockers,
+        "blockedOutputScope": "agent-errors",
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
     repair = {
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"], "--prompt-file", "{repair_prompt_file}"],
         "cwd": "{task_dir}",
         "blockedOutputRegex": agent_blockers,
+        "blockedOutputScope": "agent-errors",
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
     review = {
         "command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{task_dir}", "--format", "json", "--dangerously-skip-permissions"],
         "cwd": "{task_dir}",
         "blockedOutputRegex": agent_blockers,
+        "blockedOutputScope": "agent-errors",
         "maxEnvironmentRetries": 2,
         "retryDelaySeconds": 2,
         "timeoutSeconds": 3600,
