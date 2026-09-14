@@ -51,9 +51,11 @@ def refactor_gate(
     if model:
         command.extend(["-m", model])
     command.extend([
+        "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。",
+        "-f", str(agent_prompt.resolve()),
         "--dir", str(workspace), "--format", "json",
         "--title", str(task.get("task_id", task.get("taskId", "refactor"))),
-        "--dangerously-skip-permissions", prompt,
+        "--dangerously-skip-permissions",
     ])
     completed = subprocess.run(command, cwd=workspace)
     if completed.returncode != 0:
