@@ -441,6 +441,8 @@ DevEco Code Refactor Agent
 
 Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
 
+修复 Prompt 直接附带 build/test 失败日志尾部（最多 12000 字符）、本次修改文件，以及结构化问题中的文件、行列和修复要求，隔离 Agent 无需访问工作区外的日志。抽取辅助方法时要求核对调用处的真实可选类型与上下文；例如保留 `string | undefined` 参数或调整 `Date` 调用的抽取边界，避免用新增默认值或提前返回改变行为。修复成功后重新执行全部门禁，以最终一轮结果判定 PASS。
+
 Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证书、签名、依赖下载或网络环境错误会停止内部验证，不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
 
 当前 DevEco Code CLI 没有提供本工具可用的“仅允许工作目录”无人值守权限参数，因此 Refactor/Repair Agent 的工作区隔离属于复制隔离和回写白名单，不是操作系统级沙箱。提示词已禁止工作区外操作，平台也只会回写白名单生产源码，但无法自动撤销 Agent 对工作区外文件已经发生的修改；应使用专用系统账户或受限执行环境运行不受信任的模型。
@@ -449,7 +451,9 @@ Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证
 
 同步采用事务式变更清单：平台先扫描并分类整轮修改，存在未授权文件时不回写任何文件，也不更新正式的 `changedProductionFiles`；候选修改和拒绝原因单独写入 `agent-change-attempt-*.json`。Refactor/Repair Agent 自身失败也会生成失败报告，区分 `MODIFICATION_BOUNDARY_VIOLATION`、`NO_ALLOWED_PRODUCTION_CHANGE` 和一般执行失败。可重新规划的边界失败会把拒绝文件和平台边界交给下一轮，而不是再次使用旧的 smell 报告。
 
-证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
+证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件、对应的类型名或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
+
+自动配置按完整 SSL/TLS 标记及明确的签名失败信息识别环境阻塞，避免把 `ProcessLibs`、成功的 `SignHap` 或类型诊断中的 `signature` 误分类。`result.json` 的阻塞步骤 `reason` 会记录正则实际命中的文本。ArkTS 类型错误保持 `FAIL`，可归因于本次修改时进入修复 loop；例如抽取方法后将 `string | undefined` 传给严格的 `string` 或 `Date` 参数。
 
 每一步的标准输出和错误输出保存在任务目录下，例如：
 
@@ -506,6 +510,10 @@ Review Agent 命令退出码为 0 只代表命令正常结束。工具还会读�
 - `verdict: PASS` → 评审通过；
 - `verdict: FAIL` → 最终失败；
 - `verdict: UNCERTAIN`、缺失或非法 JSON → 记为 `BLOCKED`，不能猜测通过。
+
+支持多行 JSON 和 DevEco JSONL 文本事件。Refactor、Repair 和 Review Agent 使用相同的证书、网络、鉴权及服务不可用识别规则；JSONL 模式只从真实错误事件和非 JSON 进程诊断中识别环境阻塞，不扫描 Agent 正常文本或工具读取结果，避免源码中的错误关键字触发误判。Review 报 `unknown certificate verification error` 等已识别工具故障时，自动配置默认间隔 2 秒重试，最多额外重试 2 次；恢复后继续解析评审结论，可最终达到 PASS。仍失败时保留 BLOCKED 和前四层的 PASS，不启动代码修复或消耗修复轮数。命令缺失、超时、UNCERTAIN 和语义 FAIL 不触发环境重试。
+
+可在 `reviewAgent` 配置中设置 `maxEnvironmentRetries`（自定义配置默认 0）和 `retryDelaySeconds`（上限 60 秒）。`result.json` 的 `reviewRetries` 记录实际重试次数，每次重试保留独立的 `review-agent-retry-N.log` 与 `review-retry-N.json`；代码修复后的评审文件还带有 `-repair-N` 标记。
 
 ## 最终状态
 

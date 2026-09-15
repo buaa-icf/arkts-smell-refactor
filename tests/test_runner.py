@@ -82,6 +82,63 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual("PASS", review["verdict"])
             self.assertTrue(output.exists())
 
+    def test_extracts_multiline_review_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log = root / "review-agent.log"
+            output = root / "review.json"
+            log.write_text("review complete\n" + json.dumps({
+                "verdict": "PASS", "summary": "equivalent", "issues": [],
+            }, indent=2), encoding="utf-8")
+            self.assertEqual("PASS", _extract_review_json(log, output)["verdict"])
+
+    def test_missing_or_invalid_review_verdict_is_blocked_without_repair(self):
+        for output in (
+            "", "review finished", '{"verdict":', '{"summary":"no verdict"}',
+            '{"verdict":"UNKNOWN"}', '{"verdict":"UNCERTAIN"}',
+            '{"verdict":"PASS"}\n{"verdict":"UNKNOWN"}',
+        ):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as temp:
+                task_dir = Path(temp)
+                (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+                # A previous run's verdict must not fill in for missing current evidence.
+                (task_dir / "review.json").write_text('{"verdict":"PASS"}', encoding="utf-8")
+                python = __import__('sys').executable
+                config = {
+                    "refactorAgent": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "gates": {name: {"command": [python, "-c", "raise SystemExit(0)"]}
+                              for name in ("smell", "build", "test", "linter")},
+                    "reviewAgent": {"command": [python, "-c", f"print({output!r})"]},
+                    "repairAgent": {"command": ["must-not-run"]},
+                }
+                result = execute_pipeline(task_dir, config)
+                self.assertEqual("BLOCKED", result["verdict"])
+                self.assertEqual("BLOCKED", result["steps"][-1]["status"])
+                self.assertEqual(0, result["repairAttempts"])
+
+    def test_semantic_review_failure_still_enters_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "risk-report.json").write_text("{}", encoding="utf-8")
+            python = __import__('sys').executable
+            config = {
+                "refactorAgent": {"command": [python, "-c", "raise SystemExit(0)"]},
+                "gates": {name: {"command": [python, "-c", "raise SystemExit(0)"]}
+                          for name in ("smell", "build", "test", "linter")},
+                "reviewAgent": {"command": [python, "-c",
+                    "import json; from pathlib import Path; "
+                    "print(json.dumps(dict(verdict='PASS' if Path('repaired').exists() else 'FAIL', "
+                    "summary='guard changed', issues=[])))"]},
+                "repairAgent": {"command": [python, "-c",
+                    "from pathlib import Path; Path('repaired').write_text('ok')"]},
+            }
+            result = execute_pipeline(task_dir, config)
+            self.assertEqual("PASS", result["verdict"])
+            self.assertEqual(1, result["repairAttempts"])
+            report = json.loads((task_dir / "failure-report-1.json").read_text(encoding="utf-8"))
+            self.assertEqual("SEMANTIC_REVIEW_FAILURE", report["classification"])
+
     def test_success_output_can_override_nonzero_exit(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)
@@ -277,6 +334,10 @@ class RunnerTests(unittest.TestCase):
                 "PUBLIC_CONTRACT_BREAK",
                 failure["classification"],
             )
+            from arkts_smell_refactor.prompts import build_repair_prompt
+            prompt = build_repair_prompt(_task_from_file(root / "task.json"), {}, failure, 1)
+            self.assertIn('"removedExports": [', prompt)
+            self.assertIn('"Foo"', prompt)
 
     def test_runtime_gate_does_not_replace_missing_core_gate_for_review(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -323,6 +384,44 @@ class RunnerTests(unittest.TestCase):
             )
             self.assertEqual("SKIPPED", review["status"])
 
+    def test_optional_gates_and_review_retry_complete_together(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "task.json").write_text(
+                json.dumps(self._task(temp)),
+                encoding="utf-8",
+            )
+            python = __import__("sys").executable
+            marker = root / "review-retried"
+            review_code = (
+                "import json, sys; from pathlib import Path; "
+                f"marker = Path(r'{marker}'); first = not marker.exists(); marker.touch(); "
+                "print('unknown certificate verification error' if first else "
+                "json.dumps(dict(verdict='PASS', issues=[]))); sys.exit(1 if first else 0)"
+            )
+            config = {
+                "gates": {
+                    name: {"command": [python, "-c", "raise SystemExit(0)"]}
+                    for name in ("smell", "build", "contract", "runtime", "test", "linter")
+                },
+                "reviewAgent": {
+                    "command": [python, "-c", review_code],
+                    "blockedOutputRegex": "certificate verification",
+                    "maxEnvironmentRetries": 1,
+                    "retryDelaySeconds": 0,
+                },
+            }
+
+            result = execute_pipeline(root, config)
+            statuses = {item["name"]: item["status"] for item in result["steps"]}
+            self.assertEqual("PASS", result["verdict"])
+            self.assertEqual(1, result["reviewRetries"])
+            self.assertTrue(all(statuses[name] == "PASS" for name in (
+                "smell", "build", "contract", "runtime", "test", "linter",
+                "review-agent-retry-1",
+            )))
+            self.assertEqual("BLOCKED", statuses["review-agent"])
+
     def test_review_failure_report_uses_current_repair_round(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)
@@ -341,20 +440,16 @@ class RunnerTests(unittest.TestCase):
             )
 
             task = _task_from_file(task_dir / "task.json")
-            report = _build_failure_report(
-                task_dir,
-                task,
-                CommandResult(
-                    "review-agent-repair-3",
-                    "FAIL",
-                ),
-                4,
-            )
-            self.assertEqual("current", report["summary"])
-            self.assertEqual(
-                "guard changed",
-                report["issues"][0]["reason"],
-            )
+            for suffix in ("-repair-3", "-retry-1", "-repair-3-retry-1"):
+                with self.subTest(suffix=suffix):
+                    (task_dir / f"review{suffix}.json").write_text(
+                        '{"summary":"current","issues":[{"reason":"guard changed"}]}', encoding="utf-8"
+                    )
+                    report = _build_failure_report(task_dir, task, CommandResult("review-agent" + suffix, "FAIL"), 4)
+                    self.assertEqual("SEMANTIC_REVIEW_FAILURE", report["classification"])
+                    self.assertTrue(report["repairable"])
+                    self.assertEqual("current", report["summary"])
+                    self.assertEqual("guard changed", report["issues"][0]["reason"])
 
     def test_unattributed_test_failure_is_not_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -392,6 +487,33 @@ class RunnerTests(unittest.TestCase):
                 "UNATTRIBUTED_TEST_FAILURE",
                 report["classification"],
             )
+
+    def test_changed_class_name_in_test_diagnostic_is_repairable_without_target_symbol(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            task_data = self._task(temp)
+            task_data["target"]["symbol"] = None
+            (task_dir / "task.json").write_text(json.dumps(task_data), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": [
+                    "features/business_mine/src/main/ets/viewModels/EditNamePageVM.ets",
+                ],
+            }), encoding="utf-8")
+            log = task_dir / "test.log"
+            log.write_text(
+                "Property 'nickname' does not exist on type 'EditNamePageVM'. "
+                "At File: features/business_mine/src/test/EditNamePageVM.test.ets:43:10",
+                encoding="utf-8",
+            )
+
+            report = _build_failure_report(
+                task_dir,
+                _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", output_file=str(log)),
+                1,
+            )
+            self.assertIs(report["repairable"], True)
+            self.assertEqual("RELATED_TEST_FAILURE", report["classification"])
     def test_agent_boundary_failure_has_its_own_repair_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)

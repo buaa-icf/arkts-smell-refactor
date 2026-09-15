@@ -28,6 +28,12 @@ runs/
 v/
 .workspace-links/
 
+# Local experiment helpers and reports
+reports/
+tools/run_code_clone_series.ps1
+tools/run_long_method_series.ps1
+tools/task_source_rollback.ps1
+
 # Editors and operating systems
 .idea/
 .vscode/

@@ -21,7 +21,7 @@ from arkts_smell_refactor.gate import (
 
 
 class GateTests(unittest.TestCase):
-    def test_refactor_prompt_is_inline_and_model_is_configurable(self):
+    def test_refactor_prompt_is_attached_and_model_is_configurable(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "source"
@@ -42,8 +42,9 @@ class GateTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
+            long_prompt = "full prompt\n" + ("x" * 16_000)
             (task_dir / "refactor-prompt.md").write_text(
-                "full prompt",
+                long_prompt,
                 encoding="utf-8",
             )
 
@@ -66,8 +67,16 @@ class GateTests(unittest.TestCase):
 
             command = run.call_args.args[0]
             self.assertIn("provider/model", command)
-            self.assertEqual("full prompt", command[-1])
-            self.assertNotIn("-f", command)
+            self.assertNotIn(long_prompt, command)
+            prompt_argument = Path(command[command.index("-f") + 1])
+            self.assertEqual(
+                (task_dir / "refactor-agent-prompt.md").resolve(),
+                prompt_argument,
+            )
+            self.assertEqual(
+                long_prompt,
+                prompt_argument.read_text(encoding="utf-8"),
+            )
 
     def test_arkanalyzer_anonymous_method_belongs_to_outer_method(self):
         message = "Method '%AM2$initialiseUserInfoTextField' is feature-envious toward 'UserInfo'"

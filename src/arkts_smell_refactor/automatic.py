@@ -144,30 +144,45 @@ def _auto_config(
         return {"enabled": False, "reason": f"未找到 {name}"}
 
     harmony_root = _find_harmony_project_root(Path(task.target_path), Path(task.project_root))
+    # Match transport tokens, never identifier substrings such as ProcessLibs.
+    network_blockers = (
+        r"certificate verification|unable to verify[^\r\n]*certificate|self[- ]signed certificate|"
+        r"\b(?:SSL|TLS)(?:Error\b|_[A-Z0-9_]+\b|\b)|\b(?:CERT_[A-Z0-9_]+|CERTIFICATE_VERIFY_FAILED)\b|"
+        r"authentication failed|\bunauthorized\b(?![-_])|\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\b|"
+        r"network[^\r\n]*unavailable"
+    )
     agent_blockers = (
         "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|"
-        "certificate verification|unable to verify.*certificate|self[- ]signed certificate|SSL|TLS|CERT_|"
-        "authentication failed|unauthorized|ECONNRESET|ENETUNREACH|ETIMEDOUT|network.*unavailable"
-    )
+    ) + network_blockers
     refactor = {
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"]],
         "cwd": "{task_dir}",
         "blockedOutputRegex": agent_blockers,
+        "blockedOutputScope": "agent-errors",
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
     repair = {
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"], "--prompt-file", "{repair_prompt_file}"],
         "cwd": "{task_dir}",
         "blockedOutputRegex": agent_blockers,
+        "blockedOutputScope": "agent-errors",
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
-    review = {"command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{task_dir}", "--format", "json", "--dangerously-skip-permissions"], "cwd": "{task_dir}", "timeoutSeconds": 3600} if tools["deveco"] else None
+    review = {
+        "command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{task_dir}", "--format", "json", "--dangerously-skip-permissions"],
+        "cwd": "{task_dir}",
+        "blockedOutputRegex": agent_blockers,
+        "blockedOutputScope": "agent-errors",
+        "maxEnvironmentRetries": 2,
+        "retryDelaySeconds": 2,
+        "timeoutSeconds": 3600,
+    } if tools["deveco"] else None
     smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
-    environment_blockers = (
-        "certificate verification|unable to verify.*certificate|self[- ]signed certificate|"
-        "SSL|TLS|CERT_|authentication failed|unauthorized|ECONNRESET|ENETUNREACH|ETIMEDOUT|network.*unavailable|"
-        "Invalid project path|Permissions Error|signing|signature|SignHap|"
-        "Invalid storeFile value|device not found|no devices"
+    environment_blockers = network_blockers + (
+        r"|Invalid project path|Permissions Error|\bFailed[^\r\n]*@SignHap\b|"
+        r"\b(?:signing|signature)(?: verification)?(?: is)? (?:failed|failure|error|invalid|missing)\b|"
+        r"\b(?:invalid|missing) (?:signing|signature)\b|"
+        r"Invalid storeFile value|device not found|no devices"
     )
     build = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "assembleHap"), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
     test_task = "test"
@@ -192,7 +207,7 @@ def _auto_config(
         contract = {
             "command": [
                 sys.executable, "-m", "arkts_smell_refactor.gate", "public-contract",
-                "--task-dir", "{task_dir}", "--source-root", str(harmony_root),
+                "--task-dir", "{task_dir}", "--source-root", str(Path(task.project_root).resolve()),
             ],
             "cwd": "{task_dir}", "timeoutSeconds": 300,
         }
