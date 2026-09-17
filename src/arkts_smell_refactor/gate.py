@@ -462,27 +462,48 @@ def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) 
 
 
 def _collect_review_dependencies(source: Path, changed_files: list[Path], added_text: str, destination: Path) -> None:
-    """Copy direct relative imports actually referenced by added lines into the review evidence pack."""
+    """Copy the transitive relative-import closure into the review evidence pack.
+
+    Review must see the implementation at the end of a newly introduced delegate
+    chain, not only the first directly imported facade.  A processed set keeps
+    ordinary ArkTS import cycles finite.  Changed files are traversed but remain in
+    ``current-production`` instead of being duplicated in the context directory.
+    """
     copied: list[str] = []
-    for current in changed_files:
+    source_resolved = source.resolve()
+    changed_resolved = {item.resolve() for item in changed_files if item.is_file()}
+    queue = list(changed_files)
+    processed: set[Path] = set()
+    while queue:
+        current = queue.pop(0)
+        current_resolved = current.resolve()
+        if current_resolved in processed or not current.is_file():
+            continue
+        processed.add(current_resolved)
         text = current.read_text(encoding="utf-8", errors="replace")
         for match in re.finditer(r"(?m)^\s*import\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]", text):
             binding, specifier = match.group(1), match.group(2)
             if not specifier.startswith("."):
                 continue
             base = (current.parent / specifier)
-            candidates = [base.with_suffix(".ets"), base / "Index.ets", base]
+            candidates = [
+                base.with_suffix(".ets"), base.with_suffix(".ts"),
+                base / "Index.ets", base / "Index.ts", base,
+            ]
             dependency = next((item for item in candidates if item.is_file()), None)
             if not dependency:
                 continue
             try:
-                relative = dependency.resolve().relative_to(source.resolve())
+                dependency_resolved = dependency.resolve()
+                relative = dependency_resolved.relative_to(source_resolved)
             except ValueError:
                 continue
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(dependency, target)
-            copied.append(relative.as_posix())
+            queue.append(dependency)
+            if dependency_resolved not in changed_resolved:
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(dependency, target)
+                copied.append(relative.as_posix())
     write_json(destination.parent / "review-context.json", {"productionDependencies": list(dict.fromkeys(copied))})
 
 
