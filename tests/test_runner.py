@@ -250,9 +250,87 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(1, result["repairAttempts"])
             initial = {step["name"]: step for step in result["steps"]}
             self.assertEqual("FAIL", initial["smell"]["status"])
-            self.assertEqual("SKIPPED", initial["build"]["status"])
+            self.assertIn(initial["build"]["status"], {"PASS", "SKIPPED"})
             self.assertEqual("PASS", initial["smell-repair-1"]["status"])
             self.assertEqual("PASS", initial["review-agent-repair-1"]["status"])
+
+    def test_parallel_gate_failure_cancels_slow_siblings_and_enters_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "risk-report.json").write_text('{"risks":[],"recommendedConstraints":[]}', encoding="utf-8")
+            marker = task_dir / "repaired"
+            python = __import__('sys').executable
+            smell = f"from pathlib import Path; raise SystemExit(0 if Path(r'{marker}').exists() else 1)"
+            slow = (
+                "import time; from pathlib import Path; "
+                f"time.sleep(0 if Path(r'{marker}').exists() else 8)"
+            )
+            repair = f"from pathlib import Path; Path(r'{marker}').write_text('ok')"
+            config = {
+                "repairAgent": {"command": [python, "-c", repair]},
+                "maxRepairAttempts": 1,
+                "gates": {
+                    "smell": {"command": [python, "-c", smell]},
+                    "build": {"command": [python, "-c", slow]},
+                    "test": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "linter": {"command": [python, "-c", slow]},
+                },
+            }
+            started = __import__('time').monotonic()
+            result = execute_pipeline(task_dir, config)
+            elapsed = __import__('time').monotonic() - started
+            initial = {step["name"]: step for step in result["steps"]}
+            self.assertLess(elapsed, 5)
+            self.assertEqual("FAIL", initial["smell"]["status"])
+            self.assertEqual("SKIPPED", initial["build"]["status"])
+            self.assertEqual("SKIPPED", initial["linter"]["status"])
+            self.assertEqual("SMELL_REMAINS_OR_MOVED", json.loads(
+                (task_dir / "failure-report-1.json").read_text(encoding="utf-8")
+            )["classification"])
+
+    def test_linter_failure_in_parallel_group_has_repair_analysis(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "risk-report.json").write_text('{"risks":[],"recommendedConstraints":[]}', encoding="utf-8")
+            marker = task_dir / "repaired"
+            python = __import__('sys').executable
+            linter = f"from pathlib import Path; raise SystemExit(0 if Path(r'{marker}').exists() else 1)"
+            repair = f"from pathlib import Path; Path(r'{marker}').write_text('ok')"
+            config = {
+                "repairAgent": {"command": [python, "-c", repair]},
+                "maxRepairAttempts": 1,
+                "gates": {
+                    "smell": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "build": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "test": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "linter": {"command": [python, "-c", linter]},
+                },
+                "reviewAgent": {"command": [
+                    python, "-c", "print('{\"verdict\":\"PASS\",\"issues\":[]}')",
+                ]},
+            }
+            result = execute_pipeline(task_dir, config)
+            self.assertEqual("PASS", result["verdict"])
+            report = json.loads((task_dir / "failure-report-1.json").read_text(encoding="utf-8"))
+            self.assertEqual("linter", report["stage"])
+            self.assertEqual("INTRODUCED_LINTER_FAILURE", report["classification"])
+
+    def test_total_task_timeout_stops_current_process_and_records_wall_time(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            python = __import__('sys').executable
+            result = execute_pipeline(task_dir, {
+                "taskTimeoutSeconds": 0.5,
+                "refactorAgent": {"command": [python, "-c", "import time; time.sleep(8)"], "timeoutSeconds": 20},
+            })
+            self.assertEqual("BLOCKED", result["verdict"])
+            self.assertTrue(result["timedOut"])
+            self.assertEqual(0.5, result["timeoutSeconds"])
+            self.assertLess(result["durationSeconds"], 4)
+            self.assertIn("总执行时间超过限制", result["steps"][0]["reason"])
 
     def test_runtime_failure_is_repairable(self):
         with tempfile.TemporaryDirectory() as temp:

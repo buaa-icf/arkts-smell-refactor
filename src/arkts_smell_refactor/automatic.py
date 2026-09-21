@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ def _normalize_pasted_data(data: Any) -> list[dict[str, Any]]:
 
 def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[str, Any]:
     data = read_pasted_json()
+    session_started = time.monotonic()
     session = base_dir / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     session.mkdir(parents=True, exist_ok=False)
     dataset_path = session / "input.json"
@@ -66,6 +68,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
     tasks = load_dataset_tasks(dataset_path, workspace)
     summary: list[dict[str, Any]] = []
     for number, task in enumerate(tasks, 1):
+        task_started = time.monotonic()
         task_dir = session / task.task_id
         task_dir.mkdir(parents=True)
         risk = analyze_risks(task)
@@ -82,13 +85,31 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")
         config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan)
-        result = execute_pipeline(task_dir, config, progress=lambda name, status: print(f"  {name}: {status}"))
-        print(f"  最终结果：{result['verdict']}")
-        summary.append({"taskId": task.task_id, "target": task.target.symbol or task.target.file_path, "verdict": result["verdict"], "taskDir": str(task_dir)})
+        result = execute_pipeline(
+            task_dir, config,
+            progress=lambda name, status: print(f"  {name}: {status}"),
+            task_started_at=task_started,
+        )
+        elapsed = float(result.get("durationSeconds", 0.0))
+        timeout_note = "（已达到20分钟上限）" if result.get("timedOut") else ""
+        print(f"  最终结果：{result['verdict']}；总耗时：{elapsed:.1f} 秒{timeout_note}")
+        summary.append({
+            "taskId": task.task_id,
+            "target": task.target.symbol or task.target.file_path,
+            "verdict": result["verdict"],
+            "durationSeconds": elapsed,
+            "timedOut": bool(result.get("timedOut")),
+            "taskDir": str(task_dir),
+        })
     counts = {name: sum(1 for item in summary if item["verdict"] == name) for name in ("PASS", "FAIL", "BLOCKED", "INCOMPLETE")}
-    final = {"sessionDir": str(session), "workspace": str(workspace), "counts": counts, "tasks": summary}
+    session_duration = round(time.monotonic() - session_started, 3)
+    final = {
+        "sessionDir": str(session), "workspace": str(workspace), "counts": counts,
+        "durationSeconds": session_duration, "tasks": summary,
+    }
     write_json(session / "summary.json", final)
     print(f"\n完成：PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']} INCOMPLETE={counts['INCOMPLETE']}")
+    print(f"批次总耗时：{session_duration:.1f} 秒")
     print(f"结果目录：{session}")
     return final
 
@@ -224,7 +245,14 @@ def _auto_config(
         gates["contract"] = contract
     if runtime:
         gates["runtime"] = runtime
-    return {"refactorAgent": refactor, "repairAgent": repair, "maxRepairAttempts": 3, "gates": gates, "reviewAgent": review}
+    return {
+        "taskTimeoutSeconds": 1200,
+        "refactorAgent": refactor,
+        "repairAgent": repair,
+        "maxRepairAttempts": 3,
+        "gates": gates,
+        "reviewAgent": review,
+    }
 
 
 def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, str | None], task_name: str, module: str | None = None) -> list[str]:

@@ -1,4 +1,5 @@
 {
+  "taskTimeoutSeconds": 1200,
   "refactorAgent": {
     "command": [
       "deveco-code",
@@ -60,4 +61,3 @@
     "timeoutSeconds": 1800
   }
 }
-

@@ -229,7 +229,9 @@ class AutomaticConfigTests(unittest.TestCase):
         self.assertEqual("PASS", result["verdict"])
         self.assertEqual(1, result["repairAttempts"])
         self.assertEqual("FAIL", steps["build"])
-        self.assertTrue(all(steps[name] == "SKIPPED" for name in ("test", "linter", "review-agent")))
+        self.assertEqual("SKIPPED", steps["test"])
+        self.assertIn(steps["linter"], {"PASS", "SKIPPED"})
+        self.assertEqual("SKIPPED", steps["review-agent"])
         self.assertTrue(all(steps[name + "-repair-1"] == "PASS"
                             for name in ("smell", "build", "test", "linter", "review-agent")))
         report = json.loads((self.task_dir / "failure-report-1.json").read_text(encoding="utf-8"))

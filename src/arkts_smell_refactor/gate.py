@@ -462,12 +462,14 @@ def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) 
 
 
 def _collect_review_dependencies(source: Path, changed_files: list[Path], added_text: str, destination: Path) -> None:
-    """Copy the transitive relative-import closure into the review evidence pack.
+    """Copy transitive relative and local Harmony-package dependencies for review.
 
     Review must see the implementation at the end of a newly introduced delegate
     chain, not only the first directly imported facade.  A processed set keeps
-    ordinary ArkTS import cycles finite.  Changed files are traversed but remain in
-    ``current-production`` instead of being duplicated in the context directory.
+    ordinary ArkTS import cycles finite.  Bare imports such as ``common`` are
+    resolved through the nearest ``oh-package.json5`` when their dependency uses a
+    local ``file:`` target.  Module ``Index.ets`` re-exports are traversed as well.
+    Changed files remain in ``current-production`` instead of being duplicated.
     """
     copied: list[str] = []
     source_resolved = source.resolve()
@@ -481,16 +483,11 @@ def _collect_review_dependencies(source: Path, changed_files: list[Path], added_
             continue
         processed.add(current_resolved)
         text = current.read_text(encoding="utf-8", errors="replace")
-        for match in re.finditer(r"(?m)^\s*import\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]", text):
-            binding, specifier = match.group(1), match.group(2)
-            if not specifier.startswith("."):
-                continue
-            base = (current.parent / specifier)
-            candidates = [
-                base.with_suffix(".ets"), base.with_suffix(".ts"),
-                base / "Index.ets", base / "Index.ts", base,
-            ]
-            dependency = next((item for item in candidates if item.is_file()), None)
+        for match in re.finditer(
+            r"(?m)^\s*(?:import|export)\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]", text
+        ):
+            specifier = match.group(2)
+            dependency = _resolve_review_dependency(current, specifier, source_resolved)
             if not dependency:
                 continue
             try:
@@ -505,6 +502,73 @@ def _collect_review_dependencies(source: Path, changed_files: list[Path], added_
                 shutil.copy2(dependency, target)
                 copied.append(relative.as_posix())
     write_json(destination.parent / "review-context.json", {"productionDependencies": list(dict.fromkeys(copied))})
+
+
+def _resolve_review_dependency(current: Path, specifier: str, source_root: Path) -> Path | None:
+    """Resolve relative imports and local ``file:`` Harmony package aliases."""
+    if specifier.startswith("."):
+        return _first_source_candidate(current.parent / specifier)
+
+    package_file = next(
+        (parent / "oh-package.json5" for parent in (current.parent, *current.parents)
+         if (parent / "oh-package.json5").is_file() and _is_within(parent, source_root)),
+        None,
+    )
+    if not package_file:
+        return None
+    local_dependencies = _local_file_dependencies(package_file)
+    aliases = sorted(local_dependencies, key=len, reverse=True)
+    alias = next(
+        (name for name in aliases if specifier == name or specifier.startswith(name + "/")),
+        None,
+    )
+    if not alias:
+        return None
+    package_root = (package_file.parent / local_dependencies[alias]).resolve()
+    if not _is_within(package_root, source_root):
+        return None
+    subpath = specifier[len(alias):].lstrip("/")
+    if subpath:
+        return _first_source_candidate(package_root / subpath)
+    main = _package_main(package_root / "oh-package.json5") or "Index.ets"
+    return _first_source_candidate(package_root / main)
+
+
+def _first_source_candidate(base: Path) -> Path | None:
+    candidates = [base]
+    if base.suffix.lower() not in {".ets", ".ts"}:
+        candidates = [
+            base.with_suffix(".ets"), base.with_suffix(".ts"),
+            base / "Index.ets", base / "Index.ts", base,
+        ]
+    return next((item for item in candidates if item.is_file()), None)
+
+
+def _local_file_dependencies(package_file: Path) -> dict[str, str]:
+    """Read local dependency aliases without requiring a third-party JSON5 parser."""
+    text = package_file.read_text(encoding="utf-8", errors="replace")
+    return {
+        match.group(1): match.group(2)
+        for match in re.finditer(
+            r"['\"]([^'\"]+)['\"]\s*:\s*['\"]file:([^'\"]+)['\"]", text
+        )
+    }
+
+
+def _package_main(package_file: Path) -> str | None:
+    if not package_file.is_file():
+        return None
+    text = package_file.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r"['\"]main['\"]\s*:\s*['\"]([^'\"]+)['\"]", text)
+    return match.group(1) if match else None
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = None) -> int:

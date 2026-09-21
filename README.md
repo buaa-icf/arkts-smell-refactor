@@ -426,14 +426,14 @@ python -m arkts_smell_refactor run `
 
 ```text
 DevEco Code Refactor Agent
-  → 异味复检
-  → 编译
-  → 目标模块 Local Test
-  → Code Linter（只判定本次变更行和新增文件中的缺陷；项目没有配置文件时使用内置默认规则）
+  → 并行门禁：异味复检 + 编译 + 公共契约检查（启用时）+ Code Linter
+  → 目标模块 Local Test（并行门禁全部通过后）
   → 独立 DevEco Code Review Agent
 ```
 
-流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在前四层全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新从异味复检开始执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+流水线严格 fail-fast：并行组中任一门禁 `FAIL/BLOCKED` 后，平台立即终止仍在运行的同组进程，跳过 test 和 Review，并针对实际失败阶段生成 `failure-report-N.json`；test 失败后跳过 Review。失败分析兼容 smell、build、contract、runtime、test、linter 和 review，不依赖固定的失败顺序。可归因于本次修改的失败会生成 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+
+每条异味从开始生成风险分析起最多执行 1200 秒（20 分钟），该总时限覆盖 Refactor Agent、全部门禁、所有 Repair Loop 和 Review Agent。到达上限后平台会终止当前子进程，最终记为 `BLOCKED`，并在控制台显示“已达到20分钟上限”。`result.json` 和批次 `summary.json` 会记录 `durationSeconds`；`result.json` 另记录 `timeoutSeconds` 与 `timedOut`。
 
 对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。
 
@@ -556,6 +556,6 @@ python -m unittest discover -s tests -v
 3. 静态调用点与条件分支分析是文本/词法级近似，后续可接入 ArkTS AST/类型分析提高符号、类型和闭包捕获精度。
 4. 自动返修最多 3 轮；当前 build/test 归因依据错误日志是否命中本次修改文件或目标符号，复杂跨模块错误仍可能被保守判为不可返修。
 5. 暂未接入 Data Clumps 和循环依赖的特殊输入格式。
-6. 当前按任务顺序执行门禁，不并行运行构建和测试。
+6. 异味、编译、公共契约和 Linter 可并行；build 与 test 仍保持串行并复用验证工作区，避免 Hvigor 缓存、构建产物和设备竞争。
 
 后续可进一步用 ArkTS 编译诊断结构化输出增强 build/test 的失败归因，再考虑批量调度和可视化报告。
