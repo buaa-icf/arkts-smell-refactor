@@ -513,6 +513,21 @@ def _collect_review_dependencies(source: Path, changed_files: list[Path], added_
 
 
 def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = None) -> int:
+    """Only completed scans may report a remaining smell; tool failures block."""
+    try:
+        # A failed repair scan must not reuse findings from an earlier attempt.
+        (task_dir / "smell-after.json").unlink(missing_ok=True)
+        return _smell_gate(task_dir, homecheck_root, source_root)
+    except (OSError, ValueError, KeyError) as error:
+        return _smell_blocked(f"HomeCheck 扫描或结果读取失败：{error}")
+
+
+def _smell_blocked(reason: str) -> int:
+    print(f"SMELL_GATE_BLOCKED: {reason}", file=sys.stderr, flush=True)
+    return 3
+
+
+def _smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None) -> int:
     task = read_json(task_dir / "task.json")
     project_root = Path(task.get("project_root", task.get("projectRoot", "")))
     source_root = source_root or project_root
@@ -526,17 +541,16 @@ def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = 
     target_source = Path(task.get("workspace_root", task.get("workspaceRoot", ""))) / target_file
     target_text = target_source.read_text(encoding="utf-8", errors="replace") if target_source.is_file() else ""
     if not target_source.is_file():
-        print(f"HomeCheck 指定文件不存在：{target_source}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 指定文件不存在：{target_source}")
     try:
         target_source.resolve().relative_to(source_root.resolve())
     except ValueError:
-        print(f"HomeCheck 指定文件不在工程目录内：{target_source}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 指定文件不在工程目录内：{target_source}")
 
     base_project = read_json(homecheck_root / "config" / "projectConfig.json")
     base_rule = read_json(homecheck_root / "config" / "ruleConfig.json")
-    report_dir = task_dir / "homecheck-report"
+    # Preserve earlier evidence, but only accept a report from this invocation.
+    report_dir = task_dir / "homecheck-report" / str(time.time_ns())
     scan_files = _smell_scan_files(task_dir, source_root, target_source)
     relative_scan_files = [path.resolve().relative_to(source_root.resolve()).as_posix() for path in scan_files]
     project_config = {
@@ -571,9 +585,15 @@ def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = 
     runner = homecheck_root / "scripts" / "gitcodeArktsPerfTest.js"
     npm = shutil.which("npm")
     if not runner.is_file() or not npm:
-        print(f"HomeCheck 文件级扫描入口或 npm 不存在：{runner}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 文件级扫描入口或 npm 不存在：{runner}")
     smell_name = rule.rsplit("/", 1)[-1].removesuffix("-check")
+    # The bundled Perl cloc can fail to create files in Windows' shared TEMP
+    # even when Node can write there. Give only this subprocess tree its own
+    # writable scratch directory; do not alter global environment or ACLs.
+    scratch = task_dir / "homecheck-temp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    scan_env = os.environ.copy()
+    scan_env.update({name: str(scratch.resolve()) for name in ("TEMP", "TMP", "TMPDIR")})
     completed = subprocess.run(
         [
             npm, "run", "scan:files", "--", "--f1=false", "--dashboard=false",
@@ -582,25 +602,32 @@ def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = 
             f"--includeRules={smell_name}", f"--outputDir={report_dir}",
         ],
         cwd=homecheck_root,
+        env=scan_env,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
     if completed.returncode != 0:
-        return completed.returncode
+        return _smell_blocked(f"HomeCheck 扫描工具退出码 {completed.returncode}；没有可用于返修的异味结论")
     issue_candidates = list((report_dir / "runs").glob("*/issuesReport.json"))
     issues_path = issue_candidates[0] if len(issue_candidates) == 1 else report_dir / "issuesReport.json"
     if not issues_path.exists():
-        print(f"HomeCheck 未生成 {issues_path}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 未生成本轮报告：{issues_path}")
     issues = read_json(issues_path)
+    if not isinstance(issues, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("filePath"), str)
+        or not isinstance(item.get("messages"), list)
+        or any(not isinstance(message, dict) for message in item["messages"])
+        for item in issues
+    ):
+        return _smell_blocked(f"HomeCheck 报告结构无效：{issues_path}")
     remaining = []
     short_target = _strip_project(target_file, source_project)
     scan_by_suffix = {
         path.resolve().relative_to(source_root.resolve()).as_posix(): path for path in scan_files
     }
     changed_lines = _smell_changed_lines(task_dir, source_root, scan_files)
-    for item in issues if isinstance(issues, list) else []:
+    for item in issues:
         item_path = str(item.get("filePath", "")).replace("\\", "/")
         relative = next((key for key in scan_by_suffix if item_path.endswith(key)), None)
         if relative is None:

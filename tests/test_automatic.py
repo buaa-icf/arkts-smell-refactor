@@ -55,6 +55,19 @@ class AutomaticConfigTests(unittest.TestCase):
             result = self._run_output("test", self.config["gates"]["test"], output, 3)
             self.assertEqual("BLOCKED", result.status)
 
+    def test_smell_tool_failure_stops_pipeline_without_code_repair(self):
+        config = self.config
+        config["refactorAgent"] = self._output_spec(config["refactorAgent"], "", 0)
+        config["repairAgent"]["command"] = ["must-not-run"]
+        config["reviewAgent"]["command"] = ["must-not-run"]
+        config["gates"]["smell"] = self._output_spec(config["gates"]["smell"],
+            "cloc: Could not create temp file: Permission denied\nSMELL_GATE_BLOCKED: HomeCheck exit 13", 3)
+        result = execute_pipeline(self.task_dir, config)
+        self.assertEqual("BLOCKED", result["verdict"])
+        self.assertEqual(0, result["repairAttempts"])
+        self.assertTrue(all(step["status"] == "SKIPPED" for step in result["steps"][2:]))
+        self.assertFalse((self.task_dir / "failure-report-1.json").exists())
+
     def test_explicit_linter_skip_preserves_core_gates_without_codelinter(self):
         config = _auto_config(self.task, self.task_dir, {}, {
             "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,

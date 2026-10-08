@@ -435,6 +435,8 @@ DevEco Code Refactor Agent
 
 流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在本次必需门禁全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新从异味复检开始执行本次启用的全部门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
 
+HomeCheck 子进程使用任务内的 `homecheck-temp` 临时目录，避免 Windows 版 cloc 无法在系统临时目录创建文件。每次扫描保存独立报告，只接受本轮有效结果；扫描工具非零退出、报告缺失或格式错误记为 `BLOCKED`，不启动生产代码返修。只有扫描完成后仍命中目标或变更范围内异味，smell 才记为可返修的 `FAIL`。
+
 测试门禁使用 `auto-test`：读取工程根 `build-profile.json5` 的模块映射，在各模块的 `src/test` 与 `src/ohosTest` 中查找与目标文件、克隆关联文件同名的 `Foo.test.ets/ts/js` 或 `FooTest.test.ets/ts/js`，从 `describe` 提取套件名并设置 `scope`。测试可以位于其他宿主模块（例如 `phone` 模块测试 `order` 模块的页面）。同一目标两类测试都有时均运行；目标无法匹配、套件名无法静态确定或新增变更模块没有对应目标时，回退到该模块全部现有测试类型。该匹配是命名约定，不代表已证明方法覆盖率；不使用数据集目录名或 UI 装饰器猜测测试类型。
 
 Local Test 使用 `test -p module=<模块名>`，Instrument Test 使用 `onDeviceTest -p module=<模块名>@ohosTest`，均开启 coverage。设备测试需要已连接设备和可用签名。每个子任务运行前清除验证副本中的旧结果，运行后必须同时满足 Hvigor 成功退出、产生新的 Hypium 结果、实际执行非零用例且无失败，以及预期套件确实执行。仅构建/签名成功、零用例、缺失结果或缺失预期套件不会 PASS；环境或证据不足记为 BLOCKED，不交给 Agent 修改生产代码。子任务仍遵循 fail-fast。

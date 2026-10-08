@@ -181,7 +181,7 @@ def _auto_config(
         "retryDelaySeconds": 2,
         "timeoutSeconds": 3600,
     } if tools["deveco"] else None
-    smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
+    smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "blockedOutputRegex": "SMELL_GATE_BLOCKED", "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
     environment_blockers = network_blockers + (
         r"|Invalid project path|Permissions Error|\bFailed[^\r\n]*@SignHap\b|"
         r"\b(?:signing|signature)(?: verification)?(?: is)? (?:failed|failure|error|invalid|missing)\b|"
