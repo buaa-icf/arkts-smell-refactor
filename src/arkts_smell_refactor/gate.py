@@ -18,6 +18,8 @@ from typing import Any
 from .runtime_smoke import render_runtime_smoke_list, render_runtime_smoke_test
 from .public_contract import compare_public_contract, snapshot_public_contract
 from .utils import read_json, write_json
+from .test_plan import build_test_plan
+from .test_execution import run_test_plan
 
 
 IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
@@ -85,6 +87,15 @@ def _normalize_agent_prompt_paths(prompt: str, task: dict[str, Any], source_root
 
 def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | None, task_name: str, module: str | None = None) -> int:
     """Validate from an ASCII-path copy so hvigor never sees a Chinese project path."""
+    plan = None
+    if task_name in {"auto-test", "test", "onDeviceTest"}:
+        try:
+            plan = build_test_plan(task_dir, source_root, task_name, module)
+        except (OSError, ValueError, KeyError, SyntaxError) as error:
+            print(f"TEST_GATE_BLOCKED: cannot determine test plan: {error}", file=sys.stderr)
+            write_json(task_dir / "test-results.json", {"status": "BLOCKED", "reason": str(error), "jobs": []})
+            return 3
+        write_json(task_dir / "test-plan.json", plan)
     tool_root = task_dir.parents[2]
     short_id = hashlib.sha1(str(task_dir).encode("utf-8")).hexdigest()[:8]
     workspace = tool_root / "v" / short_id
@@ -99,15 +110,10 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
         if installed.returncode != 0:
             return installed.returncode
         install_marker.write_text("ok", encoding="ascii")
-    command = [str(hvigorw), task_name]
-    if task_name == "test":
-        if module:
-            command.extend(["-p", f"module={module}"])
-        command.extend(["-p", "coverage=true"])
-    elif task_name == "onDeviceTest":
-        command.extend(["-p", "coverage=true"])
-    command.append("--no-daemon")
-    return subprocess.run(command, cwd=workspace).returncode
+    if plan is not None:
+        return run_test_plan(task_dir, workspace, plan, _hvigor_launcher(hvigorw), _deveco_environment(hvigorw))
+    command = [*_hvigor_launcher(hvigorw), task_name, "--no-daemon"]
+    return subprocess.run(command, cwd=workspace, env=_deveco_environment(hvigorw)).returncode
 
 
 def runtime_smoke_gate(

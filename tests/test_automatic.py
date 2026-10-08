@@ -47,6 +47,13 @@ class AutomaticConfigTests(unittest.TestCase):
             sys.executable, "-c", f"print({output!r}); raise SystemExit({exit_code})",
         ]}
 
+    def test_auto_test_selection_and_missing_execution_evidence_block_without_repair(self):
+        command = self.config["gates"]["test"]["command"]
+        self.assertEqual("auto-test", command[command.index("--task") + 1])
+        self.assertNotIn("--module", command)
+        for output in ("TEST_GATE_BLOCKED: missing fresh test_result.txt", "Connect server failed", "no connected device"):
+            result = self._run_output("test", self.config["gates"]["test"], output, 3)
+            self.assertEqual("BLOCKED", result.status)
 
     def test_explicit_linter_skip_preserves_core_gates_without_codelinter(self):
         config = _auto_config(self.task, self.task_dir, {}, {

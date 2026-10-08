@@ -14,6 +14,7 @@ from .public_contract import prepare_public_contract
 from .risk import analyze_risks
 from .runtime_smoke import prepare_runtime_smoke
 from .runner import execute_pipeline
+from .test_execution import TEST_TOOL_BLOCKERS
 from .utils import write_json, write_text
 
 
@@ -188,9 +189,8 @@ def _auto_config(
         r"Invalid storeFile value|device not found|no devices"
     )
     build = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "assembleHap"), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
-    test_task = "test"
-    test_module = _target_module_name(Path(task.target_path), harmony_root) if harmony_root else None
-    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
+    test_blockers = environment_blockers + r"|TEST_GATE_BLOCKED|" + TEST_TOOL_BLOCKERS
+    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "auto-test"), "cwd": "{task_dir}", "blockedOutputRegex": test_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
     runtime = None
     if (smoke_plan or {}).get("enabled") and tools["hvigorw"] and harmony_root:
         runtime_command = [
@@ -239,16 +239,6 @@ def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, st
     if module:
         command.extend(["--module", module])
     return command
-
-
-def _target_module_name(target: Path, harmony_root: Path) -> str | None:
-    for parent in [target.parent, *target.parents]:
-        if (parent / "src" / "main").is_dir():
-            return parent.name
-        if parent == harmony_root:
-            break
-    return None
-
 
 
 def _find_harmony_project_root(target: Path, source_project_root: Path) -> Path | None:
