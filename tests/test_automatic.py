@@ -47,6 +47,19 @@ class AutomaticConfigTests(unittest.TestCase):
             sys.executable, "-c", f"print({output!r}); raise SystemExit({exit_code})",
         ]}
 
+
+    def test_explicit_linter_skip_preserves_core_gates_without_codelinter(self):
+        config = _auto_config(self.task, self.task_dir, {}, {
+            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+            "homecheck": str(self.root / "homecheck"), "codelinter": None,
+        }, linter_mode="skip")
+        self.assertEqual("skip", config["linterMode"])
+        self.assertFalse(config["gates"]["linter"]["enabled"])
+        self.assertNotIn("command", config["gates"]["linter"])
+        for name in ("smell", "build", "test"):
+            self.assertEqual(self.config["gates"][name], config["gates"][name])
+        self.assertEqual(self.config["reviewAgent"]["command"], config["reviewAgent"]["command"])
+
     def _run_output(self, name, spec, output, exit_code=1):
         return _run_spec(
             name, self._output_spec(spec, output, exit_code), _context(self.task_dir, self.task),

@@ -34,6 +34,10 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = False, progress=None) -> dict[str, Any]:
+    linter_mode = config.get("linterMode", "required")
+    if linter_mode not in {"required", "skip"}:
+        raise ValueError("linterMode 必须为 required 或 skip")
+    validation_policy = {"linterMode": linter_mode}
     task = _task_from_file(task_dir / "task.json")
     context = _context(task_dir, task)
     results: list[CommandResult] = []
@@ -61,11 +65,13 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         write_json(task_dir / "gates.json", {
             "schemaVersion": "1.0",
             "taskId": task.task_id,
+            "validationPolicy": validation_policy,
             "gates": [item.to_dict() for item in gate_results],
         })
         results.extend(gate_results)
         results.append(CommandResult("review-agent", "SKIPPED", reason=reason))
         result = _final_result(task.task_id, results, dry_run)
+        result["validationPolicy"] = validation_policy
         write_json(task_dir / "result.json", result)
         return result
 
@@ -82,12 +88,15 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         results.extend(gate_results)
         write_json(task_dir / "gates.json", {
             "schemaVersion": "1.0", "taskId": task.task_id,
+            "validationPolicy": validation_policy,
             "attempt": repair_number, "gates": [item.to_dict() for item in gate_results],
         })
 
         accepted = {"PASS", "DRY_RUN"} if dry_run else {"PASS"}
         by_name = {item.name: item for item in gate_results}
-        core_names = [name + suffix for name in ("smell", "build", "test", "linter")]
+        core_names = [name + suffix for name in ("smell", "build", "test")]
+        if linter_mode == "required":
+            core_names.append("linter" + suffix)
         core_pass = all(name in by_name and by_name[name].status in accepted for name in core_names)
         runtime_name = "runtime" + suffix
         runtime_pass = runtime_name not in by_name or by_name[runtime_name].status in accepted
@@ -126,7 +135,7 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
                 results.append(skipped)
                 terminal = [*gate_results, skipped]
         else:
-            reason = "前四层门禁未全部通过，Review 不执行"
+            reason = "本次必需门禁未全部通过，Review 不执行"
             skipped = CommandResult("review-agent" + suffix, "SKIPPED", reason=reason)
             results.append(skipped)
             terminal = [*gate_results, skipped]
@@ -147,7 +156,7 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         while failure["repairable"] and repair_number < max_repairs:
             repair_number += 1
             repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
-            write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
+            write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number, linter_mode=linter_mode))
             context["repair_prompt_file"] = str(repair_prompt.resolve())
             if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
             repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
@@ -165,7 +174,13 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         if not repair_result or repair_result.status != "PASS":
             break
 
-    result = _final_result(task.task_id, results, dry_run, terminal)
+    required_terminal = [
+        item for item in terminal
+        if not (linter_mode == "skip" and item.name.split("-repair-", 1)[0] == "linter"
+                and item.status == "SKIPPED")
+    ]
+    result = _final_result(task.task_id, results, dry_run, required_terminal)
+    result["validationPolicy"] = validation_policy
     result["repairAttempts"] = repair_number
     result["reviewRetries"] = review_retries
     result["attempts"] = attempts
@@ -185,6 +200,10 @@ def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, A
     for gate_name in gate_names:
         display = gate_name
         result_name = gate_name + suffix
+        if gate_name == "linter" and config.get("linterMode", "required") == "skip":
+            gate_results.append(CommandResult(result_name, "SKIPPED", reason="按 linterMode=skip 跳过，不参与验收或返修"))
+            if progress: progress(display, "SKIPPED (linterMode=skip)")
+            continue
         if stopped_by:
             gate_results.append(CommandResult(result_name, "SKIPPED", reason=f"{stopped_by} 未通过，fail-fast 跳过"))
             continue

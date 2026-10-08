@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .linter_profile import project_linter_guidance
 from .models import RefactorTask
 
 
@@ -25,13 +26,13 @@ EXTRACTION_TYPE_CONSTRAINT = (
 AGENT_VERIFICATION_CONSTRAINTS = """- 内部验证只能调用 DevEco Code 内置的 `build_project` 与 `arkts_check`，两者每轮合计最多 2 次。完成编辑后按改动选择一种必要验证；第一次通过即停止内部验证，不为重复确认再调用另一工具。只有第一次失败且确认是本轮修改导致的编译错误或静态检查缺陷，才在修复后追加一次验证；第二次后交由平台 loop 处理。
 - 任一次验证若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止内部验证。禁止手工运行 hvigor、npm、pnpm 或 ohpm，禁止创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。完整门禁由平台统一执行，不在 Agent 内重复运行。"""
 
-EXTRACTION_QUALITY_CONSTRAINTS = """- 新增方法和成员沿用目标文件的可见性、命名及格式约定（如已有私有方法的前导下划线、分号、尾逗号和对象属性换行）；只调整本轮新增或修改的代码。
+EXTRACTION_QUALITY_CONSTRAINTS = """- 新增方法和成员优先遵守下方项目 Linter 摘要中的适用显式规则；未明确时沿用目标文件的可见性、命名及格式约定（如已有私有方法的前导下划线、分号、尾逗号和对象属性换行）；只调整本轮新增或修改的代码。
 - 不为提取先清理原有空白行或转换整个文件的 CRLF/LF；编辑优先使用唯一的非空代码锚点。若 oldString 匹配失败，从当前文件重新取得实际文本并缩小替换范围，不反复猜测空白行数量；保留原编码和换行格式。
 - 保留 `ForEach`/`LazyForEach` 原有 keyGenerator，包括原来未提供的情况；不要为消除 Linter 提示擅自新增 index-only key 或改变键值语义。若诊断要求调整，先核对数据更新与组件复用行为，无法证明等价则保留原行为并报告冲突。
 - 新增共享实现时：无默认值的 `@Param` 需配合 `@Require`，不得为过编译随意补默认值；组件调用点传入的属性须符合当前组件状态模型的初始化规则，不能把普通成员直接当作输入；聚合出口使用显式具名导出，避免新增 `export *` 引入 Linter 缺陷。"""
 
 
-def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
+def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any], *, linter_mode: str = "required") -> str:
     risks = "\n".join(
         f"- [{x['level']}] {x['code']}: {_normalize_task_paths(task, str(x['evidence']))}"
         for x in risk.get("risks", [])
@@ -59,6 +60,7 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 ## 强制约束
 
 {constraints}
+{_linter_policy_text(linter_mode)}
 - 测试目录已从隔离工作区移除；不修改构建配置、依赖和无关生产文件。
 - 保持状态更新、默认值、null/undefined、异常、数组顺序、对象身份和副作用顺序。
 - {EXTRACTION_TYPE_CONSTRAINT}
@@ -69,6 +71,7 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any]) -> str:
 - {exploration_scope}
 - 先完成全部实例的编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
 {EXTRACTION_QUALITY_CONSTRAINTS}
+{project_linter_guidance(task.target_path, Path(task.project_root), linter_mode)}
 {analysis_section}
 
 ## 异味专项指导
@@ -98,8 +101,8 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 2. 打开并检查平台提供的 diff 涉及的每个生产代码文件及新增实现，不得用“只要新方法等价”代替实际核对；证据不足时必须输出 UNCERTAIN，不得扫描项目补充上下文。
 3. 根据 review-risk.json 的每项语义风险检查响应式状态、UI ID、默认值、null/undefined、异常、数组顺序、对象引用和副作用顺序。
    特别检查条件分支内的调用是否被移到分支外；“无数据时不执行”与“无数据时重置状态”不等价。
-4. 调用点、编译和测试正确性由前四层门禁负责，评审 Agent 不重复搜索调用点或测试代码；只核对 diff 中可见的入口契约变化、语义异味和风险是否消除。
-5. 前四层门禁结果只能作为已完成的机械验证证据，不能代替语义评审。
+4. 调用点、编译和测试正确性由平台机械门禁负责，评审 Agent 不重复搜索调用点或测试代码；只核对 diff 中可见的入口契约变化、语义异味和风险是否消除。
+5. 平台门禁结果只能作为已完成的机械验证证据，不能代替语义评审。若 {gates_file} 的 validationPolicy.linterMode 为 skip，Linter 是明确豁免项，不要求补跑，不因其缺席判 UNCERTAIN，也不把纯格式或命名问题列为语义阻断；真实的行为变化和公共契约破坏仍必须阻断。
 6. 对 switch-statement 任务逐项核对 selector、每个 case 标签、default/无 default、分组 case 和可执行 fall-through；确认 Map/Set 的键语义以及 0、false、空串、null/undefined 等值没有被错误当成缺失。
 7. 若使用函数/策略表，核对 this 绑定、闭包捕获、表创建时机、await/异常传播和每次调用的状态读取；若重构的是 if/else if，核对条件从左到右求值与短路行为。
 8. 对 feature-envy 任务核对被依恋对象、访问成员、职责归属和建议重构形态；确认原入口契约、对象身份、条件边界、读取时机、累加/替换语义和依赖方向没有变化，并检查依恋是否只是被搬到新的方法或工具类。
@@ -122,7 +125,10 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 """
 
 
-def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[str, Any], attempt: int) -> str:
+def build_repair_prompt(
+    task: RefactorTask, risk: dict[str, Any], failure: dict[str, Any], attempt: int,
+    *, linter_mode: str = "required",
+) -> str:
     issue_lines = []
     for item in failure.get("issues", []):
         location = _project_relative_path(task, str(item.get("filePath") or ""))
@@ -159,6 +165,7 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
 
 ## 强制边界
 
+{_linter_policy_text(linter_mode)}
 - 只修复本提示内嵌的本轮失败证据（来自 failure-report.json），不重新设计已经通过的部分。
 - 保持原条件边界、默认值、null/undefined、对象身份、数组累加/替换语义、响应式读取时机和副作用顺序。
 - {EXTRACTION_TYPE_CONSTRAINT}
@@ -168,11 +175,20 @@ def build_repair_prompt(task: RefactorTask, risk: dict[str, Any], failure: dict[
 - {exploration_scope}
 - 先完成本轮修复涉及的全部编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
 {EXTRACTION_QUALITY_CONSTRAINTS}
+{project_linter_guidance(task.target_path, Path(task.project_root), linter_mode)}
 {analysis_section}
 
 完成后简要说明修复了哪条失败证据、修改文件和实际验证。
 """
 
+
+def _linter_policy_text(linter_mode: str) -> str:
+    if linter_mode == "skip":
+        return (
+            "- 本轮 Linter 已明确跳过，不参与验收或返修；不要补跑 Linter，"
+            "不要为纯格式、命名或非阻断风格提示追加验证和修改。编译正确性与行为保持要求不变。"
+        )
+    return ""
 
 
 def _exploration_scope(

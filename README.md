@@ -429,21 +429,39 @@ DevEco Code Refactor Agent
   → 异味复检
   → 编译
   → 目标模块 Local Test
-  → Code Linter（只判定本次变更行和新增文件中的缺陷；项目没有配置文件时使用内置默认规则）
+  → Code Linter（required 模式执行；skip 模式跳过）
   → 独立 DevEco Code Review Agent
 ```
 
-流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在前四层全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新从异味复检开始执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在本次必需门禁全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新从异味复检开始执行本次启用的全部门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+
+若验收不要求 Linter，可显式跳过，避免纯格式/命名问题触发修复循环：
+
+```powershell
+python -m arkts_smell_refactor start --workspace D:\arktsProgram --linter-mode skip
+```
+
+通用 CLI 默认为 `--linter-mode required`；高级 `run --config` 用配置顶层 `"linterMode": "skip"` 表达相同策略。仅删除 Linter 配置或设置 `enabled: false` 不构成豁免，默认仍判 INCOMPLETE。跳过时不执行 Linter、不触发其返修，`gates.json` 和 `result.json` 保存 `validationPolicy.linterMode` 与 `linter: SKIPPED`；构建、测试、异味、已配置的契约/runtime 门禁和语义评审仍需通过。新批次需注明该策略，与历史完整门禁结果分别报告。
+
+本机的 `tools/run_code_clone_series.ps1` 与 `tools/run_long_method_series.ps1` 已按当前实验要求默认使用 `-LinterMode skip`，可传 `-LinterMode required` 恢复完整门禁。这两个本地脚本原本就在 `.gitignore` 中，不随 Git 变更交付；可复用的开关实现位于上述 CLI 和 pipeline 配置中。
+
+required 模式会把目标 ArkTS 项目 `code-linter.json5` 中明确配置的命名、可见性、分号、尾逗号、引号等风格规则摘录到首轮和返修 Prompt。摘要与自动门禁共用配置定位逻辑，保留文件范围、原始选项、关闭项和例外；不执行配置中的文本。`ruleSet` 的继承规则及未写出的默认选项尚未展开，因此摘要不能代替实际 Linter，也不保证消除全部返修。skip 模式不读取或注入此摘要。恢复 Linter 的实际耗时收益需重新实验确认。
 
 对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。
 
 框架同时冻结模块导出和目标类公共成员的词法契约。build 之后会检查旧导出/公共成员是否被删除，以及静态性、参数和类型签名是否变化；新增公共成员不会失败。复杂别名与动态 re-export 仍作为已知限制记录。
 
-Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
+Refactor/Repair Agent 的内部验证只允许使用 DevEco Code 的 `build_project` 与 `arkts_check`，两者每轮合计不超过 2 次：完成编辑后选择一种必要验证，首次通过即停止；只有确认是本轮修改导致的编译或静态检查缺陷，才允许修复后追加一次验证。任一次遇到 SDK、wrapper、证书、签名、依赖下载或网络环境错误都停止内部验证。第二次后交由平台 loop 管理，完整门禁仍由平台统一执行。
+
+提示词要求优先批量读取目标、已知实例和静态画像列出的相关片段，不重复探索已确认的信息，信息足够后即开始编辑；画像缺失、未解析或与源码不符时，可在隔离工程内定向补齐直接依赖。修复轮优先读取失败文件及已修改/新增文件，按当前源码处理行号漂移。没有读取次数硬上限，也不允许从原仓库或历史快照搜索、复制实现。全部实例编辑完成后再验证，并保留行为等价约束。
+
+执行层会把附件中的仓库相对、工作区相对和绝对源码路径转换为实际隔离 Harmony 工程的相对路径，避免大仓内多工程目录前缀导致首次读取失败。风险分析的源码枚举在进入目录前排除既有依赖/构建缓存忽略项，避免递归遍历无效子树；有效源码与调用点扫描范围保持不变。
+
+提示词预置 `@Param`/`@Require`、组件输入和显式导出的常见缺陷，同时要求沿用局部命名/格式约定、保留 `ForEach` 键值语义，减少可避免的返修。目标是提升同类修改 ≤7 分钟、跨类修改 ≤15 分钟的端到端达标率（含修复与全部门禁），设计、基线和待验证项见 [`docs/agent-time-cost-optimization.md`](docs/agent-time-cost-optimization.md)。这些约束由提示词表达，不是工具调用层的强制计数或访问控制。
+
+内部验证不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过环境错误。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
 
 修复 Prompt 直接附带 build/test 失败日志尾部（最多 12000 字符）、本次修改文件，以及结构化问题中的文件、行列和修复要求，隔离 Agent 无需访问工作区外的日志。抽取辅助方法时要求核对调用处的真实可选类型与上下文；例如保留 `string | undefined` 参数或调整 `Date` 调用的抽取边界，避免用新增默认值或提前返回改变行为。修复成功后重新执行全部门禁，以最终一轮结果判定 PASS。
-
-Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证书、签名、依赖下载或网络环境错误会停止内部验证，不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
 
 当前 DevEco Code CLI 没有提供本工具可用的“仅允许工作目录”无人值守权限参数，因此 Refactor/Repair Agent 的工作区隔离属于复制隔离和回写白名单，不是操作系统级沙箱。提示词已禁止工作区外操作，平台也只会回写白名单生产源码，但无法自动撤销 Agent 对工作区外文件已经发生的修改；应使用专用系统账户或受限执行环境运行不受信任的模型。
 

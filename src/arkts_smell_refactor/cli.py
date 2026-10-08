@@ -38,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser("start", help="启动交互模式，粘贴阳性数据集 JSON 后全自动执行")
     start.add_argument("--workspace", type=Path, help="可选；通常会根据 sourceProject 自动定位")
+    start.add_argument("--linter-mode", choices=("required", "skip"), default="required",
+                       help="required: Linter 参与门禁；skip: 不执行 Linter，不因它返修")
     return parser
 
 
@@ -136,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "run":
             return run(args)
         from .automatic import run_interactive
-        run_interactive(Path(__file__).resolve().parents[2], default_workspace(args.workspace))
+        run_interactive(Path(__file__).resolve().parents[2], default_workspace(args.workspace), linter_mode=args.linter_mode)
         return 0
     except (OSError, ValueError, KeyError) as error:
         print(f"error: {error}", file=sys.stderr)

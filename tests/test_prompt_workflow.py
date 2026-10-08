@@ -85,6 +85,10 @@ class PromptWorkflowTests(unittest.TestCase):
             self.assertIn("第一次通过即停止内部验证", prompt)
             self.assertIn("不得到原仓库、历史 runs 或快照中搜索或复制实现", prompt)
 
+    def test_linter_skip_is_explicit_in_initial_prompt(self):
+        self.assertIn("本轮 Linter 已明确跳过", build_refactor_prompt(task(), {}, linter_mode="skip"))
+        self.assertNotIn("本轮 Linter 已明确跳过", build_refactor_prompt(task(), {}))
+
 
 if __name__ == "__main__":
     unittest.main()

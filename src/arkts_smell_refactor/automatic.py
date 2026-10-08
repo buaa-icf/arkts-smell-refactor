@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import load_dataset_tasks
+from .linter_profile import find_linter_config as _find_linter_config
 from .prompts import build_refactor_prompt, build_review_prompt
 from .public_contract import prepare_public_contract
 from .risk import analyze_risks
@@ -51,7 +52,7 @@ def _normalize_pasted_data(data: Any) -> list[dict[str, Any]]:
     raise ValueError("请输入一条异味 JSON 对象 {...} 或阳性数据集 JSON 数组 [{...}]")
 
 
-def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[str, Any]:
+def run_interactive(base_dir: Path, workspace_hint: Path | None = None, *, linter_mode: str = "required") -> dict[str, Any]:
     data = read_pasted_json()
     session = base_dir / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     session.mkdir(parents=True, exist_ok=False)
@@ -62,6 +63,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
     print(f"本地仓库根目录：{workspace}")
     tools = _discover_tools(workspace)
     print("工具发现：" + "，".join(f"{k}={'已找到' if v else '未找到'}" for k, v in tools.items()))
+    print(f"Linter 模式：{linter_mode}（skip 表示不执行、不触发返修）")
 
     tasks = load_dataset_tasks(dataset_path, workspace)
     summary: list[dict[str, Any]] = []
@@ -74,19 +76,19 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         write_json(task_dir / "review-risk.json", _review_risk(risk))
         smoke_plan = prepare_runtime_smoke(task, risk, task_dir)
         contract_plan = prepare_public_contract(task, task_dir)
-        write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
+        write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk, linter_mode=linter_mode))
         review_prompt = build_review_prompt(task, risk)
         review_prompt += f"\n\n本次直接重构本地当前代码，commitHash 仅为元信息，不得用它作为语义基线。"
         review_prompt += "\n平台会在任务目录生成 baseline-production、current-production、review-context-production 与 review-diff.patch。只允许使用这些材料评审，禁止访问原项目。\n"
         write_text(task_dir / "review-prompt.md", review_prompt)
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")
-        config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan)
+        config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan, linter_mode=linter_mode)
         result = execute_pipeline(task_dir, config, progress=lambda name, status: print(f"  {name}: {status}"))
         print(f"  最终结果：{result['verdict']}")
         summary.append({"taskId": task.task_id, "target": task.target.symbol or task.target.file_path, "verdict": result["verdict"], "taskDir": str(task_dir)})
     counts = {name: sum(1 for item in summary if item["verdict"] == name) for name in ("PASS", "FAIL", "BLOCKED", "INCOMPLETE")}
-    final = {"sessionDir": str(session), "workspace": str(workspace), "counts": counts, "tasks": summary}
+    final = {"sessionDir": str(session), "workspace": str(workspace), "validationPolicy": {"linterMode": linter_mode}, "counts": counts, "tasks": summary}
     write_json(session / "summary.json", final)
     print(f"\n完成：PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']} INCOMPLETE={counts['INCOMPLETE']}")
     print(f"结果目录：{session}")
@@ -139,6 +141,7 @@ def _find_homecheck(workspace: Path) -> Path | None:
 def _auto_config(
     task, task_dir: Path, risk: dict[str, Any], tools: dict[str, str | None],
     smoke_plan: dict[str, Any] | None = None, contract_plan: dict[str, Any] | None = None,
+    *, linter_mode: str = "required",
 ) -> dict[str, Any]:
     def missing(name: str) -> dict[str, Any]:
         return {"enabled": False, "reason": f"未找到 {name}"}
@@ -211,8 +214,10 @@ def _auto_config(
             ],
             "cwd": "{task_dir}", "timeoutSeconds": 300,
         }
-    linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
-    if tools["codelinter"] and harmony_root:
+    if linter_mode == "skip":
+        linter = {"enabled": False, "reason": "按 linterMode=skip 跳过"}
+    elif tools["codelinter"] and harmony_root:
+        linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
         linter_command = [sys.executable, "-m", "arkts_smell_refactor.gate", "linter", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--codelinter", tools["codelinter"]]
         if linter_config:
             linter_command.extend(["--config", str(linter_config)])
@@ -224,7 +229,7 @@ def _auto_config(
         gates["contract"] = contract
     if runtime:
         gates["runtime"] = runtime
-    return {"refactorAgent": refactor, "repairAgent": repair, "maxRepairAttempts": 3, "gates": gates, "reviewAgent": review}
+    return {"refactorAgent": refactor, "repairAgent": repair, "maxRepairAttempts": 3, "linterMode": linter_mode, "gates": gates, "reviewAgent": review}
 
 
 def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, str | None], task_name: str, module: str | None = None) -> list[str]:
@@ -244,16 +249,6 @@ def _target_module_name(target: Path, harmony_root: Path) -> str | None:
             break
     return None
 
-
-def _find_linter_config(target: Path, project_root: Path) -> Path | None:
-    for parent in [target.parent, *target.parents]:
-        candidate = parent / "code-linter.json5"
-        if candidate.is_file():
-            return candidate
-        if parent == project_root:
-            break
-    matches = list(project_root.glob("code-linter.json5"))
-    return matches[0] if matches else None
 
 
 def _find_harmony_project_root(target: Path, source_project_root: Path) -> Path | None:
