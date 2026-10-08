@@ -9,6 +9,7 @@ from arkts_smell_refactor.gate import (
     _changed_current_lines,
     _fresh_copy,
     _issue_touches_changed_symbol,
+    _normalize_agent_prompt_paths,
     _owner_at_line,
     _parse_linter_issues,
     _reported_symbol,
@@ -21,6 +22,62 @@ from arkts_smell_refactor.gate import (
 
 
 class GateTests(unittest.TestCase):
+    def test_nested_project_paths_are_rebased_in_initial_and_repair_attachments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repository = root / "demo"
+            source = repository / "Templates/App"
+            target = source / "feature/src/main/ets/First.ets"
+            target.parent.mkdir(parents=True)
+            target.write_text("export class First {}", encoding="utf-8")
+            task_dir = root / "task"
+            task_dir.mkdir()
+            task = {
+                "workspace_root": str(root), "project_root": str(repository),
+                "target": {"file_path": "demo/Templates/App/feature/src/main/ets/First.ets"},
+            }
+            (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+            original = (
+                "target: Templates/App/feature/src/main/ets/First.ets:10\n"
+                "counterpart: demo/Templates/App/feature/src/main/ets/Second.ets:20\n"
+                "helper: Templates\\App\\feature\\src\\main\\ets\\Helper.ets\n"
+                f"absolute: {target.as_posix()}\n"
+                "already relative: feature/src/main/ets/First.ets\n"
+            )
+            expected = (
+                "target: feature/src/main/ets/First.ets:10\n"
+                "counterpart: feature/src/main/ets/Second.ets:20\n"
+                "helper: feature\\src\\main\\ets\\Helper.ets\n"
+                "absolute: feature/src/main/ets/First.ets\n"
+                "already relative: feature/src/main/ets/First.ets\n"
+            )
+            for filename in ("refactor-prompt.md", "repair-prompt-1.md"):
+                with self.subTest(filename=filename):
+                    prompt_file = task_dir / filename
+                    prompt_file.write_text(original, encoding="utf-8")
+                    with patch("arkts_smell_refactor.gate.subprocess.run") as run, patch(
+                        "arkts_smell_refactor.gate._sync_production_changes", return_value=0,
+                    ):
+                        run.return_value.returncode = 0
+                        result = refactor_gate(task_dir, source, Path("deveco"),
+                            prompt_file=None if filename == "refactor-prompt.md" else prompt_file)
+                    self.assertEqual(0, result)
+                    command = run.call_args.args[0]
+                    attached = Path(command[command.index("-f") + 1])
+                    self.assertEqual(expected, attached.read_text(encoding="utf-8"))
+                    self.assertEqual(original, prompt_file.read_text(encoding="utf-8"))
+
+    def test_rebasing_does_not_rewrite_unrelated_project_paths(self):
+        root = Path.cwd() / "prompt-fixture"
+        task = {"workspace_root": str(root), "project_root": str(root / "demo")}
+        prompt = (
+            "Other/Templates/App/file.ets\n"
+            "Templates/AppArchive/file.ets\n"
+            "demo/Templates/OtherApp/file.ets\n"
+            "feature/src/main/ets/file.ets\n"
+        )
+        self.assertEqual(prompt, _normalize_agent_prompt_paths(prompt, task, root / "demo/Templates/App"))
+
     def test_refactor_prompt_is_attached_and_model_is_configurable(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

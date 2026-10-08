@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,12 +32,16 @@ def slug(value: str) -> str:
 
 def iter_source_files(root: Path) -> Iterable[Path]:
     ignored = {".git", "build", "node_modules", "oh_modules", ".hvigor", ".test"}
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in {".ets", ".ts"}:
-            continue
-        if any(part in ignored for part in path.parts):
-            continue
-        yield path
+    if any(part in ignored for part in root.parts):
+        return
+    for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+        # Prune before descent: filtering rglob results still traverses every
+        # dependency/build subtree and stats hundreds of thousands of entries.
+        subdirectories[:] = [name for name in subdirectories if name not in ignored]
+        for name in filenames:
+            path = Path(directory) / name
+            if path.suffix.lower() in {".ets", ".ts"} and path.is_file():
+                yield path
 
 
 def normalized_relative(path: Path, root: Path) -> str:

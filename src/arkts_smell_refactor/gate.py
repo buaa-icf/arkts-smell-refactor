@@ -39,12 +39,12 @@ def refactor_gate(
     _fresh_copy(source_root, workspace, exclude_tests=True)
     target_file = Path(task["workspace_root"]) / task["target"]["file_path"]
     try:
-        target_relative = target_file.resolve().relative_to(source_root.resolve())
+        target_file.resolve().relative_to(source_root.resolve())
     except ValueError:
         print("目标文件不在检测到的 Harmony 工程内", file=sys.stderr)
         return 3
     prompt = (prompt_file or (task_dir / "refactor-prompt.md")).read_text(encoding="utf-8")
-    prompt = prompt.replace(task["target"]["file_path"], target_relative.as_posix())
+    prompt = _normalize_agent_prompt_paths(prompt, task, source_root)
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
     command = [str(deveco), "run"]
@@ -61,6 +61,26 @@ def refactor_gate(
     if completed.returncode != 0:
         return completed.returncode
     return _sync_production_changes(workspace, source_root)
+
+
+def _normalize_agent_prompt_paths(prompt: str, task: dict[str, Any], source_root: Path) -> str:
+    """Rebase prompt paths to the Harmony root actually copied into the agent mirror."""
+    source = source_root.resolve()
+    prefixes = {source.as_posix()}
+    for root_key in ("workspace_root", "project_root"):
+        if not task.get(root_key):
+            continue
+        try:
+            relative = source.relative_to(Path(task[root_key]).resolve()).as_posix()
+        except ValueError:
+            continue
+        if relative != ".":
+            prefixes.add(relative)
+    # Match whole path prefixes, not substrings of another project's path. Handle
+    # both detector paths and repository-relative paths already rendered by prompts.py.
+    alternatives = [re.escape(prefix).replace("/", r"[\\/]") for prefix in sorted(prefixes, key=len, reverse=True)]
+    pattern = r"(?<![\w./\\:-])(?:" + "|".join(alternatives) + r")[\\/]"
+    return re.sub(pattern, "", prompt)
 
 
 def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | None, task_name: str, module: str | None = None) -> int:
