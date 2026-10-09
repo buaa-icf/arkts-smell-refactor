@@ -439,6 +439,8 @@ HomeCheck 子进程使用任务内的 `homecheck-temp` 临时目录，避免 Win
 
 测试门禁使用 `auto-test`：读取工程根 `build-profile.json5` 的模块映射，在各模块的 `src/test` 与 `src/ohosTest` 中查找与目标文件、克隆关联文件同名的 `Foo.test.ets/ts/js` 或 `FooTest.test.ets/ts/js`，从 `describe` 提取套件名并设置 `scope`。测试可以位于其他宿主模块（例如 `phone` 模块测试 `order` 模块的页面）。同一目标两类测试都有时均运行；目标无法匹配、套件名无法静态确定或新增变更模块没有对应目标时，回退到该模块全部现有测试类型。该匹配是命名约定，不代表已证明方法覆盖率；不使用数据集目录名或 UI 装饰器猜测测试类型。
 
+选择候选文件前，从各测试类型的 `List.test.ets/ts/js` 沿静态 import/export 检查可达性，排除未接入入口的遗留测试文件，也不将其加入模块回退的预期套件。例如 Local 目录留有 `RecommendBar.test.ets`，但入口只注册了 LocalUnit，而 Instrument 入口接入了 RecommendBar，则选择目标 Instrument。支持入口别名、间接注册与重导出；没有标准入口、存在动态加载或无法解析的相对依赖时保守保留候选，不静默免除某类测试。静态可达不保证运行时确实注册，实际套件与用例证据仍必须通过下面的检查。
+
 Local Test 使用 `test -p module=<模块名>`，Instrument Test 使用 `onDeviceTest -p module=<模块名>@ohosTest`，均开启 coverage。设备测试需要已连接设备和可用签名。每个子任务运行前清除验证副本中的旧结果，运行后必须同时满足 Hvigor 成功退出、产生新的 Hypium 结果、实际执行非零用例且无失败，以及预期套件确实执行。仅构建/签名成功、零用例、缺失结果或缺失预期套件不会 PASS；环境或证据不足记为 BLOCKED，不交给 Agent 修改生产代码。子任务仍遵循 fail-fast。
 
 `test-plan.json` 保存选择依据；`test-results.json` 保存最新汇总；`test-attempts/<时间戳>/` 保留各轮每个子任务的命令、耗时、日志和原始测试结果。以前只执行 Local Test 的实验需按新门禁重新计时，不能直接沿用为完整测试验收指标。高级配置直接执行外部测试命令时，应自行提供等价的结果校验。

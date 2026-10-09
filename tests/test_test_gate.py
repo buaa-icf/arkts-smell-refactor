@@ -36,12 +36,17 @@ class TestGateTests(unittest.TestCase):
         }}
         write_json(self.task_dir / "task.json", self.task)
 
-    def suite(self, kind, name="Page", module="featureName", suite_name=None):
+    def suite(self, kind, name="Page", module="featureName", suite_name=None, register=True):
         directory = "src/test" if kind == "local" else "src/ohosTest/ets/test"
         file = self.source / self.modules[module] / directory / (name + ".test.ets")
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(f"// describe('CommentedOut', () => {{}})\n"
                         f"export default function test() {{ describe('{suite_name or name + 'Test'}', () => {{}}); }}", encoding="utf-8")
+        if register:
+            entry = file.with_name("List.test.ets")
+            text = entry.read_text(encoding="utf-8") if entry.exists() else "export default function testsuite() {\n}\n"
+            text = f"import run{name} from './{name}.test';\n" + text
+            entry.write_text(text.replace("\n}", f"\n  run{name}();\n}}", 1), encoding="utf-8")
         return file
 
     def plan(self):
@@ -64,6 +69,63 @@ class TestGateTests(unittest.TestCase):
         self.suite("local")
         self.suite("instrument")
         self.assertEqual(["local", "instrument"], [j["kind"] for j in self.plan()["jobs"]])
+
+    def test_dormant_local_target_does_not_block_registered_instrument(self):
+        self.suite("local", "LocalUnit")
+        self.suite("local", register=False)
+        self.suite("instrument")
+        plan = self.plan()
+        self.assertEqual([("instrument", "PageTest")], [(j["kind"], j["scope"]) for j in plan["jobs"]])
+        def run(command, **kwargs):
+            self.assertIn("onDeviceTest", command)
+            self.result_file(plan["jobs"][0], self.success())
+            return subprocess.CompletedProcess(command, 0, "", "")
+        code, run = self.execute(plan, run)
+        self.assertEqual(0, code)
+        self.assertEqual(1, run.call_count)
+
+    def test_module_fallback_does_not_expect_unregistered_suites(self):
+        self.suite("local", "LocalUnit")
+        self.suite("local", "Unused", register=False)
+        job = self.plan()["jobs"][0]
+        self.assertIsNone(job["scope"])
+        self.assertEqual(["LocalUnitTest"], job["expectedSuites"])
+
+    def test_entry_follows_aliases_multiline_exports_and_nested_registration(self):
+        file = self.suite("instrument", register=False)
+        folder = file.parent
+        (folder / "List.test.ets").write_text(
+            "import { register as run } from './registration';\nexport default function testsuite() { run(); }", encoding="utf-8")
+        (folder / "registration.ets").write_text(
+            "export {\n default as register\n} from './nested';", encoding="utf-8")
+        (folder / "nested.ets").write_text(
+            "import renamed from './Page.test.ets';\nimport './registration';\n"
+            "export default function register() { renamed(); }", encoding="utf-8")
+        self.assertEqual(["PageTest"], self.plan()["jobs"][0]["expectedSuites"])
+
+    def test_comment_string_and_type_imports_do_not_register_local_suite(self):
+        file = self.suite("local", "LocalUnit")
+        self.suite("local", register=False)
+        self.suite("instrument")
+        entry = file.with_name("List.test.ets")
+        text = entry.read_text(encoding="utf-8")
+        text += "\n// import Page from './Page.test';\nconst hint = `import Page from './Page.test';`;\n"
+        text += "import type { Page } from './Page.test';\n"
+        entry.write_text(text, encoding="utf-8")
+        self.assertEqual(["instrument"], [j["kind"] for j in self.plan()["jobs"]])
+
+    def test_unknown_registration_does_not_silently_drop_local_kind(self):
+        for registration in (None, "export default function testsuite() { import(suitePath); }",
+                             "import run from './missing'; export default function testsuite() { run(); }"):
+            with self.subTest(registration=registration):
+                file = self.suite("local", register=False)
+                entry = file.with_name("List.test.ets")
+                if registration is None:
+                    entry.unlink(missing_ok=True)
+                else:
+                    entry.write_text(registration, encoding="utf-8")
+                self.suite("instrument")
+                self.assertEqual(["local", "instrument"], [j["kind"] for j in self.plan()["jobs"]])
 
     def test_ui_test_in_a_different_host_module_is_discovered(self):
         self.suite("local", "LocalUnit")

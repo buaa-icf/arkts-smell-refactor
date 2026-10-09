@@ -6,12 +6,16 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .analysis.switch_statement import _mask_comments
+from .analysis.switch_statement import _mask_comments, _mask_non_code
 from .linter_profile import _members, _tokens
 from .utils import read_json
 
 
 TEST_KINDS = {"local": ("src/test", "test"), "instrument": ("src/ohosTest", "onDeviceTest")}
+_TEST_SUFFIXES = (".ets", ".ts", ".js")
+_IMPORT = re.compile(
+    r'''\b(?:import|export)\s+(?:(?:[^;'"`]+?)\s+from\s*)?['"]([^'"\r\n]+)['"]'''
+)
 
 
 def project_modules(source_root: Path) -> dict[str, Path]:
@@ -57,9 +61,45 @@ def _string(tokens: list[str]) -> str:
 
 
 def _test_files(module_root: Path, kind: str) -> list[Path]:
-    directory = module_root / TEST_KINDS[kind][0]
-    return sorted(path for path in directory.rglob("*.test.*")
-                  if path.suffix in {".ets", ".ts", ".js"} and path.stem != "List.test")
+    directory = (module_root / TEST_KINDS[kind][0]).resolve()
+    candidates = {path for path in directory.rglob("*.test.*")
+                  if path.suffix in _TEST_SUFFIXES and path.stem != "List.test"}
+    entries = sorted(path for path in directory.rglob("List.test.*") if path.suffix in _TEST_SUFFIXES)
+    if not entries:
+        # Custom runners may not use List.test. Do not silently discard a test
+        # kind whose registration cannot be established statically.
+        return sorted(candidates)
+    reachable: set[Path] = set()
+    pending = list(entries)
+    while pending:
+        path = pending.pop()
+        if path in reachable:
+            continue
+        reachable.add(path)
+        text = _mask_comments(path.read_text(encoding="utf-8-sig"))
+        code = _mask_non_code(text)
+        if re.search(r"\b(?:import|require)\s*\(", code):
+            return sorted(candidates)  # Dynamic registration: retain conservative validation.
+        for match in _IMPORT.finditer(text):
+            if not code[match.start():match.start() + 6].strip():
+                continue  # An import-looking string is not a dependency.
+            declaration = match.group()
+            if re.match(r"(?:import|export)\s+type\b", declaration):
+                continue
+            specifier = match[1]
+            if not specifier.startswith("."):
+                continue
+            base = path.parent / specifier
+            options = [base] + [Path(str(base) + suffix) for suffix in _TEST_SUFFIXES]
+            options += [base / ("index" + suffix) for suffix in _TEST_SUFFIXES]
+            dependency = next((item.resolve() for item in options if item.is_file()), None)
+            if dependency is None:
+                # A missing import may be a broken registration. Let the actual
+                # compile/result check expose it instead of declaring no tests.
+                return sorted(candidates)
+            if dependency.is_relative_to(directory):
+                pending.append(dependency)
+    return sorted(candidates & reachable)
 
 
 def _suite_names(path: Path) -> list[str]:
@@ -70,7 +110,8 @@ def _suite_names(path: Path) -> list[str]:
 def build_test_plan(task_dir: Path, source_root: Path, mode: str = "auto-test", module: str | None = None) -> dict[str, Any]:
     """Prefer suites named for dataset targets; otherwise run both available kinds.
 
-    Filename matching is a convention, not a coverage claim. An unmatched target
+    List.test import reachability filters out dormant files before filename
+    matching. It is a convention, not a coverage claim. An unmatched target
     widens the entire module to all tests. New affected modules also run in full.
     Actual suite execution is checked against fresh Hypium results by the gate.
     """
