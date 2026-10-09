@@ -128,6 +128,13 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
             return 3
         target_failures = [case for case in selected if case["result"] != "Success"]
         if target_failures:
+            if task_name == "onDeviceTest" and len(target_failures) == len(selected) and all(
+                re.search(r"(?i)(?:component not found|unable to find id)\s*:\s*[^\r\n]+", case["details"])
+                and re.search(r"(?i)error in beforeAll function", case["details"])
+                for case in target_failures
+            ):
+                print("TEST_HOST_UNAVAILABLE: target cases stopped in beforeAll before exercising production code", file=sys.stderr)
+                return 3
             print(f"TEST_TARGET_CASE_FAILURE: {len(selected) - len(target_failures)}/{len(selected)} passed", file=sys.stderr)
             return 1
     elif failures or passed != total:

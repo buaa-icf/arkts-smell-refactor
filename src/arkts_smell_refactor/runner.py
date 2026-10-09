@@ -277,11 +277,12 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     review_path = task_dir / ("review.json" if not review_suffix else f"review{review_suffix}.json")
     review = read_json(review_path) if logical_stage == "review-agent" and review_path.exists() else {}
     issues = review.get("issues", []) if isinstance(review, dict) else []
+    changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
     if logical_stage == "smell" and (task_dir / "smell-after.json").exists():
         issues = [
             {
                 "category": "remaining-smell",
-                "filePath": task.target.file_path,
+                "filePath": _smell_issue_file_path(task_dir, item, changes, task.target.file_path),
                 "line": item.get("line"),
                 "reason": item.get("message", "目标异味仍存在"),
             }
@@ -306,7 +307,6 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         if runtime_log.is_file(): log_text = runtime_log.read_text(encoding="utf-8", errors="replace")[-12000:]
     if logical_stage == "contract" and (task_dir / "public-contract-results.json").is_file():
         log_text = json.dumps(read_json(task_dir / "public-contract-results.json"), ensure_ascii=False, indent=2)
-    changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
     # The hvigor log also contains successful compilations and unrelated ArkTS warnings.
     # Only failed test cases may establish that a test failure belongs to this change.
     test_failures = _failed_test_evidence(task_dir, failed) if logical_stage == "test" else None
@@ -324,10 +324,13 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         )
     else:
         attributable = _mentions_changed_production(log_text, changes)
+    test_host_unavailable = bool(
+        test_failures and attributable and all(_test_host_unavailable(case) for case in test_failures)
+    )
     if logical_stage in {"smell", "contract", "runtime", "linter", "review-agent"}:
         repairable = True
     elif logical_stage == "test" and test_failures is not None:
-        repairable = attributable
+        repairable = attributable and not test_host_unavailable
     elif logical_stage in {"build", "test"}:
         repairable = bool(attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower()))
     else:
@@ -335,7 +338,8 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     classification = {
         "smell": "SMELL_REMAINS_OR_MOVED",
         "build": "INTRODUCED_BUILD_FAILURE" if repairable else "UNATTRIBUTED_BUILD_FAILURE",
-        "test": "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE",
+        "test": ("TEST_HOST_UNAVAILABLE" if test_host_unavailable else
+                 "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE"),
         "linter": "INTRODUCED_LINTER_FAILURE",
         "runtime": "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
         "contract": "PUBLIC_CONTRACT_BREAK",
@@ -345,10 +349,33 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     return {
         "schemaVersion": "1.0", "attempt": next_attempt, "stage": logical_stage,
         "classification": classification, "repairable": repairable,
-        "summary": summary or failed.reason or f"{logical_stage} 未通过",
+        "summary": ("目标测试在 beforeAll 阶段找不到测试宿主组件，尚未执行目标断言；不可归因于本次生产代码修改"
+                    if test_host_unavailable else summary or failed.reason or f"{logical_stage} 未通过"),
         "changedProductionFiles": changes, "issues": issues,
         "logTail": log_text,
     }
+
+
+def _smell_issue_file_path(
+    task_dir: Path, issue: dict[str, Any], changes: list[str], fallback: str,
+) -> str:
+    """Keep HomeCheck's actual file, expressed relative to the agent workspace."""
+    reported = str(issue.get("filePath") or "").replace("\\", "/")
+    if not reported:
+        return fallback
+    for changed in sorted(changes, key=len, reverse=True):
+        relative = changed.replace("\\", "/").lstrip("/")
+        if relative and (reported == relative or reported.endswith("/" + relative)):
+            return relative
+    workspace_file = task_dir / "validation-workspace.json"
+    if workspace_file.is_file():
+        source_root = read_json(workspace_file).get("sourceRoot")
+        if source_root:
+            try:
+                return Path(reported).resolve().relative_to(Path(source_root).resolve()).as_posix()
+            except (OSError, ValueError):
+                pass
+    return reported
 
 
 def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
@@ -363,6 +390,14 @@ def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
         if stem and re.search(rf"(?<![\w$]){re.escape(stem)}(?![\w$])", log_text, re.IGNORECASE):
             return True
     return False
+
+
+def _test_host_unavailable(case: str) -> bool:
+    """A missing UI test host in setup is not evidence of a production regression."""
+    return bool(
+        re.search(r"(?i)(?:component not found|unable to find id)\s*:\s*[^\r\n]+", case)
+        and re.search(r"(?i)error in beforeAll function", case)
+    )
 
 
 def _failed_test_evidence(task_dir: Path, failed: CommandResult) -> list[str] | None:

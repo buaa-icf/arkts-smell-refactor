@@ -125,6 +125,40 @@ class GateTests(unittest.TestCase):
             self.assertEqual(2, len(attribution["targetCases"]))
             self.assertEqual(1, len(attribution["unrelatedFailures"]))
 
+    def test_target_device_cases_missing_test_host_are_blocked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            tests = source / "entry/src/ohosTest/ets/test"
+            tests.mkdir(parents=True)
+            (tests / "AvatarUpload.test.ets").write_text(
+                "describe('CropCheckImageAdaptTest', () => {"
+                "it('check_image_adapt_s1', 0, () => {}); });", encoding="utf-8",
+            )
+            task_dir = root / "runs/session/task"
+            task_dir.mkdir(parents=True)
+            (task_dir / "task.json").write_text(json.dumps({
+                "target": {"file_path": "entry/src/main/ets/AvatarUpload.ets",
+                           "symbol": "checkImageAdapt"},
+            }), encoding="utf-8")
+
+            def run_with_missing_host(command, cwd, env):
+                result = Path(cwd) / "entry/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+                result.parent.mkdir(parents=True, exist_ok=True)
+                result.write_text(
+                    "class=CropCheckImageAdaptTest\n"
+                    "test=check_image_adapt_s1\n"
+                    "Component not found: crop_test_host_anchor, error in beforeAll function\n"
+                    "result=Error\n"
+                    "Tests run: 1, Failure: 0, Error: 1, Pass: 0\n", encoding="utf-8",
+                )
+                return SimpleNamespace(returncode=1)
+
+            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=run_with_missing_host):
+                self.assertEqual(3, hvigor_gate(task_dir, source, Path("hvigorw"), None, "onDeviceTest", "entry"))
+            attribution = json.loads((task_dir / "test-attribution.json").read_text(encoding="utf-8"))
+            self.assertEqual("Error", attribution["targetCases"][0]["result"])
+
     def test_hvigor_requires_target_case_evidence_when_task_is_known(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

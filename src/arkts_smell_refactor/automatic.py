@@ -212,7 +212,7 @@ def _auto_config(
     test_kind = task.raw.get("testKind")
     test_task = {"local-test": "test", "instrument-test": "onDeviceTest"}.get(test_kind)
     test_module = _target_module_name(Path(task.target_path), harmony_root) if harmony_root else None
-    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers + r"|TEST_EVIDENCE_MISSING|TEST_TARGET_EVIDENCE_MISSING|TEST_ZERO_CASES", "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root and test_task and test_module else {"enabled": False, "reason": "无法确定测试类型或目标模块；需要 local-test/instrument-test 数据集归属或 testKind"}
+    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers + r"|TEST_EVIDENCE_MISSING|TEST_TARGET_EVIDENCE_MISSING|TEST_ZERO_CASES|TEST_HOST_UNAVAILABLE", "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root and test_task and test_module else {"enabled": False, "reason": "无法确定测试类型或目标模块；需要 local-test/instrument-test 数据集归属或 testKind"}
     runtime = None
     if (smoke_plan or {}).get("enabled") and tools["hvigorw"] and harmony_root:
         runtime_command = [

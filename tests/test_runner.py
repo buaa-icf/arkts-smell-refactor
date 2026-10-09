@@ -529,6 +529,38 @@ class RunnerTests(unittest.TestCase):
                     self.assertEqual("current", report["summary"])
                     self.assertEqual("guard changed", report["issues"][0]["reason"])
 
+    def test_smell_failure_points_to_new_helper_not_original_target(self):
+        from arkts_smell_refactor.prompts import build_repair_prompt
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            task_data = self._task(temp)
+            task_data["target"]["file_path"] = "demo/pages/UserDetail.ets"
+            (task_dir / "task.json").write_text(json.dumps(task_data), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": ["model/UserEnumDisplayValues.ets", "pages/UserDetail.ets"],
+            }), encoding="utf-8")
+            helper = root / "demo/model/UserEnumDisplayValues.ets"
+            (task_dir / "smell-after.json").write_text(json.dumps([
+                {"filePath": str(helper), "line": 23,
+                 "message": "Method 'fromUserInfo' is feature-envious", "rule": "rule"},
+                {"filePath": str(root / "demo/pages/UserDetail.ets"), "line": 42,
+                 "message": "Method 'work' is feature-envious", "rule": "rule"},
+            ]), encoding="utf-8")
+
+            task = _task_from_file(task_dir / "task.json")
+            report = _build_failure_report(task_dir, task, CommandResult("smell", "FAIL"), 1)
+            self.assertEqual(
+                ["model/UserEnumDisplayValues.ets", "pages/UserDetail.ets"],
+                [issue["filePath"] for issue in report["issues"]],
+            )
+            prompt = build_repair_prompt(task, {}, report, 1)
+            self.assertIn("model/UserEnumDisplayValues.ets:23", prompt)
+            self.assertIn("pages/UserDetail.ets:42", prompt)
+            self.assertNotIn("pages/UserDetail.ets:23", prompt)
+
     def test_unattributed_test_failure_is_not_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)
@@ -632,6 +664,37 @@ class RunnerTests(unittest.TestCase):
             )
             self.assertEqual("RELATED_TEST_FAILURE", report["classification"])
             self.assertTrue(report["repairable"])
+
+    def test_target_instrument_host_missing_in_before_all_is_not_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": ["pages/AvatarUpload.ets"],
+            }), encoding="utf-8")
+            workspace = root / "validation"
+            result = workspace / "phone/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CropCheckImageAdaptTest\n"
+                "test=S1_image_exactly_fills_frame_keeps_identity_state\n"
+                "Error in S1_image_exactly_fills_frame_keeps_identity_state, "
+                "Component not found: crop_test_host_anchor, error in beforeAll function\n"
+                "at findById phone_test (AvatarUpload.test.ets:14:11)\nresult=Error\n",
+                encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module phone"), 1,
+            )
+            self.assertEqual("TEST_HOST_UNAVAILABLE", report["classification"])
+            self.assertFalse(report["repairable"])
+            self.assertIn("beforeAll", report["summary"])
 
     def test_mixed_instrument_failures_do_not_send_unrelated_case_to_repair_agent(self):
         with tempfile.TemporaryDirectory() as temp:
