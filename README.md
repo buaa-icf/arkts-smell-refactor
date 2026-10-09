@@ -427,11 +427,13 @@ python -m arkts_smell_refactor run `
 ```text
 DevEco Code Refactor Agent
   → 并行门禁：异味复检 + 编译 + 公共契约检查（启用时）+ Code Linter
-  → 目标模块 Local Test（并行门禁全部通过后）
+  → 目标模块 Local Test 或 Instrument Test（并行门禁全部通过后）
   → 独立 DevEco Code Review Agent
 ```
 
 流水线严格 fail-fast：并行组中任一门禁 `FAIL/BLOCKED` 后，平台立即终止仍在运行的同组进程，跳过 test 和 Review，并针对实际失败阶段生成 `failure-report-N.json`；test 失败后跳过 Review。失败分析兼容 smell、build、contract、runtime、test、linter 和 review，不依赖固定的失败顺序。可归因于本次修改的失败会生成 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+
+测试类型取自 `dataset/positive/local-test` 或 `dataset/positive/instrument-test`；交互粘贴时通过工作区中的阳性数据集精确匹配，也可在记录中显式填写 `testKind`。无法判定时在重构前停止，不会默认跑 Local Test。Local Test 执行 `hvigor test -p module=<模块> -p coverage=true`；Instrument Test 执行 `hvigor onDeviceTest -p module=<模块>@ohosTest -p coverage=true`，需要可用设备。hvigor 仍执行整个模块，但平台从本次生成的 `test_result.txt` 按目标文件、方法名、测试源码中的直接调用和测试套件定位当前样例用例，只以这些用例判断 `test` 门禁；其他套件失败单独记录在 `test-attribution.json`，不算当前样例失败。无法明确定位目标用例时记为 `BLOCKED`，绝不因其他用例通过而报 PASS。Instrument Test 还要求设备端 `coverage.log` 确认执行完成。仅有 `BUILD SUCCESSFUL` 或命令退出码 0 不算 `test: PASS`。如果目标套件没有可区分的方法级用例，保守地把该套件全部用例纳入当前样例；此时同套件其他方法的失败仍可能阻断本样例，需要补充明确的测试映射。
 
 每条异味从开始生成风险分析起最多执行 1200 秒（20 分钟），该总时限覆盖 Refactor Agent、全部门禁、所有 Repair Loop 和 Review Agent。到达上限后平台会终止当前子进程，最终记为 `BLOCKED`，并在控制台显示“已达到20分钟上限”。`result.json` 和批次 `summary.json` 会记录 `durationSeconds`；`result.json` 另记录 `timeoutSeconds` 与 `timedOut`。
 

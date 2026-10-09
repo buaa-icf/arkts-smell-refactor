@@ -79,15 +79,153 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
         if installed.returncode != 0:
             return installed.returncode
         install_marker.write_text("ok", encoding="ascii")
-    command = [str(hvigorw), task_name]
+    if task_name in {"test", "onDeviceTest"} and not module:
+        print("TEST_EVIDENCE_MISSING: no target module", file=sys.stderr)
+        return 3
+    result_kind = "test" if task_name == "test" else "ohosTest" if task_name == "onDeviceTest" else None
+    if result_kind:
+        (task_dir / "test-attribution.json").unlink(missing_ok=True)
+        for stale in _hvigor_test_results(workspace, result_kind, module):
+            stale.unlink()
+            if task_name == "onDeviceTest":
+                stale.with_name("coverage.log").unlink(missing_ok=True)
+    command = [*_hvigor_launcher(hvigorw), task_name]
     if task_name == "test":
-        if module:
-            command.extend(["-p", f"module={module}"])
-        command.extend(["-p", "coverage=true"])
+        command.extend(["-p", f"module={module}", "-p", "coverage=true"])
     elif task_name == "onDeviceTest":
-        command.extend(["-p", "coverage=true"])
+        command.extend(["-p", f"module={module}@ohosTest", "-p", "coverage=true"])
     command.append("--no-daemon")
-    return subprocess.run(command, cwd=workspace).returncode
+    completed = subprocess.run(command, cwd=workspace, env=_deveco_environment(hvigorw))
+    if result_kind is None:
+        return completed.returncode
+    results = _hvigor_test_results(workspace, result_kind, module)
+    if not results:
+        if completed.returncode != 0:
+            return completed.returncode
+        print(f"TEST_EVIDENCE_MISSING: {task_name} produced no test_result.txt for {module}", file=sys.stderr)
+        return 3
+    summaries = [_parse_hypium_result(path) for path in results]
+    if any(summary is None for summary in summaries):
+        print(f"TEST_EVIDENCE_MISSING: invalid test_result.txt for {module}", file=sys.stderr)
+        return 3
+    total = sum(summary["tests"] for summary in summaries if summary)
+    failures = sum(summary["failures"] + summary["errors"] for summary in summaries if summary)
+    passed = sum(summary["passed"] for summary in summaries if summary)
+    if total == 0:
+        print(f"TEST_ZERO_CASES: {task_name} ran zero cases for {module}", file=sys.stderr)
+        return 3
+    cases = [case for path in results for case in _parse_hypium_cases(path)]
+    target_cases = _target_test_cases(task_dir, results[0].parents[5], result_kind, cases)
+    if target_cases is not None:
+        selected = [case for index, case in enumerate(cases) if index in target_cases]
+        unrelated = [case for index, case in enumerate(cases) if index not in target_cases and case["result"] != "Success"]
+        write_json(task_dir / "test-attribution.json", {
+            "schemaVersion": "1.0", "module": module, "testKind": task_name,
+            "totalCases": total, "targetCases": selected, "unrelatedFailures": unrelated,
+        })
+        if not selected or len(cases) != total:
+            print(f"TEST_TARGET_EVIDENCE_MISSING: matched {len(selected)} target cases out of {total}", file=sys.stderr)
+            return 3
+        target_failures = [case for case in selected if case["result"] != "Success"]
+        if target_failures:
+            print(f"TEST_TARGET_CASE_FAILURE: {len(selected) - len(target_failures)}/{len(selected)} passed", file=sys.stderr)
+            return 1
+    elif failures or passed != total:
+        print(f"TEST_CASE_FAILURE: {passed}/{total} passed, {failures} failed or errored", file=sys.stderr)
+        return 1
+    if task_name == "onDeviceTest":
+        for path in results:
+            result_text = path.read_text(encoding="utf-8", errors="replace")
+            device_log = path.with_name("coverage.log")
+            device_text = device_log.read_text(encoding="utf-8", errors="replace") if device_log.is_file() else ""
+            if ("result=Success" not in result_text or "OHOS_REPORT_RESULT:" not in device_text
+                    or "TestFinished-ResultCode: 0" not in device_text):
+                print("TEST_EVIDENCE_MISSING: device execution result was not confirmed", file=sys.stderr)
+                return 3
+    if target_cases is not None:
+        print(f"TEST_TARGET_CASES_VERIFIED: {len(selected)}/{len(selected)} passed via {task_name}")
+        if unrelated:
+            print(f"TEST_UNRELATED_FAILURES: {len(unrelated)} other module cases failed; see test-attribution.json")
+    else:
+        print(f"TEST_CASES_VERIFIED: {passed}/{total} passed via {task_name}")
+    return 0
+
+
+def _hvigor_test_results(workspace: Path, kind: str, module: str | None) -> list[Path]:
+    expected = (".test", "default", "intermediates", kind, "coverage_data")
+    return [path for path in workspace.rglob("test_result.txt")
+            if path.parts[-6:-1] == expected and path.parents[5].name == module
+            and not {"oh_modules", "node_modules"}.intersection(path.relative_to(workspace).parts)]
+
+
+def _parse_hypium_cases(path: Path) -> list[dict[str, str]]:
+    cases: list[dict[str, str]] = []
+    suite = ""
+    name = ""
+    details: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("class="):
+            suite = line[6:]
+        elif line.startswith("test="):
+            name = line[5:]
+            details = []
+        elif line.startswith("result=") and name:
+            cases.append({"suite": suite, "name": name, "result": line[7:], "details": "\n".join(details)})
+            name = ""
+        elif name:
+            details.append(line)
+    return cases
+
+
+def _target_test_cases(
+    task_dir: Path, module_root: Path, kind: str, cases: list[dict[str, str]],
+) -> set[int] | None:
+    task_file = task_dir / "task.json"
+    if not task_file.is_file():
+        return None  # Standalone gate invocation retains module-wide behavior.
+    target = read_json(task_file).get("target", {})
+    stem = Path(str(target.get("file_path", ""))).stem
+    symbol = str(target.get("symbol") or "").split(".")[-1]
+    if not stem or not symbol:
+        return set()
+    snake_symbol = re.sub(r"(?<!^)(?=[A-Z])", "_", symbol).lower().lstrip("_")
+    test_root = module_root / "src" / kind
+    selected: set[int] = set()
+    for test_file in test_root.rglob("*.test.ets") if test_root.is_dir() else ():
+        source = test_file.read_text(encoding="utf-8", errors="replace")
+        suites = set(re.findall(r"\bdescribe\s*\(\s*['\"]([^'\"]+)['\"]", source))
+        if not suites:
+            continue
+        file_stem = test_file.name.removesuffix(".test.ets")
+        related_file = file_stem.lower() == stem.lower() or bool(re.search(
+            rf"\b(?:import|from)\b[^\n]*\b{re.escape(stem)}\b", source,
+        ))
+        suite_indices = [index for index, case in enumerate(cases) if case["suite"] in suites]
+        matched: set[int] = set()
+        for index in suite_indices:
+            name = cases[index]["name"]
+            named = bool(snake_symbol and re.search(rf"(?i)(?:^|_){re.escape(snake_symbol)}(?:_|$)", name))
+            invocation = re.search(rf"\b{re.escape(symbol)}\s*\(", _test_case_source(source, name))
+            if related_file and (named or invocation):
+                matched.add(index)
+        selected.update(matched or (suite_indices if related_file else []))
+    # A different suite can still exercise changed production code indirectly.
+    # Its failing stack trace is positive evidence that it belongs to this task.
+    for index, case in enumerate(cases):
+        if case["result"] != "Success" and re.search(
+            rf"(?i)(?<![\w$]){re.escape(stem)}\.ets(?![\w$])", case["details"],
+        ):
+            selected.add(index)
+    return selected
+
+
+def _test_case_source(source: str, name: str) -> str:
+    match = re.search(rf"\bit\s*\(\s*['\"]{re.escape(name)}['\"]", source)
+    if not match:
+        return ""
+    next_case = re.search(r"\bit\s*\(", source[match.end():])
+    end = match.end() + next_case.start() if next_case else len(source)
+    return source[match.end():end]
 
 
 def runtime_smoke_gate(

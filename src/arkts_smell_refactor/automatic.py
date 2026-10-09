@@ -66,6 +66,9 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
     print("工具发现：" + "，".join(f"{k}={'已找到' if v else '未找到'}" for k, v in tools.items()))
 
     tasks = load_dataset_tasks(dataset_path, workspace)
+    unknown = [task.task_id for task in tasks if task.raw.get("testKind") not in {"local-test", "instrument-test"}]
+    if unknown:
+        raise ValueError("以下异味无法判定 local-test/instrument-test 归属；请使用数据集原文件或在记录中指定 testKind：" + ", ".join(unknown))
     summary: list[dict[str, Any]] = []
     for number, task in enumerate(tasks, 1):
         task_started = time.monotonic()
@@ -206,9 +209,10 @@ def _auto_config(
         r"Invalid storeFile value|device not found|no devices"
     )
     build = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "assembleHap"), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
-    test_task = "test"
+    test_kind = task.raw.get("testKind")
+    test_task = {"local-test": "test", "instrument-test": "onDeviceTest"}.get(test_kind)
     test_module = _target_module_name(Path(task.target_path), harmony_root) if harmony_root else None
-    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
+    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers + r"|TEST_EVIDENCE_MISSING|TEST_TARGET_EVIDENCE_MISSING|TEST_ZERO_CASES", "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root and test_task and test_module else {"enabled": False, "reason": "无法确定测试类型或目标模块；需要 local-test/instrument-test 数据集归属或 testKind"}
     runtime = None
     if (smoke_plan or {}).get("enabled") and tools["hvigorw"] and harmony_root:
         runtime_command = [

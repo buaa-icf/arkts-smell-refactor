@@ -566,6 +566,100 @@ class RunnerTests(unittest.TestCase):
                 report["classification"],
             )
 
+    def test_instrument_failure_ignores_successful_target_and_unrelated_build_warnings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            task_data = self._task(temp)
+            task_data["target"]["symbol"] = "getCropRatio"
+            (task_dir / "task.json").write_text(json.dumps(task_data), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": ["components/CarouseCutToolBar.ets"],
+            }), encoding="utf-8")
+            workspace = root / "validation"
+            result = workspace / "picture_beautification/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CarouseCutToolBarTest\n"
+                "test=get_crop_ratio_free_returns_0\nresult=Success\n"
+                "class=StickerToolBarInstrumentTest\n"
+                "test=build_renders_search_grid\n"
+                "Unable to find id: sticker_toolbar_test_host, error in beforeAll function\n"
+                "at StickerToolBar.test.ets:19\nresult=Error\n", encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            log = task_dir / "test.log"
+            log.write_text(
+                "WARN File: components/CarouseCutToolBar.ets:167 getCropRatio\n"
+                "TEST_CASE_FAILURE: 1/2 passed, 1 failed\n", encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module picture_beautification", output_file=str(log)), 1,
+            )
+            self.assertEqual("UNATTRIBUTED_TEST_FAILURE", report["classification"])
+            self.assertFalse(report["repairable"])
+            self.assertIn("StickerToolBar.test.ets", report["logTail"])
+            self.assertNotIn("CarouseCutToolBar.ets", report["logTail"])
+
+    def test_instrument_failure_in_changed_component_remains_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["components/CarouseCutToolBar.ets"]}', encoding="utf-8",
+            )
+            workspace = root / "validation"
+            result = workspace / "picture_beautification/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CarouseCutToolBarTest\n"
+                "test=get_crop_ratio_free_returns_0\n"
+                "Error in get_crop_ratio_free_returns_0, expected 0 but got 1\n"
+                "result=Error\n", encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module picture_beautification"), 1,
+            )
+            self.assertEqual("RELATED_TEST_FAILURE", report["classification"])
+            self.assertTrue(report["repairable"])
+
+    def test_mixed_instrument_failures_do_not_send_unrelated_case_to_repair_agent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["components/CarouseCutToolBar.ets"]}', encoding="utf-8",
+            )
+            workspace = root / "validation"
+            result = workspace / "picture_beautification/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CarouseCutToolBarTest\ntest=target_case\nresult=Failure\n"
+                "class=StickerToolBarInstrumentTest\ntest=unrelated_case\nresult=Error\n",
+                encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module picture_beautification"), 1,
+            )
+            self.assertEqual("UNATTRIBUTED_TEST_FAILURE", report["classification"])
+            self.assertFalse(report["repairable"])
+
     def test_changed_class_name_in_test_diagnostic_is_repairable_without_target_symbol(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)

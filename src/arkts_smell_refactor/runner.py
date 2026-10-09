@@ -307,9 +307,27 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     if logical_stage == "contract" and (task_dir / "public-contract-results.json").is_file():
         log_text = json.dumps(read_json(task_dir / "public-contract-results.json"), ensure_ascii=False, indent=2)
     changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
-    attributable = _mentions_changed_production(log_text, changes)
+    # The hvigor log also contains successful compilations and unrelated ArkTS warnings.
+    # Only failed test cases may establish that a test failure belongs to this change.
+    test_failures = _failed_test_evidence(task_dir, failed) if logical_stage == "test" else None
+    if test_failures is not None:
+        log_text = "\n\n".join(test_failures)
+        # A mixed result cannot become green by repairing only the related cases.
+        # Never send unrelated failures to an agent with production-write access.
+        attributable = all(
+            _mentions_changed_production(case, changes)
+            or any(re.search(
+                rf"(?im)^class={re.escape(Path(path).stem)}(?:Instrument)?Test\s*$", case,
+            ) for path in changes)
+            or bool(task.target.symbol and task.target.symbol.lower() in case.lower())
+            for case in test_failures
+        )
+    else:
+        attributable = _mentions_changed_production(log_text, changes)
     if logical_stage in {"smell", "contract", "runtime", "linter", "review-agent"}:
         repairable = True
+    elif logical_stage == "test" and test_failures is not None:
+        repairable = attributable
     elif logical_stage in {"build", "test"}:
         repairable = bool(attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower()))
     else:
@@ -345,6 +363,43 @@ def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
         if stem and re.search(rf"(?<![\w$]){re.escape(stem)}(?![\w$])", log_text, re.IGNORECASE):
             return True
     return False
+
+
+def _failed_test_evidence(task_dir: Path, failed: CommandResult) -> list[str] | None:
+    """Return only failing Hypium cases; None means no usable case-level report."""
+    workspace_file = task_dir / "validation-workspace.json"
+    if not workspace_file.is_file() or not failed.command:
+        return None
+    module_match = re.search(r"(?:^|\s)--module\s+(\S+)", failed.command)
+    if not module_match:
+        return None
+    workspace = Path(str(read_json(workspace_file).get("path", "")))
+    module = module_match.group(1).strip('"\'')
+    if not workspace.is_dir():
+        return None
+    reports = [path for path in workspace.rglob("test_result.txt")
+               if path.parts[-6:-1] in {
+                   (".test", "default", "intermediates", "test", "coverage_data"),
+                   (".test", "default", "intermediates", "ohosTest", "coverage_data"),
+               } and path.parents[5].name == module]
+    if not reports:
+        return None
+    failures: list[str] = []
+    for report in reports:
+        suite = ""
+        case: list[str] = []
+        for line in report.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("class="):
+                suite = line
+            elif line.startswith("test="):
+                case = [suite, line]
+            elif line.startswith("result="):
+                if line != "result=Success" and case:
+                    failures.append("\n".join([*case, line]))
+                case = []
+            elif case:
+                case.append(line)
+    return failures or None
 
 
 def _build_agent_failure_report(task_dir: Path, failed: CommandResult, next_attempt: int) -> dict[str, Any]:

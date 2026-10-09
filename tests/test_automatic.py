@@ -27,7 +27,7 @@ class AutomaticConfigTests(unittest.TestCase):
             commit_hash="", workspace_root=str(self.root), project_root=str(self.root),
             smell_type="long-method", rule="@extrulesproject/long-method-check",
             severity="SUGGESTION", message="Method 'build' is too long.",
-            target=Target(self.target, "build"), raw={},
+            target=Target(self.target, "build"), raw={"testKind": "local-test"},
         )
         self.task_dir = self.root / "task"
         self.task_dir.mkdir()
@@ -41,6 +41,20 @@ class AutomaticConfigTests(unittest.TestCase):
             "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
         })
         self.config["reviewAgent"]["retryDelaySeconds"] = 0
+
+    def test_instrument_uses_on_device_test_and_unknown_kind_cannot_pass(self):
+        self.task.raw["testKind"] = "instrument-test"
+        config = _auto_config(self.task, self.task_dir, {}, {
+            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+            "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
+        })
+        self.assertIn("onDeviceTest", config["gates"]["test"]["command"])
+        self.task.raw.clear()
+        unknown = _auto_config(self.task, self.task_dir, {}, {
+            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+            "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
+        })
+        self.assertFalse(unknown["gates"]["test"]["enabled"])
 
     def _output_spec(self, spec, output, exit_code=1):
         return spec | {"command": [
