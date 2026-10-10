@@ -42,7 +42,9 @@
 | `feature-envy-check` | Feature Envy | 调用点、公开接口、委托和兼容入口 |
 | `long-method-check` | Long Method | ArkUI 状态、Builder、组件树、新增克隆 |
 | `switch-statement-check` | Switch Statement | 按符号定位真实分支；区分值映射、分组 case、可执行 fall-through、行为策略和长 if/else 链 |
-| `code-clone-fragment-check` | Code Clone | 关联片段、UI ID、片段差异 |
+| `code-clone-fragment-check` | Code Clone | 关联片段、原入口保留、委托抽取、UI 宿主与片段差异 |
+
+Code Clone 的专属画像默认要求保留原文件导出、类/组件/Builder 及静态入口（如 `ClassName.instance`），优先抽取内部共同逻辑。同类优先私有方法或成员 Builder，跨类优先保留各自入口并委托共享 Helper；使用共享基类/组件须确认状态所有权和生命周期不变。画像还提供生产文件中的入口线索，并明确保留独立单例、初始化时机、UI 宿主与选择器。首轮、返修及评审使用同一份策略；残留克隆不能通过删除旧入口、改名或调整检测规则消除。这些提示约束不能替代构建、测试和异味门禁。
 
 ## 目录结构
 

@@ -339,6 +339,25 @@ def _code_clone_analysis_text(risk: dict[str, Any], task: RefactorTask | None = 
         _project_relative_path(task, str(path)) if task else str(path)
         for path in boundary.get("requiredFiles", [])
     ) or "仅目标文件"
+    policy = analysis.get("refactoringPolicy") or {}
+    policy_lines = []
+    if policy:
+        policy_lines.append(f"- 优先抽取方式（约束上述建议形态）：{policy.get('preferredApproach', '保留入口，只抽取内部共同实现')}")
+        policy_lines.extend(f"- 入口与抽取约束：{instruction}" for instruction in policy.get("constraints", []))
+    seen_files = set()
+    for item in instances:
+        file_path = str(item.get("filePath", ""))
+        if file_path in seen_files or not item.get("resolved"):
+            continue
+        seen_files.add(file_path)
+        hints = item.get("entryPointHints", [])
+        if not hints:
+            continue
+        relative_path = _project_relative_path(task, file_path) if task else file_path
+        evidence = "；".join(f"{hint['line']}: {hint['declaration']}" for hint in hints[:6])
+        omitted = f"；另有 {len(hints) - 6} 处未展示" if len(hints) > 6 else ""
+        policy_lines.append(f"- 原入口线索 {relative_path}（词法、非完整清单）：{evidence}{omitted}")
+    policy_lines.extend(f"- 完成条件：{condition}" for condition in analysis.get("postConditions", []))
     return "\n".join([
         f"- 克隆组：{analysis.get('groupId', 'unknown')}；检测器类型：{analysis.get('detectorCloneKind') or '未解析'} {analysis.get('detectorContext') or ''}",
         f"- 实例：{instance_text}",
@@ -347,6 +366,7 @@ def _code_clone_analysis_text(risk: dict[str, Any], task: RefactorTask | None = 
         f"- 建议形态：{analysis.get('recommendedPattern', '人工判断')}（{analysis.get('recommendationReason', '需结合源码确认')}）",
         f"- 必须处理文件：{required_files}；跨文件：{boundary.get('crossFile', False)}",
         f"- 必须保持：{preserve}",
+        *policy_lines,
     ])
 
 

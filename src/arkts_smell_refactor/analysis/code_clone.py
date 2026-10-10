@@ -20,6 +20,11 @@ THIS_WRITE_RE = re.compile(
 )
 CALLBACK_RE = re.compile(r"\.((?:on|aboutTo)[A-Z][A-Za-z0-9_$]*)\s*\(")
 NAVIGATION_RE = re.compile(r"\b(?:router|navigator)\.[A-Za-z_$][\w$]*|\b(?:pushUrl|replaceUrl|back)\s*\(")
+ENTRY_POINT_RE = re.compile(
+    r"\bexport\b|\bstatic\s+(?:(?:readonly|get|set)\s+)*[A-Za-z_$][\w$]*"
+    r"|@(?:Entry|ComponentV2|Component|CustomDialog|Builder|LocalBuilder)\b"
+    r"|\bCustomDialogController\s*\("
+)
 
 
 def analyze_code_clone(task: RefactorTask, target_text: str) -> dict[str, Any]:
@@ -75,6 +80,7 @@ def analyze_code_clone(task: RefactorTask, target_text: str) -> dict[str, Any]:
         "variationDimensions": dimensions,
         "recommendedPattern": recommendation,
         "recommendationReason": reason,
+        "refactoringPolicy": _refactoring_policy(instances),
         "modificationBoundary": {
             "requiredFiles": affected_files,
             "rule": "必须在同一轮处理所有已解析片段；不得只改报告片段后把等价克隆留在同一 HomeCheck 范围内。",
@@ -82,12 +88,14 @@ def analyze_code_clone(task: RefactorTask, target_text: str) -> dict[str, Any]:
         },
         "mustPreserve": must_preserve,
         "postConditions": [
+            "逐项对照原文件的导出、类/组件/Builder 入口、构造方式和静态访问方式；旧调用形式必须继续有效。",
             "逐个核对所有实例仍保留各自的 UI ID、文案、资源、回调、状态读写和副作用顺序。",
             "重构后由 HomeCheck 在完整 Harmony 工程中复检；若仍报告该克隆组，按剩余实例定向修复，而不是只改名、换行或移动原样代码。",
         ],
         "limitations": [
             "这是词法级画像：不能证明跨文件类型、ArkUI 生命周期、闭包或资源引用的行为等价。",
             "检测消息只提供直接对照片段；若 HomeCheck 报出额外实例，必须把它们纳入下一轮处理。",
+            "入口线索来自各实例所在生产文件的词法扫描，不是完整 API 清单；未列出或未发现调用方不代表入口可删除。",
         ],
     }
 
@@ -115,7 +123,19 @@ def code_clone_risks_and_constraints(
             "reason": "Type-2 克隆的字面量、ID、回调或状态访问差异常是其业务语义的一部分。",
             "instruction": "把差异显式作为参数、回调或配置传入共享实现；禁止以统一默认值、统一事件或统一状态字段抹平差异。",
         },
+        {
+            "code": "PRESERVE_CLONE_ENTRYPOINTS",
+            "reason": "测试与外部调用可能经原文件路径直接使用类、Builder 或静态入口，模块出口检查不一定覆盖它们。",
+            "instruction": "按 Code Clone 画像的保留入口策略抽取内部实现；保持原文件路径、原入口与调用形式，不能为了消除克隆删除或替换旧入口。",
+        },
     ]
+    if any(item.get("entryPointHints") for item in analysis.get("instances", [])):
+        risks.append(_risk(
+            "CLONE_ENTRYPOINT_CHANGE",
+            "high",
+            "实例所在生产文件包含导出、静态入口或 ArkUI 宿主线索；整体替换为共享类/组件可能破坏原调用和生命周期。",
+            affected,
+        ))
     if analysis.get("resolvedInstanceCount", 0) < analysis.get("instanceCount", 0):
         risks.append(_risk(
             "CLONE_COUNTERPART_UNRESOLVED",
@@ -195,6 +215,36 @@ def _instance(
         "hasAsyncWork": bool(re.search(r"\bawait\b", masked)),
         "hasNavigation": bool(NAVIGATION_RE.search(masked)),
         "stringLiterals": _string_literals(fragment),
+        "entryPointHints": _entry_point_hints(text) if resolved else [],
+    }
+
+
+def _entry_point_hints(text: str) -> list[dict[str, Any]]:
+    """Keep whole-file entry evidence even when the clone covers only a method body."""
+    return [
+        {"line": line, "declaration": original.strip()[:160]}
+        for line, (original, masked) in enumerate(
+            zip(text.splitlines(), _mask_non_code(text).splitlines()), start=1
+        )
+        if ENTRY_POINT_RE.search(masked)
+    ]
+
+
+def _refactoring_policy(instances: list[dict[str, Any]]) -> dict[str, Any]:
+    same_file = len({item["filePath"] for item in instances}) == 1
+    approach = (
+        "同文件优先局部抽取：同一 class/struct 内提取私有方法或成员 @Builder；不同所属类型或顶层 Builder 保留各自入口并委托文件内共享实现。"
+        if same_file else
+        "跨文件优先保留各原类/组件及其入口，用组合或委托共用内部 Helper；仅在类型、状态所有权和生命周期均可保持时考虑共享基类或组件。"
+    )
+    return {
+        "preferredApproach": approach,
+        "constraints": [
+            "以重构前生产代码为准，保留原文件路径下的具名/默认导出、类名、组件/Builder 名、构造方式及公共成员签名、可见性和读写能力；直接文件导入同样属于契约，不限于 Index.ets。测试不可见或已修改可见生产调用方，都不是删除旧入口的依据。",
+            "保留原有 ClassName.instance 等静态方法/字段/getter/setter 的调用形式；不得仅以新导出常量或共享类替换原类。保持每个实例的独立状态、对象身份、原有惰性初始化和清理时机，不把多个单例合并或提前初始化。",
+            "UI 抽取保留原 @Entry 页面、路由、组件/Builder 调用入口、宿主根节点和各实例 UI ID；不以整页/整组件替换代替局部提取。保持响应式状态所属组件、this 绑定及生命周期；依赖宿主的 Builder 调用与 CustomDialogController 构造优先留在原组件中，未经上下文等价性确认不得移入普通顶层工厂。",
+            "原入口可以变为薄委托；若兼容外壳仍被判克隆，继续抽取内部共同逻辑并保留实例差异，不删除入口、不只改名/换行，也不放宽检测规则。无法同时满足兼容和克隆消除时，明确报告具体冲突，不能以破坏调用契约换取 smell 通过。",
+        ],
     }
 
 
@@ -279,7 +329,11 @@ def _variation_dimensions(instances: list[dict[str, Any]]) -> list[dict[str, Any
 def _must_preserve(
     instances: list[dict[str, Any]], available: list[dict[str, Any]], dimensions: list[dict[str, Any]]
 ) -> list[str]:
-    result = ["所有实例的调用位置、条件边界和片段执行次数"]
+    result = [
+        "原文件导出与类/组件/Builder 入口、构造方式、公共签名及 ClassName.instance 等静态访问方式",
+        "各实例独立状态、对象身份及原有初始化/清理时机",
+        "所有实例的调用位置、条件边界和片段执行次数",
+    ]
     if any(item.get("uiIds") for item in instances):
         result.append("每个实例各自的 .id(...) 字面值和生成时机")
     if any(item.get("callbacks") for item in instances):
