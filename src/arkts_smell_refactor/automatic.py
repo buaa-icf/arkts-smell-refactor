@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import load_dataset_tasks
+from .linter_profile import find_linter_config as _find_linter_config
 from .prompts import build_refactor_prompt, build_review_prompt
 from .public_contract import prepare_public_contract
 from .risk import analyze_risks
 from .runtime_smoke import prepare_runtime_smoke
 from .runner import execute_pipeline
+from .test_execution import TEST_TOOL_BLOCKERS
 from .utils import write_json, write_text
 
 
@@ -52,7 +54,7 @@ def _normalize_pasted_data(data: Any) -> list[dict[str, Any]]:
     raise ValueError("请输入一条异味 JSON 对象 {...} 或阳性数据集 JSON 数组 [{...}]")
 
 
-def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[str, Any]:
+def run_interactive(base_dir: Path, workspace_hint: Path | None = None, *, linter_mode: str = "required") -> dict[str, Any]:
     data = read_pasted_json()
     session_started = time.monotonic()
     session = base_dir / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -64,11 +66,9 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
     print(f"本地仓库根目录：{workspace}")
     tools = _discover_tools(workspace)
     print("工具发现：" + "，".join(f"{k}={'已找到' if v else '未找到'}" for k, v in tools.items()))
+    print(f"Linter 模式：{linter_mode}（skip 表示不执行、不触发返修）")
 
     tasks = load_dataset_tasks(dataset_path, workspace)
-    unknown = [task.task_id for task in tasks if task.raw.get("testKind") not in {"local-test", "instrument-test"}]
-    if unknown:
-        raise ValueError("以下异味无法判定 local-test/instrument-test 归属；请使用数据集原文件或在记录中指定 testKind：" + ", ".join(unknown))
     summary: list[dict[str, Any]] = []
     for number, task in enumerate(tasks, 1):
         task_started = time.monotonic()
@@ -80,14 +80,14 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
         write_json(task_dir / "review-risk.json", _review_risk(risk))
         smoke_plan = prepare_runtime_smoke(task, risk, task_dir)
         contract_plan = prepare_public_contract(task, task_dir)
-        write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk))
+        write_text(task_dir / "refactor-prompt.md", build_refactor_prompt(task, risk, linter_mode=linter_mode))
         review_prompt = build_review_prompt(task, risk)
         review_prompt += f"\n\n本次直接重构本地当前代码，commitHash 仅为元信息，不得用它作为语义基线。"
         review_prompt += "\n平台会在任务目录生成 baseline-production、current-production、review-context-production 与 review-diff.patch。只允许使用这些材料评审，禁止访问原项目。\n"
         write_text(task_dir / "review-prompt.md", review_prompt)
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")
-        config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan)
+        config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan, linter_mode=linter_mode)
         result = execute_pipeline(
             task_dir, config,
             progress=lambda name, status: print(f"  {name}: {status}"),
@@ -109,6 +109,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None) -> dict[
     final = {
         "sessionDir": str(session), "workspace": str(workspace), "counts": counts,
         "durationSeconds": session_duration, "tasks": summary,
+        "validationPolicy": {"linterMode": linter_mode},
     }
     write_json(session / "summary.json", final)
     print(f"\n完成：PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']} INCOMPLETE={counts['INCOMPLETE']}")
@@ -163,6 +164,7 @@ def _find_homecheck(workspace: Path) -> Path | None:
 def _auto_config(
     task, task_dir: Path, risk: dict[str, Any], tools: dict[str, str | None],
     smoke_plan: dict[str, Any] | None = None, contract_plan: dict[str, Any] | None = None,
+    *, linter_mode: str = "required",
 ) -> dict[str, Any]:
     def missing(name: str) -> dict[str, Any]:
         return {"enabled": False, "reason": f"未找到 {name}"}
@@ -201,7 +203,7 @@ def _auto_config(
         "retryDelaySeconds": 2,
         "timeoutSeconds": 3600,
     } if tools["deveco"] else None
-    smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
+    smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "blockedOutputRegex": "SMELL_GATE_BLOCKED", "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
     environment_blockers = network_blockers + (
         r"|Invalid project path|Permissions Error|\bFailed[^\r\n]*@SignHap\b|"
         r"\b(?:signing|signature)(?: verification)?(?: is)? (?:failed|failure|error|invalid|missing)\b|"
@@ -209,10 +211,8 @@ def _auto_config(
         r"Invalid storeFile value|device not found|no devices"
     )
     build = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "assembleHap"), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
-    test_kind = task.raw.get("testKind")
-    test_task = {"local-test": "test", "instrument-test": "onDeviceTest"}.get(test_kind)
-    test_module = _target_module_name(Path(task.target_path), harmony_root) if harmony_root else None
-    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, test_task, test_module), "cwd": "{task_dir}", "blockedOutputRegex": environment_blockers + r"|TEST_EVIDENCE_MISSING|TEST_TARGET_EVIDENCE_MISSING|TEST_ZERO_CASES|TEST_HOST_UNAVAILABLE", "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root and test_task and test_module else {"enabled": False, "reason": "无法确定测试类型或目标模块；需要 local-test/instrument-test 数据集归属或 testKind"}
+    test_blockers = environment_blockers + r"|TEST_GATE_BLOCKED|" + TEST_TOOL_BLOCKERS
+    test = {"command": _hvigor_gate_command(task_dir, harmony_root, tools, "auto-test"), "cwd": "{task_dir}", "blockedOutputRegex": test_blockers, "timeoutSeconds": 3600} if tools["hvigorw"] and harmony_root else missing("hvigorw 或 Harmony 工程根目录")
     runtime = None
     if (smoke_plan or {}).get("enabled") and tools["hvigorw"] and harmony_root:
         runtime_command = [
@@ -236,8 +236,10 @@ def _auto_config(
             ],
             "cwd": "{task_dir}", "timeoutSeconds": 300,
         }
-    linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
-    if tools["codelinter"] and harmony_root:
+    if linter_mode == "skip":
+        linter = {"enabled": False, "reason": "按 linterMode=skip 跳过"}
+    elif tools["codelinter"] and harmony_root:
+        linter_config = _find_linter_config(Path(task.target_path), Path(task.project_root))
         linter_command = [sys.executable, "-m", "arkts_smell_refactor.gate", "linter", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--codelinter", tools["codelinter"]]
         if linter_config:
             linter_command.extend(["--config", str(linter_config)])
@@ -251,6 +253,7 @@ def _auto_config(
         gates["runtime"] = runtime
     return {
         "taskTimeoutSeconds": 1200,
+        "linterMode": linter_mode,
         "refactorAgent": refactor,
         "repairAgent": repair,
         "maxRepairAttempts": 3,
@@ -266,26 +269,6 @@ def _hvigor_gate_command(task_dir: Path, harmony_root: Path, tools: dict[str, st
     if module:
         command.extend(["--module", module])
     return command
-
-
-def _target_module_name(target: Path, harmony_root: Path) -> str | None:
-    for parent in [target.parent, *target.parents]:
-        if (parent / "src" / "main").is_dir():
-            return parent.name
-        if parent == harmony_root:
-            break
-    return None
-
-
-def _find_linter_config(target: Path, project_root: Path) -> Path | None:
-    for parent in [target.parent, *target.parents]:
-        candidate = parent / "code-linter.json5"
-        if candidate.is_file():
-            return candidate
-        if parent == project_root:
-            break
-    matches = list(project_root.glob("code-linter.json5"))
-    return matches[0] if matches else None
 
 
 def _find_harmony_project_root(target: Path, source_project_root: Path) -> Path | None:

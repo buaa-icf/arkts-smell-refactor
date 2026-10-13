@@ -1,10 +1,13 @@
 import json
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import redirect_stdout
+from unittest.mock import Mock, patch
 
-from arkts_smell_refactor.automatic import _auto_config
+from arkts_smell_refactor.automatic import _auto_config, run_interactive
 from arkts_smell_refactor.models import RefactorTask, Target
 from arkts_smell_refactor.public_contract import prepare_public_contract
 from arkts_smell_refactor.runner import _context, _run_spec, execute_pipeline
@@ -42,24 +45,82 @@ class AutomaticConfigTests(unittest.TestCase):
         })
         self.config["reviewAgent"]["retryDelaySeconds"] = 0
 
-    def test_instrument_uses_on_device_test_and_unknown_kind_cannot_pass(self):
-        self.task.raw["testKind"] = "instrument-test"
-        config = _auto_config(self.task, self.task_dir, {}, {
-            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
-            "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
-        })
-        self.assertIn("onDeviceTest", config["gates"]["test"]["command"])
-        self.task.raw.clear()
-        unknown = _auto_config(self.task, self.task_dir, {}, {
-            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
-            "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
-        })
-        self.assertFalse(unknown["gates"]["test"]["enabled"])
+    def test_dataset_kind_is_metadata_and_does_not_replace_test_discovery(self):
+        for raw in ({"testKind": "instrument-test"}, {"testKind": "local-test"}, {}):
+            with self.subTest(raw=raw):
+                self.task.raw = raw
+                config = _auto_config(self.task, self.task_dir, {}, {
+                    "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+                    "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
+                })
+                self.assertIn("auto-test", config["gates"]["test"]["command"])
+                self.assertEqual(1200, config["taskTimeoutSeconds"])
+                self.assertEqual("required", config["linterMode"])
 
     def _output_spec(self, spec, output, exit_code=1):
         return spec | {"command": [
             sys.executable, "-c", f"print({output!r}); raise SystemExit({exit_code})",
         ]}
+
+    def test_pasted_clone_without_catalog_keeps_linter_policy_and_total_timing(self):
+        data = [{"filePath": self.target, "sourceProject": "demo", "messages": [{
+            "rule": "@extrulesproject/code-clone-fragment-check", "message": "clone fragment",
+        }]}]
+        pipeline = Mock(return_value={"verdict": "PASS", "durationSeconds": 12.5, "timedOut": False})
+        with patch.multiple("arkts_smell_refactor.automatic",
+            read_pasted_json=Mock(return_value=data), _discover_workspace=Mock(return_value=self.root),
+            _discover_tools=Mock(return_value=dict(deveco="deveco", hvigorw="hvigorw", ohpm=None, homecheck=None, codelinter=None)),
+            analyze_risks=Mock(return_value={"riskLevel": "low"}),
+            prepare_runtime_smoke=Mock(return_value={}), prepare_public_contract=Mock(return_value={}),
+            build_refactor_prompt=Mock(return_value="refactor"), build_review_prompt=Mock(return_value="review"),
+            execute_pipeline=pipeline,
+        ), redirect_stdout(io.StringIO()):
+            summary = run_interactive(self.root, self.root, linter_mode="skip")
+        config = pipeline.call_args.args[1]
+        self.assertEqual("skip", config["linterMode"])
+        self.assertEqual(1200, config["taskTimeoutSeconds"])
+        self.assertIn("auto-test", config["gates"]["test"]["command"])
+        self.assertIn("task_started_at", pipeline.call_args.kwargs)
+        self.assertEqual({"linterMode": "skip"}, summary["validationPolicy"])
+        self.assertEqual(12.5, summary["tasks"][0]["durationSeconds"])
+
+    def test_auto_test_selection_and_missing_execution_evidence_block_without_repair(self):
+        command = self.config["gates"]["test"]["command"]
+        self.assertEqual("auto-test", command[command.index("--task") + 1])
+        self.assertNotIn("--module", command)
+        for output in ("TEST_GATE_BLOCKED: missing fresh test_result.txt", "Connect server failed", "no connected device"):
+            result = self._run_output("test", self.config["gates"]["test"], output, 3)
+            self.assertEqual("BLOCKED", result.status)
+
+    def test_smell_tool_failure_stops_pipeline_without_code_repair(self):
+        config = self.config
+        config["refactorAgent"] = self._output_spec(config["refactorAgent"], "", 0)
+        config["repairAgent"]["command"] = ["must-not-run"]
+        config["reviewAgent"]["command"] = ["must-not-run"]
+        for name in ("build", "test", "linter"):
+            config["gates"][name] = self._output_spec(config["gates"][name], "", 0)
+        config["gates"]["smell"] = self._output_spec(config["gates"]["smell"],
+            "cloc: Could not create temp file: Permission denied\nSMELL_GATE_BLOCKED: HomeCheck exit 13", 3)
+        result = execute_pipeline(self.task_dir, config)
+        self.assertEqual("BLOCKED", result["verdict"])
+        self.assertEqual(0, result["repairAttempts"])
+        steps = {step["name"]: step["status"] for step in result["steps"]}
+        self.assertEqual("SKIPPED", steps["test"])
+        self.assertEqual("SKIPPED", steps["review-agent"])
+        self.assertTrue(all(steps[name] in {"PASS", "SKIPPED"} for name in ("build", "linter")))
+        self.assertFalse((self.task_dir / "failure-report-1.json").exists())
+
+    def test_explicit_linter_skip_preserves_core_gates_without_codelinter(self):
+        config = _auto_config(self.task, self.task_dir, {}, {
+            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+            "homecheck": str(self.root / "homecheck"), "codelinter": None,
+        }, linter_mode="skip")
+        self.assertEqual("skip", config["linterMode"])
+        self.assertFalse(config["gates"]["linter"]["enabled"])
+        self.assertNotIn("command", config["gates"]["linter"])
+        for name in ("smell", "build", "test"):
+            self.assertEqual(self.config["gates"][name], config["gates"][name])
+        self.assertEqual(self.config["reviewAgent"]["command"], config["reviewAgent"]["command"])
 
     def _run_output(self, name, spec, output, exit_code=1):
         return _run_spec(

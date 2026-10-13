@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import CommandResult, RefactorTask
+from .test_execution import failed_hypium_cases, is_test_host_unavailable, parse_hypium_cases
 from .utils import read_json, write_json, write_text
 
 
@@ -39,6 +40,10 @@ def execute_pipeline(
     task_dir: Path, config: dict[str, Any], dry_run: bool = False, progress=None,
     task_started_at: float | None = None,
 ) -> dict[str, Any]:
+    linter_mode = config.get("linterMode", "required")
+    if linter_mode not in {"required", "skip"}:
+        raise ValueError("linterMode 必须为 required 或 skip")
+    validation_policy = {"linterMode": linter_mode}
     pipeline_started = task_started_at if task_started_at is not None else time.monotonic()
     task_timeout = float(config.get("taskTimeoutSeconds", 1200))
     task_deadline = None if dry_run or task_timeout <= 0 else pipeline_started + task_timeout
@@ -72,11 +77,13 @@ def execute_pipeline(
         write_json(task_dir / "gates.json", {
             "schemaVersion": "1.0",
             "taskId": task.task_id,
+            "validationPolicy": validation_policy,
             "gates": [item.to_dict() for item in gate_results],
         })
         results.extend(gate_results)
         results.append(CommandResult("review-agent", "SKIPPED", reason=reason))
         result = _final_result(task.task_id, results, dry_run)
+        result["validationPolicy"] = validation_policy
         _add_timing(result, pipeline_started, task_timeout)
         write_json(task_dir / "result.json", result)
         return result
@@ -97,12 +104,15 @@ def execute_pipeline(
         results.extend(gate_results)
         write_json(task_dir / "gates.json", {
             "schemaVersion": "1.0", "taskId": task.task_id,
+            "validationPolicy": validation_policy,
             "attempt": repair_number, "gates": [item.to_dict() for item in gate_results],
         })
 
         accepted = {"PASS", "DRY_RUN"} if dry_run else {"PASS"}
         by_name = {item.name: item for item in gate_results}
-        core_names = [name + suffix for name in ("smell", "build", "test", "linter")]
+        core_names = [name + suffix for name in ("smell", "build", "test")]
+        if linter_mode == "required":
+            core_names.append("linter" + suffix)
         core_pass = all(name in by_name and by_name[name].status in accepted for name in core_names)
         runtime_name = "runtime" + suffix
         runtime_pass = runtime_name not in by_name or by_name[runtime_name].status in accepted
@@ -147,12 +157,16 @@ def execute_pipeline(
                 results.append(skipped)
                 terminal = [*gate_results, skipped]
         else:
-            reason = "前四层门禁未全部通过，Review 不执行"
+            reason = "本次必需门禁未全部通过，Review 不执行"
             skipped = CommandResult("review-agent" + suffix, "SKIPPED", reason=reason)
             results.append(skipped)
             terminal = [*gate_results, skipped]
 
-        failed = next((item for item in terminal if item.status in {"FAIL", "BLOCKED"}), None)
+        # Parallel gates may finish with both a defect and an environment blocker.
+        # A repair cannot resolve the blocker, even if FAIL precedes it in display order.
+        failed = next((item for item in terminal if item.status == "BLOCKED"), None)
+        if failed is None:
+            failed = next((item for item in terminal if item.status == "FAIL"), None)
         attempts.append({"attempt": repair_number, "steps": [item.to_dict() for item in terminal]})
         if dry_run or not failed or failed.status == "BLOCKED" or repair_number >= max_repairs or not repair_spec:
             break
@@ -168,7 +182,7 @@ def execute_pipeline(
         while failure["repairable"] and repair_number < max_repairs:
             repair_number += 1
             repair_prompt = task_dir / f"repair-prompt-{repair_number}.md"
-            write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number))
+            write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number, linter_mode=linter_mode))
             context["repair_prompt_file"] = str(repair_prompt.resolve())
             if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
             repair_result = _run_spec(
@@ -189,7 +203,13 @@ def execute_pipeline(
         if not repair_result or repair_result.status != "PASS":
             break
 
-    result = _final_result(task.task_id, results, dry_run, terminal)
+    required_terminal = [
+        item for item in terminal
+        if not (linter_mode == "skip" and item.name.split("-repair-", 1)[0] == "linter"
+                and item.status == "SKIPPED")
+    ]
+    result = _final_result(task.task_id, results, dry_run, required_terminal)
+    result["validationPolicy"] = validation_policy
     result["repairAttempts"] = repair_number
     result["reviewRetries"] = review_retries
     result["attempts"] = attempts
@@ -218,6 +238,8 @@ def _run_gates_fail_fast(
 
     def run_parallel(gate_name: str) -> CommandResult:
         result_name = gate_name + suffix
+        if gate_name == "linter" and config.get("linterMode", "required") == "skip":
+            return CommandResult(result_name, "SKIPPED", reason="按 linterMode=skip 跳过，不参与验收或返修")
         spec = gates.get(gate_name)
         if not spec or not spec.get("enabled", True):
             return CommandResult(result_name, "SKIPPED", reason="未配置或已禁用")
@@ -226,7 +248,9 @@ def _run_gates_fail_fast(
             cancel_event=stop_event, task_deadline=task_deadline,
         )
 
-    runnable = [name for name in parallel_names if gates.get(name, {}).get("enabled", True)]
+    runnable = [name for name in parallel_names
+                if (gates.get(name) or {}).get("enabled", True)
+                and not (name == "linter" and config.get("linterMode", "required") == "skip")]
     for name in runnable:
         if progress: progress(name, "开始")
     with ThreadPoolExecutor(max_workers=max(1, len(parallel_names)), thread_name_prefix="arkts-gate") as pool:
@@ -311,26 +335,31 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     # Only failed test cases may establish that a test failure belongs to this change.
     test_failures = _failed_test_evidence(task_dir, failed) if logical_stage == "test" else None
     if test_failures is not None:
-        log_text = "\n\n".join(test_failures)
+        log_text = "\n\n".join(_format_test_case(case) for case in test_failures)
         # A mixed result cannot become green by repairing only the related cases.
         # Never send unrelated failures to an agent with production-write access.
         attributable = all(
-            _mentions_changed_production(case, changes)
+            case.get("targeted", False)
+            or _mentions_changed_production(_format_test_case(case), changes)
             or any(re.search(
-                rf"(?im)^class={re.escape(Path(path).stem)}(?:Instrument)?Test\s*$", case,
+                rf"(?im)^class={re.escape(Path(path).stem)}(?:Instrument)?Test\s*$", _format_test_case(case),
             ) for path in changes)
-            or bool(task.target.symbol and task.target.symbol.lower() in case.lower())
+            or bool(task.target.symbol and task.target.symbol.lower() in _format_test_case(case).lower())
             for case in test_failures
         )
     else:
+        if logical_stage == "test":
+            current_logs = _current_test_failure_logs(task_dir)
+            if current_logs is not None:
+                log_text = current_logs
         attributable = _mentions_changed_production(log_text, changes)
-    test_host_unavailable = bool(
-        test_failures and attributable and all(_test_host_unavailable(case) for case in test_failures)
+    host_unavailable = bool(
+        test_failures and attributable and all(is_test_host_unavailable(case["details"]) for case in test_failures)
     )
     if logical_stage in {"smell", "contract", "runtime", "linter", "review-agent"}:
         repairable = True
     elif logical_stage == "test" and test_failures is not None:
-        repairable = attributable and not test_host_unavailable
+        repairable = attributable and not host_unavailable
     elif logical_stage in {"build", "test"}:
         repairable = bool(attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower()))
     else:
@@ -338,7 +367,7 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     classification = {
         "smell": "SMELL_REMAINS_OR_MOVED",
         "build": "INTRODUCED_BUILD_FAILURE" if repairable else "UNATTRIBUTED_BUILD_FAILURE",
-        "test": ("TEST_HOST_UNAVAILABLE" if test_host_unavailable else
+        "test": ("TEST_HOST_UNAVAILABLE" if host_unavailable else
                  "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE"),
         "linter": "INTRODUCED_LINTER_FAILURE",
         "runtime": "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
@@ -350,7 +379,7 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         "schemaVersion": "1.0", "attempt": next_attempt, "stage": logical_stage,
         "classification": classification, "repairable": repairable,
         "summary": ("目标测试在 beforeAll 阶段找不到测试宿主组件，尚未执行目标断言；不可归因于本次生产代码修改"
-                    if test_host_unavailable else summary or failed.reason or f"{logical_stage} 未通过"),
+                    if host_unavailable else summary or failed.reason or f"{logical_stage} 未通过"),
         "changedProductionFiles": changes, "issues": issues,
         "logTail": log_text,
     }
@@ -392,16 +421,54 @@ def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
     return False
 
 
-def _test_host_unavailable(case: str) -> bool:
-    """A missing UI test host in setup is not evidence of a production regression."""
-    return bool(
-        re.search(r"(?i)(?:component not found|unable to find id)\s*:\s*[^\r\n]+", case)
-        and re.search(r"(?i)error in beforeAll function", case)
-    )
+def _format_test_case(case: dict[str, Any]) -> str:
+    return f"class={case['suite']}\ntest={case['name']}\n{case['details']}\nresult={case['result']}"
 
 
-def _failed_test_evidence(task_dir: Path, failed: CommandResult) -> list[str] | None:
+def _current_test_failures(task_dir: Path) -> list[dict[str, Any]] | None:
+    """Only the current attempt's failed jobs may supply repair evidence."""
+    manifest = task_dir / "test-results.json"
+    if not manifest.is_file():
+        return None
+    result = read_json(manifest)
+    plan = Path(str(result.get("plan", ""))).resolve()
+    if not plan.is_relative_to((task_dir / "test-attempts").resolve()):
+        return []
+    jobs = []
+    for job in result.get("jobs", []):
+        if job.get("status") not in {"FAIL", "BLOCKED"}:
+            continue
+        # Never read a previous repair's report or a shared Hvigor result path.
+        files = {"log": job.get("log"), **job.get("artifacts", {})}
+        valid = {name: Path(path) for name, path in files.items() if path
+                 and Path(path).resolve().is_relative_to(plan.parent) and Path(path).is_file()}
+        jobs.append(job | {"evidenceFiles": valid})
+    return jobs
+
+
+def _current_test_failure_logs(task_dir: Path) -> str | None:
+    jobs = _current_test_failures(task_dir)
+    if jobs is None:
+        return None
+    return "\n\n".join(job["evidenceFiles"]["log"].read_text(encoding="utf-8", errors="replace")
+                       for job in jobs if "log" in job["evidenceFiles"])
+
+
+def _failed_test_evidence(task_dir: Path, failed: CommandResult) -> list[dict[str, Any]] | None:
     """Return only failing Hypium cases; None means no usable case-level report."""
+    jobs = _current_test_failures(task_dir)
+    if jobs is not None:
+        failures = []
+        for job in jobs:
+            report = job["evidenceFiles"].get("test_result.txt")
+            if report is None:
+                continue
+            for case in failed_hypium_cases(parse_hypium_cases(report)):
+                targeted = (job.get("selectionReason") == "target-named-suite"
+                            and case["suite"] in job.get("expectedSuites", []))
+                failures.append(case | {"targeted": targeted})
+        return failures or None
+    # Compatibility for custom test commands that predate auto-test manifests.
     workspace_file = task_dir / "validation-workspace.json"
     if not workspace_file.is_file() or not failed.command:
         return None
@@ -419,21 +486,9 @@ def _failed_test_evidence(task_dir: Path, failed: CommandResult) -> list[str] | 
                } and path.parents[5].name == module]
     if not reports:
         return None
-    failures: list[str] = []
+    failures = []
     for report in reports:
-        suite = ""
-        case: list[str] = []
-        for line in report.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.startswith("class="):
-                suite = line
-            elif line.startswith("test="):
-                case = [suite, line]
-            elif line.startswith("result="):
-                if line != "result=Success" and case:
-                    failures.append("\n".join([*case, line]))
-                case = []
-            elif case:
-                case.append(line)
+        failures.extend(failed_hypium_cases(parse_hypium_cases(report)))
     return failures or None
 
 

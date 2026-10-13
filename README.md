@@ -42,7 +42,9 @@
 | `feature-envy-check` | Feature Envy | 调用点、公开接口、委托和兼容入口 |
 | `long-method-check` | Long Method | ArkUI 状态、Builder、组件树、新增克隆 |
 | `switch-statement-check` | Switch Statement | 按符号定位真实分支；区分值映射、分组 case、可执行 fall-through、行为策略和长 if/else 链 |
-| `code-clone-fragment-check` | Code Clone | 关联片段、UI ID、片段差异 |
+| `code-clone-fragment-check` | Code Clone | 关联片段、原入口保留、委托抽取、UI 宿主与片段差异 |
+
+Code Clone 的专属画像默认要求保留原文件导出、类/组件/Builder 及静态入口（如 `ClassName.instance`），优先抽取内部共同逻辑。同类优先私有方法或成员 Builder，跨类优先保留各自入口并委托共享 Helper；使用共享基类/组件须确认状态所有权和生命周期不变。画像还提供生产文件中的入口线索，并明确保留独立单例、初始化时机、UI 宿主与选择器。首轮、返修及评审使用同一份策略；残留克隆不能通过删除旧入口、改名或调整检测规则消除。这些提示约束不能替代构建、测试和异味门禁。
 
 ## 目录结构
 
@@ -191,10 +193,9 @@ python -m arkts_smell_refactor start --workspace "D:\ROG\Documents\harmonyos\fea
 粘贴 JSON
 → 静态风险分析
 → DevEco Code 重构
-→ HomeCheck 异味复检
-→ hvigorw 编译
+→ 并行验证：HomeCheck 异味复检、hvigorw 编译、公共契约、Code Linter
+→ 按风险执行 runtime smoke
 → Local Test 或 Instrument Test
-→ Code Linter
 → 独立 DevEco Code 评审
 → 失败时生成定向失败报告并最多修复 3 轮
 → 汇总 PASS / FAIL / BLOCKED
@@ -217,7 +218,7 @@ Agent 在隔离区执行 Hvigor 验证时自动产生的模块级 `BuildProfile.
 
 默认重构规范是保留原方法、所属类、签名和调用关系，优先使用 Extract Method、Extract Class 或 Introduce Delegate。也就是把依恋外部对象的逻辑提取出去，由原方法委托，而不是删除/搬走原方法再批量修改调用方。
 
-Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、diff 直接依赖的一跳生产实现、风险报告和前四层结果，并把其工作目录限制在任务目录；它不扫描原项目、调用点或测试代码，也不重复运行构建和测试。新增委托、Mapper、Builder、Helper 等依赖实现会进入 `review-context-production`，避免因收窄项目访问而丢失语义证据。
+Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、相关生产依赖、风险报告和门禁结果，并把其工作目录限制在任务目录；它不扫描原项目、调用点或测试代码，也不重复运行构建和测试。依赖材料沿相对 import/export、本地 `file:` 包和模块入口递归收集，覆盖新增委托、Mapper、Builder、Helper 的调用链，通过已处理文件集合终止循环；材料写入 `review-context-production` 和 `review-context.json`。
 
 工具会自动从 PATH 查找实际安装的 `deveco`、`hvigorw`、`codelinter`，并自动定位同一工作区下的 `homecheck-extrule`。缺少工具时对应步骤记为 `BLOCKED/INCOMPLETE`，不会要求使用者临时拼接命令。
 
@@ -426,26 +427,55 @@ python -m arkts_smell_refactor run `
 
 ```text
 DevEco Code Refactor Agent
-  → 并行门禁：异味复检 + 编译 + 公共契约检查（启用时）+ Code Linter
-  → 目标模块 Local Test 或 Instrument Test（并行门禁全部通过后）
+  → 并行：异味复检、编译、已配置的公共契约、Code Linter（required 模式）
+  → runtime smoke（按风险启用）
+  → 自动选择相关 Local Test / Instrument Test（必要时两者都运行）
   → 独立 DevEco Code Review Agent
 ```
 
-流水线严格 fail-fast：并行组中任一门禁 `FAIL/BLOCKED` 后，平台立即终止仍在运行的同组进程，跳过 test 和 Review，并针对实际失败阶段生成 `failure-report-N.json`；test 失败后跳过 Review。失败分析兼容 smell、build、contract、runtime、test、linter 和 review，不依赖固定的失败顺序。可归因于本次修改的失败会生成 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新执行完整门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+流水线采用 fail-fast：并行组中任一门禁 FAIL/BLOCKED 时终止尚未完成的同组子进程，并跳过 runtime/test/review；已经完成的门禁保留实际结果。并行组完成后，runtime 与 test 依次执行，Review 只在本次必需门禁全部 PASS 后运行。`linterMode=skip` 时 Linter 不启动、不参与验收或返修。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent 继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建；修改后重新执行本次启用的全部门禁。出现 `BLOCKED`（包括与其他门禁 FAIL 同时发生）或无法归因到本次修改的 build/test 失败时，不进入代码修复 loop。
 
-测试类型取自 `dataset/positive/local-test` 或 `dataset/positive/instrument-test`；交互粘贴时通过工作区中的阳性数据集精确匹配，也可在记录中显式填写 `testKind`。无法判定时在重构前停止，不会默认跑 Local Test。Local Test 执行 `hvigor test -p module=<模块> -p coverage=true`；Instrument Test 执行 `hvigor onDeviceTest -p module=<模块>@ohosTest -p coverage=true`，需要可用设备。hvigor 仍执行整个模块，但平台从本次生成的 `test_result.txt` 按目标文件、方法名、测试源码中的直接调用和测试套件定位当前样例用例，只以这些用例判断 `test` 门禁；其他套件失败单独记录在 `test-attribution.json`，不算当前样例失败。无法明确定位目标用例时记为 `BLOCKED`，绝不因其他用例通过而报 PASS。Instrument Test 还要求设备端 `coverage.log` 确认执行完成。仅有 `BUILD SUCCESSFUL` 或命令退出码 0 不算 `test: PASS`。如果目标套件没有可区分的方法级用例，保守地把该套件全部用例纳入当前样例；此时同套件其他方法的失败仍可能阻断本样例，需要补充明确的测试映射。
+自动运行的单条任务默认总上限为 1200 秒，覆盖风险及提示词准备、Refactor、门禁、Repair 和 Review；到达上限后终止正在执行的子进程树并记为 BLOCKED。高级配置通过 `taskTimeoutSeconds` 调整，非正值表示关闭总上限；各步骤的 `timeoutSeconds` 仍独立生效。`result.json` 记录 `durationSeconds`、`timeoutSeconds` 和 `timedOut`，自动运行的 `summary.json` 同时记录任务与批次耗时。批次耗时包含输入解析后的初始化，任务耗时从该条风险分析准备开始；外部计时若还包含源码快照、启动等步骤，应保留原口径，不能直接替换为这里的任务耗时。20 分钟是执行保护上限，不是同类 7 分钟或跨类 15 分钟的达标阈值。
 
-每条异味从开始生成风险分析起最多执行 1200 秒（20 分钟），该总时限覆盖 Refactor Agent、全部门禁、所有 Repair Loop 和 Review Agent。到达上限后平台会终止当前子进程，最终记为 `BLOCKED`，并在控制台显示“已达到20分钟上限”。`result.json` 和批次 `summary.json` 会记录 `durationSeconds`；`result.json` 另记录 `timeoutSeconds` 与 `timedOut`。
+HomeCheck 子进程使用任务内的 `homecheck-temp` 临时目录，避免 Windows 版 cloc 无法在系统临时目录创建文件。每次扫描保存独立报告，只接受本轮有效结果；扫描工具非零退出、报告缺失或格式错误记为 `BLOCKED`，不启动生产代码返修。只有扫描完成后仍命中目标或变更范围内异味，smell 才记为可返修的 `FAIL`。
+
+测试门禁使用 `auto-test`：读取工程根 `build-profile.json5` 的模块映射，在各模块的 `src/test` 与 `src/ohosTest` 中查找与目标文件、克隆关联文件同名的 `Foo.test.ets/ts/js` 或 `FooTest.test.ets/ts/js`，从 `describe` 提取套件名并设置 `scope`。测试可以位于其他宿主模块（例如 `phone` 模块测试 `order` 模块的页面）。同一目标两类测试都有时均运行；目标无法匹配、套件名无法静态确定或新增变更模块没有对应目标时，回退到该模块全部现有测试类型。该匹配是命名约定，不代表已证明方法覆盖率；不使用数据集目录名或 UI 装饰器猜测测试类型。
+
+数据集目录和显式 `testKind` 保留为任务元信息，不控制自动测试选择；交互粘贴不要求同一工作区下存在数据集目录。Code Clone 可以没有 `target.symbol`，仍按目标文件及关联片段选择套件。
+
+选择候选文件前，从各测试类型的 `List.test.ets/ts/js` 沿静态 import/export 检查可达性，排除未接入入口的遗留测试文件，也不将其加入模块回退的预期套件。例如 Local 目录留有 `RecommendBar.test.ets`，但入口只注册了 LocalUnit，而 Instrument 入口接入了 RecommendBar，则选择目标 Instrument。支持入口别名、间接注册与重导出；没有标准入口、存在动态加载或无法解析的相对依赖时保守保留候选，不静默免除某类测试。静态可达不保证运行时确实注册，实际套件与用例证据仍必须通过下面的检查。
+
+Local Test 使用 `test -p module=<模块名>`，Instrument Test 使用 `onDeviceTest -p module=<模块名>@ohosTest`，均开启 coverage。设备测试需要已连接设备和可用签名。每个子任务运行前清除验证副本中的旧结果，运行后必须同时满足 Hvigor 成功退出、产生新的 Hypium 结果、实际执行非零用例且无失败，以及预期套件确实执行。Instrument 还要求本轮 `coverage.log` 同时包含 `OHOS_REPORT_RESULT:` 和 `TestFinished-ResultCode: 0`。仅构建/签名成功、零用例、缺失结果或缺失预期套件不会 PASS；环境或证据不足记为 BLOCKED。所有用例在 beforeAll 因找不到宿主组件而中断时也记为 BLOCKED；断言阶段找不到组件仍是 FAIL。子任务仍遵循 fail-fast。
+
+`test-plan.json` 保存选择依据；`test-results.json` 保存最新汇总；`test-attempts/<时间戳>/` 保留各轮每个子任务的命令、耗时、日志和原始测试结果。以前只执行 Local Test 的实验需按新门禁重新计时，不能直接沿用为完整测试验收指标。高级配置直接执行外部测试命令时，应自行提供等价的结果校验。
+
+测试验收以本次选中套件的全部实际用例为准；模块回退时验收该模块实际运行的全部套件，不按方法名排除失败。返修归因只读取最新一轮失败子任务的报告：目标命名套件、指向变更生产文件的失败栈等可作为归因证据；通过子任务的编译日志、历史报告和无关失败不能单独触发生产代码返修。同一轮混有无法归因的失败时停止返修。只有编译失败、尚无用例结果时，使用本轮失败子任务的编译诊断。
+
+若验收不要求 Linter，可显式跳过，避免纯格式/命名问题触发修复循环：
+
+```powershell
+python -m arkts_smell_refactor start --workspace D:\arktsProgram --linter-mode skip
+```
+
+通用 CLI 默认为 `--linter-mode required`；高级 `run --config` 用配置顶层 `"linterMode": "skip"` 表达相同策略。仅删除 Linter 配置或设置 `enabled: false` 不构成豁免，默认仍判 INCOMPLETE。跳过时不执行 Linter、不触发其返修，`gates.json` 和 `result.json` 保存 `validationPolicy.linterMode` 与 `linter: SKIPPED`；构建、测试、异味、已配置的契约/runtime 门禁和语义评审仍需通过。新批次需注明该策略，与历史完整门禁结果分别报告。
+
+required 模式会把目标 ArkTS 项目 `code-linter.json5` 中明确配置的命名、可见性、分号、尾逗号、引号等风格规则摘录到首轮和返修 Prompt。摘要与自动门禁共用配置定位逻辑，保留文件范围、原始选项、关闭项和例外；不执行配置中的文本。`ruleSet` 的继承规则及未写出的默认选项尚未展开，因此摘要不能代替实际 Linter，也不保证消除全部返修。skip 模式不读取或注入此摘要。恢复 Linter 的实际耗时收益需重新实验确认。
 
 对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。
 
 框架同时冻结模块导出和目标类公共成员的词法契约。build 之后会检查旧导出/公共成员是否被删除，以及静态性、参数和类型签名是否变化；新增公共成员不会失败。复杂别名与动态 re-export 仍作为已知限制记录。
 
-Refactor/Repair Agent 每轮最多调用两次 `build_project`：第一次失败后，只有确认是本轮修改导致的编译错误，才允许修复并进行第二次构建；第二次后由平台 loop 统一管理。
+Refactor/Repair Agent 的内部验证只允许使用 DevEco Code 的 `build_project` 与 `arkts_check`，两者每轮合计不超过 2 次：完成编辑后选择一种必要验证，首次通过即停止；只有确认是本轮修改导致的编译或静态检查缺陷，才允许修复后追加一次验证。任一次遇到 SDK、wrapper、证书、签名、依赖下载或网络环境错误都停止内部验证。第二次后交由平台 loop 管理，完整门禁仍由平台统一执行。
+
+提示词要求优先批量读取目标、已知实例和静态画像列出的相关片段，不重复探索已确认的信息，信息足够后即开始编辑；画像缺失、未解析或与源码不符时，可在隔离工程内定向补齐直接依赖。修复轮优先读取失败文件及已修改/新增文件，按当前源码处理行号漂移。没有读取次数硬上限，也不允许从原仓库或历史快照搜索、复制实现。全部实例编辑完成后再验证，并保留行为等价约束。
+
+执行层会把附件中的仓库相对、工作区相对和绝对源码路径转换为实际隔离 Harmony 工程的相对路径，避免大仓内多工程目录前缀导致首次读取失败。风险分析的源码枚举在进入目录前排除既有依赖/构建缓存忽略项，避免递归遍历无效子树；有效源码与调用点扫描范围保持不变。
+
+提示词预置 `@Param`/`@Require`、组件输入和显式导出的常见缺陷，同时要求沿用局部命名/格式约定、保留 `ForEach` 键值语义，减少可避免的返修。目标是提升同类修改 ≤7 分钟、跨类修改 ≤15 分钟的端到端达标率（含修复与全部门禁），设计、基线和待验证项见 [`docs/agent-time-cost-optimization.md`](docs/agent-time-cost-optimization.md)。这些约束由提示词表达，不是工具调用层的强制计数或访问控制。
+
+内部验证不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过环境错误。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
 
 修复 Prompt 直接附带 build/test 失败日志尾部（最多 12000 字符）、本次修改文件，以及结构化问题中的文件、行列和修复要求，隔离 Agent 无需访问工作区外的日志。抽取辅助方法时要求核对调用处的真实可选类型与上下文；例如保留 `string | undefined` 参数或调整 `Date` 调用的抽取边界，避免用新增默认值或提前返回改变行为。修复成功后重新执行全部门禁，以最终一轮结果判定 PASS。
-
-Agent 的内部验证只允许使用 DevEco Code 的 `build_project`。SDK、证书、签名、依赖下载或网络环境错误会停止内部验证，不能通过创建 wrapper、锁文件或修改 `local.properties` 绕过。同步回真实仓库时，平台会丢弃内部验证产生的 `local.properties`、Hvigor wrapper、`package-lock.json` 和 `pnpm-lock.yaml`；真实的业务配置、资源或依赖修改仍会拒绝整轮同步。
 
 当前 DevEco Code CLI 没有提供本工具可用的“仅允许工作目录”无人值守权限参数，因此 Refactor/Repair Agent 的工作区隔离属于复制隔离和回写白名单，不是操作系统级沙箱。提示词已禁止工作区外操作，平台也只会回写白名单生产源码，但无法自动撤销 Agent 对工作区外文件已经发生的修改；应使用专用系统账户或受限执行环境运行不受信任的模型。
 

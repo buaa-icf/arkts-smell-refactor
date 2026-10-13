@@ -18,6 +18,8 @@ from typing import Any
 from .runtime_smoke import render_runtime_smoke_list, render_runtime_smoke_test
 from .public_contract import compare_public_contract, snapshot_public_contract
 from .utils import read_json, write_json
+from .test_plan import build_test_plan
+from .test_execution import run_test_plan
 
 
 IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
@@ -39,12 +41,12 @@ def refactor_gate(
     _fresh_copy(source_root, workspace, exclude_tests=True)
     target_file = Path(task["workspace_root"]) / task["target"]["file_path"]
     try:
-        target_relative = target_file.resolve().relative_to(source_root.resolve())
+        target_file.resolve().relative_to(source_root.resolve())
     except ValueError:
         print("目标文件不在检测到的 Harmony 工程内", file=sys.stderr)
         return 3
     prompt = (prompt_file or (task_dir / "refactor-prompt.md")).read_text(encoding="utf-8")
-    prompt = prompt.replace(task["target"]["file_path"], target_relative.as_posix())
+    prompt = _normalize_agent_prompt_paths(prompt, task, source_root)
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
     command = [str(deveco), "run"]
@@ -63,8 +65,39 @@ def refactor_gate(
     return _sync_production_changes(workspace, source_root)
 
 
+def _normalize_agent_prompt_paths(prompt: str, task: dict[str, Any], source_root: Path) -> str:
+    """Rebase prompt paths to the Harmony root actually copied into the agent mirror."""
+    source = source_root.resolve()
+    prefixes = {source.as_posix()}
+    for root_key in ("workspace_root", "project_root"):
+        if not task.get(root_key):
+            continue
+        try:
+            relative = source.relative_to(Path(task[root_key]).resolve()).as_posix()
+        except ValueError:
+            continue
+        if relative != ".":
+            prefixes.add(relative)
+    # Match whole path prefixes, not substrings of another project's path. Handle
+    # both detector paths and repository-relative paths already rendered by prompts.py.
+    alternatives = [re.escape(prefix).replace("/", r"[\\/]") for prefix in sorted(prefixes, key=len, reverse=True)]
+    pattern = r"(?<![\w./\\:-])(?:" + "|".join(alternatives) + r")[\\/]"
+    return re.sub(pattern, "", prompt)
+
+
 def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | None, task_name: str, module: str | None = None) -> int:
     """Validate from an ASCII-path copy so hvigor never sees a Chinese project path."""
+    plan = None
+    if task_name in {"auto-test", "test", "onDeviceTest"}:
+        # Copy/install/plan failures must not expose a previous repair's results.
+        write_json(task_dir / "test-results.json", {"status": "RUNNING", "jobs": []})
+        try:
+            plan = build_test_plan(task_dir, source_root, task_name, module)
+        except (OSError, ValueError, KeyError, SyntaxError) as error:
+            print(f"TEST_GATE_BLOCKED: cannot determine test plan: {error}", file=sys.stderr)
+            write_json(task_dir / "test-results.json", {"status": "BLOCKED", "reason": str(error), "jobs": []})
+            return 3
+        write_json(task_dir / "test-plan.json", plan)
     tool_root = task_dir.parents[2]
     short_id = hashlib.sha1(str(task_dir).encode("utf-8")).hexdigest()[:8]
     workspace = tool_root / "v" / short_id
@@ -79,160 +112,10 @@ def hvigor_gate(task_dir: Path, source_root: Path, hvigorw: Path, ohpm: Path | N
         if installed.returncode != 0:
             return installed.returncode
         install_marker.write_text("ok", encoding="ascii")
-    if task_name in {"test", "onDeviceTest"} and not module:
-        print("TEST_EVIDENCE_MISSING: no target module", file=sys.stderr)
-        return 3
-    result_kind = "test" if task_name == "test" else "ohosTest" if task_name == "onDeviceTest" else None
-    if result_kind:
-        (task_dir / "test-attribution.json").unlink(missing_ok=True)
-        for stale in _hvigor_test_results(workspace, result_kind, module):
-            stale.unlink()
-            if task_name == "onDeviceTest":
-                stale.with_name("coverage.log").unlink(missing_ok=True)
-    command = [*_hvigor_launcher(hvigorw), task_name]
-    if task_name == "test":
-        command.extend(["-p", f"module={module}", "-p", "coverage=true"])
-    elif task_name == "onDeviceTest":
-        command.extend(["-p", f"module={module}@ohosTest", "-p", "coverage=true"])
-    command.append("--no-daemon")
-    completed = subprocess.run(command, cwd=workspace, env=_deveco_environment(hvigorw))
-    if result_kind is None:
-        return completed.returncode
-    results = _hvigor_test_results(workspace, result_kind, module)
-    if not results:
-        if completed.returncode != 0:
-            return completed.returncode
-        print(f"TEST_EVIDENCE_MISSING: {task_name} produced no test_result.txt for {module}", file=sys.stderr)
-        return 3
-    summaries = [_parse_hypium_result(path) for path in results]
-    if any(summary is None for summary in summaries):
-        print(f"TEST_EVIDENCE_MISSING: invalid test_result.txt for {module}", file=sys.stderr)
-        return 3
-    total = sum(summary["tests"] for summary in summaries if summary)
-    failures = sum(summary["failures"] + summary["errors"] for summary in summaries if summary)
-    passed = sum(summary["passed"] for summary in summaries if summary)
-    if total == 0:
-        print(f"TEST_ZERO_CASES: {task_name} ran zero cases for {module}", file=sys.stderr)
-        return 3
-    cases = [case for path in results for case in _parse_hypium_cases(path)]
-    target_cases = _target_test_cases(task_dir, results[0].parents[5], result_kind, cases)
-    if target_cases is not None:
-        selected = [case for index, case in enumerate(cases) if index in target_cases]
-        unrelated = [case for index, case in enumerate(cases) if index not in target_cases and case["result"] != "Success"]
-        write_json(task_dir / "test-attribution.json", {
-            "schemaVersion": "1.0", "module": module, "testKind": task_name,
-            "totalCases": total, "targetCases": selected, "unrelatedFailures": unrelated,
-        })
-        if not selected or len(cases) != total:
-            print(f"TEST_TARGET_EVIDENCE_MISSING: matched {len(selected)} target cases out of {total}", file=sys.stderr)
-            return 3
-        target_failures = [case for case in selected if case["result"] != "Success"]
-        if target_failures:
-            if task_name == "onDeviceTest" and len(target_failures) == len(selected) and all(
-                re.search(r"(?i)(?:component not found|unable to find id)\s*:\s*[^\r\n]+", case["details"])
-                and re.search(r"(?i)error in beforeAll function", case["details"])
-                for case in target_failures
-            ):
-                print("TEST_HOST_UNAVAILABLE: target cases stopped in beforeAll before exercising production code", file=sys.stderr)
-                return 3
-            print(f"TEST_TARGET_CASE_FAILURE: {len(selected) - len(target_failures)}/{len(selected)} passed", file=sys.stderr)
-            return 1
-    elif failures or passed != total:
-        print(f"TEST_CASE_FAILURE: {passed}/{total} passed, {failures} failed or errored", file=sys.stderr)
-        return 1
-    if task_name == "onDeviceTest":
-        for path in results:
-            result_text = path.read_text(encoding="utf-8", errors="replace")
-            device_log = path.with_name("coverage.log")
-            device_text = device_log.read_text(encoding="utf-8", errors="replace") if device_log.is_file() else ""
-            if ("result=Success" not in result_text or "OHOS_REPORT_RESULT:" not in device_text
-                    or "TestFinished-ResultCode: 0" not in device_text):
-                print("TEST_EVIDENCE_MISSING: device execution result was not confirmed", file=sys.stderr)
-                return 3
-    if target_cases is not None:
-        print(f"TEST_TARGET_CASES_VERIFIED: {len(selected)}/{len(selected)} passed via {task_name}")
-        if unrelated:
-            print(f"TEST_UNRELATED_FAILURES: {len(unrelated)} other module cases failed; see test-attribution.json")
-    else:
-        print(f"TEST_CASES_VERIFIED: {passed}/{total} passed via {task_name}")
-    return 0
-
-
-def _hvigor_test_results(workspace: Path, kind: str, module: str | None) -> list[Path]:
-    expected = (".test", "default", "intermediates", kind, "coverage_data")
-    return [path for path in workspace.rglob("test_result.txt")
-            if path.parts[-6:-1] == expected and path.parents[5].name == module
-            and not {"oh_modules", "node_modules"}.intersection(path.relative_to(workspace).parts)]
-
-
-def _parse_hypium_cases(path: Path) -> list[dict[str, str]]:
-    cases: list[dict[str, str]] = []
-    suite = ""
-    name = ""
-    details: list[str] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("class="):
-            suite = line[6:]
-        elif line.startswith("test="):
-            name = line[5:]
-            details = []
-        elif line.startswith("result=") and name:
-            cases.append({"suite": suite, "name": name, "result": line[7:], "details": "\n".join(details)})
-            name = ""
-        elif name:
-            details.append(line)
-    return cases
-
-
-def _target_test_cases(
-    task_dir: Path, module_root: Path, kind: str, cases: list[dict[str, str]],
-) -> set[int] | None:
-    task_file = task_dir / "task.json"
-    if not task_file.is_file():
-        return None  # Standalone gate invocation retains module-wide behavior.
-    target = read_json(task_file).get("target", {})
-    stem = Path(str(target.get("file_path", ""))).stem
-    symbol = str(target.get("symbol") or "").split(".")[-1]
-    if not stem or not symbol:
-        return set()
-    snake_symbol = re.sub(r"(?<!^)(?=[A-Z])", "_", symbol).lower().lstrip("_")
-    test_root = module_root / "src" / kind
-    selected: set[int] = set()
-    for test_file in test_root.rglob("*.test.ets") if test_root.is_dir() else ():
-        source = test_file.read_text(encoding="utf-8", errors="replace")
-        suites = set(re.findall(r"\bdescribe\s*\(\s*['\"]([^'\"]+)['\"]", source))
-        if not suites:
-            continue
-        file_stem = test_file.name.removesuffix(".test.ets")
-        related_file = file_stem.lower() == stem.lower() or bool(re.search(
-            rf"\b(?:import|from)\b[^\n]*\b{re.escape(stem)}\b", source,
-        ))
-        suite_indices = [index for index, case in enumerate(cases) if case["suite"] in suites]
-        matched: set[int] = set()
-        for index in suite_indices:
-            name = cases[index]["name"]
-            named = bool(snake_symbol and re.search(rf"(?i)(?:^|_){re.escape(snake_symbol)}(?:_|$)", name))
-            invocation = re.search(rf"\b{re.escape(symbol)}\s*\(", _test_case_source(source, name))
-            if related_file and (named or invocation):
-                matched.add(index)
-        selected.update(matched or (suite_indices if related_file else []))
-    # A different suite can still exercise changed production code indirectly.
-    # Its failing stack trace is positive evidence that it belongs to this task.
-    for index, case in enumerate(cases):
-        if case["result"] != "Success" and re.search(
-            rf"(?i)(?<![\w$]){re.escape(stem)}\.ets(?![\w$])", case["details"],
-        ):
-            selected.add(index)
-    return selected
-
-
-def _test_case_source(source: str, name: str) -> str:
-    match = re.search(rf"\bit\s*\(\s*['\"]{re.escape(name)}['\"]", source)
-    if not match:
-        return ""
-    next_case = re.search(r"\bit\s*\(", source[match.end():])
-    end = match.end() + next_case.start() if next_case else len(source)
-    return source[match.end():end]
+    if plan is not None:
+        return run_test_plan(task_dir, workspace, plan, _hvigor_launcher(hvigorw), _deveco_environment(hvigorw))
+    command = [*_hvigor_launcher(hvigorw), task_name, "--no-daemon"]
+    return subprocess.run(command, cwd=workspace, env=_deveco_environment(hvigorw)).returncode
 
 
 def runtime_smoke_gate(
@@ -717,6 +600,21 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = None) -> int:
+    """Only completed scans may report a remaining smell; tool failures block."""
+    try:
+        # A failed repair scan must not reuse findings from an earlier attempt.
+        (task_dir / "smell-after.json").unlink(missing_ok=True)
+        return _smell_gate(task_dir, homecheck_root, source_root)
+    except (OSError, ValueError, KeyError) as error:
+        return _smell_blocked(f"HomeCheck 扫描或结果读取失败：{error}")
+
+
+def _smell_blocked(reason: str) -> int:
+    print(f"SMELL_GATE_BLOCKED: {reason}", file=sys.stderr, flush=True)
+    return 3
+
+
+def _smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None) -> int:
     task = read_json(task_dir / "task.json")
     project_root = Path(task.get("project_root", task.get("projectRoot", "")))
     source_root = source_root or project_root
@@ -730,17 +628,16 @@ def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = 
     target_source = Path(task.get("workspace_root", task.get("workspaceRoot", ""))) / target_file
     target_text = target_source.read_text(encoding="utf-8", errors="replace") if target_source.is_file() else ""
     if not target_source.is_file():
-        print(f"HomeCheck 指定文件不存在：{target_source}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 指定文件不存在：{target_source}")
     try:
         target_source.resolve().relative_to(source_root.resolve())
     except ValueError:
-        print(f"HomeCheck 指定文件不在工程目录内：{target_source}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 指定文件不在工程目录内：{target_source}")
 
     base_project = read_json(homecheck_root / "config" / "projectConfig.json")
     base_rule = read_json(homecheck_root / "config" / "ruleConfig.json")
-    report_dir = task_dir / "homecheck-report"
+    # Preserve earlier evidence, but only accept a report from this invocation.
+    report_dir = task_dir / "homecheck-report" / str(time.time_ns())
     scan_files = _smell_scan_files(task_dir, source_root, target_source)
     relative_scan_files = [path.resolve().relative_to(source_root.resolve()).as_posix() for path in scan_files]
     project_config = {
@@ -775,9 +672,15 @@ def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = 
     runner = homecheck_root / "scripts" / "gitcodeArktsPerfTest.js"
     npm = shutil.which("npm")
     if not runner.is_file() or not npm:
-        print(f"HomeCheck 文件级扫描入口或 npm 不存在：{runner}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 文件级扫描入口或 npm 不存在：{runner}")
     smell_name = rule.rsplit("/", 1)[-1].removesuffix("-check")
+    # The bundled Perl cloc can fail to create files in Windows' shared TEMP
+    # even when Node can write there. Give only this subprocess tree its own
+    # writable scratch directory; do not alter global environment or ACLs.
+    scratch = task_dir / "homecheck-temp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    scan_env = os.environ.copy()
+    scan_env.update({name: str(scratch.resolve()) for name in ("TEMP", "TMP", "TMPDIR")})
     completed = subprocess.run(
         [
             npm, "run", "scan:files", "--", "--f1=false", "--dashboard=false",
@@ -786,25 +689,32 @@ def smell_gate(task_dir: Path, homecheck_root: Path, source_root: Path | None = 
             f"--includeRules={smell_name}", f"--outputDir={report_dir}",
         ],
         cwd=homecheck_root,
+        env=scan_env,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
     if completed.returncode != 0:
-        return completed.returncode
+        return _smell_blocked(f"HomeCheck 扫描工具退出码 {completed.returncode}；没有可用于返修的异味结论")
     issue_candidates = list((report_dir / "runs").glob("*/issuesReport.json"))
     issues_path = issue_candidates[0] if len(issue_candidates) == 1 else report_dir / "issuesReport.json"
     if not issues_path.exists():
-        print(f"HomeCheck 未生成 {issues_path}", file=sys.stderr)
-        return 3
+        return _smell_blocked(f"HomeCheck 未生成本轮报告：{issues_path}")
     issues = read_json(issues_path)
+    if not isinstance(issues, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("filePath"), str)
+        or not isinstance(item.get("messages"), list)
+        or any(not isinstance(message, dict) for message in item["messages"])
+        for item in issues
+    ):
+        return _smell_blocked(f"HomeCheck 报告结构无效：{issues_path}")
     remaining = []
     short_target = _strip_project(target_file, source_project)
     scan_by_suffix = {
         path.resolve().relative_to(source_root.resolve()).as_posix(): path for path in scan_files
     }
     changed_lines = _smell_changed_lines(task_dir, source_root, scan_files)
-    for item in issues if isinstance(issues, list) else []:
+    for item in issues:
         item_path = str(item.get("filePath", "")).replace("\\", "/")
         relative = next((key for key in scan_by_suffix if item_path.endswith(key)), None)
         if relative is None:

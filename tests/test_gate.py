@@ -3,14 +3,13 @@ import unittest
 from pathlib import Path
 
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from arkts_smell_refactor.gate import (
     _changed_current_lines,
     _fresh_copy,
-    _hvigor_test_results,
     _issue_touches_changed_symbol,
+    _normalize_agent_prompt_paths,
     _owner_at_line,
     _parse_linter_issues,
     _reported_symbol,
@@ -18,198 +17,66 @@ from arkts_smell_refactor.gate import (
     _smell_scan_files,
     _symbol_matches,
     _sync_production_changes,
-    hvigor_gate,
     refactor_gate,
 )
 
 
 class GateTests(unittest.TestCase):
-    def test_hvigor_test_requires_nonzero_result_and_uses_device_module(self):
+    def test_nested_project_paths_are_rebased_in_initial_and_repair_attachments(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            source = root / "source"
-            (source / "entry/src/main").mkdir(parents=True)
-            task_dir = root / "runs/session/task"
-            task_dir.mkdir(parents=True)
-
-            def run_with_result(command, cwd, env):
-                kind = "ohosTest" if "onDeviceTest" in command else "test"
-                result = Path(cwd) / "entry/.test/default/intermediates" / kind / "coverage_data/test_result.txt"
-                result.parent.mkdir(parents=True, exist_ok=True)
-                result.write_text("result=Success\nTests run: 2, Failure: 0, Error: 0, Pass: 2\n", encoding="utf-8")
-                if kind == "ohosTest":
-                    result.with_name("coverage.log").write_text(
-                        "OHOS_REPORT_RESULT: stream=Tests run: 2, Failure: 0, Error: 0, Pass: 2\n"
-                        "TestFinished-ResultCode: 0\n", encoding="utf-8")
-                return SimpleNamespace(returncode=0)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=run_with_result) as run:
-                self.assertEqual(0, hvigor_gate(task_dir, source, Path("hvigorw"), None, "onDeviceTest", "entry"))
-                self.assertIn("module=entry@ohosTest", run.call_args.args[0])
-                validation = root / "v"
-                copy = next(validation.iterdir())
-                dependency = copy / "oh_modules/entry/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
-                dependency.parent.mkdir(parents=True)
-                dependency.write_text("Tests run: 2, Failure: 0, Error: 0, Pass: 2", encoding="utf-8")
-                self.assertEqual(1, len(_hvigor_test_results(copy, "ohosTest", "entry")))
-                self.assertEqual(0, hvigor_gate(task_dir, source, Path("hvigorw"), None, "test", "entry"))
-                self.assertIn("module=entry", run.call_args.args[0])
-
-            def no_result(command, cwd, env):
-                return SimpleNamespace(returncode=0)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=no_result):
-                self.assertEqual(3, hvigor_gate(task_dir, source, Path("hvigorw"), None, "test", "entry"))
-
-            def zero_result(command, cwd, env):
-                result = Path(cwd) / "entry/.test/default/intermediates/test/coverage_data/test_result.txt"
-                result.parent.mkdir(parents=True, exist_ok=True)
-                result.write_text("Tests run: 0, Failure: 0, Error: 0, Pass: 0\n", encoding="utf-8")
-                return SimpleNamespace(returncode=0)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=zero_result):
-                self.assertEqual(3, hvigor_gate(task_dir, source, Path("hvigorw"), None, "test", "entry"))
-
-            def failed_device_result(command, cwd, env):
-                result = Path(cwd) / "entry/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
-                result.parent.mkdir(parents=True, exist_ok=True)
-                result.write_text("result=Error\nTests run: 2, Failure: 0, Error: 1, Pass: 1\n", encoding="utf-8")
-                return SimpleNamespace(returncode=0)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=failed_device_result):
-                self.assertEqual(1, hvigor_gate(task_dir, source, Path("hvigorw"), None, "onDeviceTest", "entry"))
-
-    def test_hvigor_attributes_device_cases_to_target_instead_of_whole_module(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            source = root / "source"
-            tests = source / "scenes/entry/src/ohosTest/ets/test"
-            tests.mkdir(parents=True)
-            (tests / "CarouseCutToolBar.test.ets").write_text(
-                "describe('CarouseCutToolBarTest', () => {"
-                "it('get_crop_ratio_free_returns_0', 0, () => {});"
-                "it('get_crop_ratio_fixed_returns_1', 0, () => {}); });",
-                encoding="utf-8",
-            )
-            (tests / "StickerToolBar.test.ets").write_text(
-                "describe('StickerToolBarInstrumentTest', () => {"
-                "it('sticker_host', 0, () => {}); });", encoding="utf-8",
-            )
-            task_dir = root / "runs/session/task"
-            task_dir.mkdir(parents=True)
-            (task_dir / "task.json").write_text(json.dumps({
-                "target": {"file_path": "scenes/entry/src/main/ets/components/CarouseCutToolBar.ets",
-                           "symbol": "getCropRatio"},
-            }), encoding="utf-8")
-
-            def run_with_unrelated_failure(command, cwd, env):
-                coverage = Path(cwd) / "scenes/entry/.test/default/intermediates/ohosTest/coverage_data"
-                coverage.mkdir(parents=True, exist_ok=True)
-                (coverage / "test_result.txt").write_text(
-                    "class=CarouseCutToolBarTest\n"
-                    "test=get_crop_ratio_free_returns_0\nresult=Success\n"
-                    "test=get_crop_ratio_fixed_returns_1\nresult=Success\n"
-                    "class=StickerToolBarInstrumentTest\n"
-                    "test=sticker_host\nresult=Error\n"
-                    "Tests run: 3, Failure: 0, Error: 1, Pass: 2\n", encoding="utf-8",
-                )
-                (coverage / "coverage.log").write_text(
-                    "OHOS_REPORT_RESULT: stream=Tests run: 3, Failure: 0, Error: 1, Pass: 2\n"
-                    "TestFinished-ResultCode: 0\n", encoding="utf-8",
-                )
-                return SimpleNamespace(returncode=1)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=run_with_unrelated_failure):
-                self.assertEqual(0, hvigor_gate(task_dir, source, Path("hvigorw"), None, "onDeviceTest", "entry"))
-            attribution = json.loads((task_dir / "test-attribution.json").read_text(encoding="utf-8"))
-            self.assertEqual(2, len(attribution["targetCases"]))
-            self.assertEqual(1, len(attribution["unrelatedFailures"]))
-
-    def test_target_device_cases_missing_test_host_are_blocked(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            source = root / "source"
-            tests = source / "entry/src/ohosTest/ets/test"
-            tests.mkdir(parents=True)
-            (tests / "AvatarUpload.test.ets").write_text(
-                "describe('CropCheckImageAdaptTest', () => {"
-                "it('check_image_adapt_s1', 0, () => {}); });", encoding="utf-8",
-            )
-            task_dir = root / "runs/session/task"
-            task_dir.mkdir(parents=True)
-            (task_dir / "task.json").write_text(json.dumps({
-                "target": {"file_path": "entry/src/main/ets/AvatarUpload.ets",
-                           "symbol": "checkImageAdapt"},
-            }), encoding="utf-8")
-
-            def run_with_missing_host(command, cwd, env):
-                result = Path(cwd) / "entry/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
-                result.parent.mkdir(parents=True, exist_ok=True)
-                result.write_text(
-                    "class=CropCheckImageAdaptTest\n"
-                    "test=check_image_adapt_s1\n"
-                    "Component not found: crop_test_host_anchor, error in beforeAll function\n"
-                    "result=Error\n"
-                    "Tests run: 1, Failure: 0, Error: 1, Pass: 0\n", encoding="utf-8",
-                )
-                return SimpleNamespace(returncode=1)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=run_with_missing_host):
-                self.assertEqual(3, hvigor_gate(task_dir, source, Path("hvigorw"), None, "onDeviceTest", "entry"))
-            attribution = json.loads((task_dir / "test-attribution.json").read_text(encoding="utf-8"))
-            self.assertEqual("Error", attribution["targetCases"][0]["result"])
-
-    def test_hvigor_requires_target_case_evidence_when_task_is_known(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            source = root / "source"
-            (source / "entry/src/main").mkdir(parents=True)
-            task_dir = root / "runs/session/task"
-            task_dir.mkdir(parents=True)
-            (task_dir / "task.json").write_text(json.dumps({
-                "target": {"file_path": "entry/src/main/ets/Foo.ets", "symbol": "work"},
-            }), encoding="utf-8")
-
-            def run_without_target(command, cwd, env):
-                result = Path(cwd) / "entry/.test/default/intermediates/test/coverage_data/test_result.txt"
-                result.parent.mkdir(parents=True)
-                result.write_text(
-                    "class=OtherTest\ntest=other_case\nresult=Success\n"
-                    "Tests run: 1, Failure: 0, Error: 0, Pass: 1\n", encoding="utf-8",
-                )
-                return SimpleNamespace(returncode=0)
-
-            with patch("arkts_smell_refactor.gate.subprocess.run", side_effect=run_without_target):
-                self.assertEqual(3, hvigor_gate(task_dir, source, Path("hvigorw"), None, "test", "entry"))
-
-    def test_other_suite_failure_referencing_target_source_is_not_ignored(self):
-        from arkts_smell_refactor.gate import _parse_hypium_cases, _target_test_cases
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            module_root = root / "scenes/entry"
-            tests = module_root / "src/ohosTest/ets/test"
-            tests.mkdir(parents=True)
-            (tests / "CarouseCutToolBar.test.ets").write_text(
-                "describe('CarouseCutToolBarTest', () => {"
-                "it('get_crop_ratio_ok', 0, () => {}); });", encoding="utf-8",
-            )
-            (tests / "Other.test.ets").write_text(
-                "describe('OtherTest', () => {it('indirect', 0, () => {}); });", encoding="utf-8",
-            )
+            repository = root / "demo"
+            source = repository / "Templates/App"
+            target = source / "feature/src/main/ets/First.ets"
+            target.parent.mkdir(parents=True)
+            target.write_text("export class First {}", encoding="utf-8")
             task_dir = root / "task"
             task_dir.mkdir()
-            (task_dir / "task.json").write_text(json.dumps({
-                "target": {"file_path": "scenes/entry/src/main/ets/CarouseCutToolBar.ets",
-                           "symbol": "getCropRatio"},
-            }), encoding="utf-8")
-            result = root / "test_result.txt"
-            result.write_text(
-                "class=CarouseCutToolBarTest\ntest=get_crop_ratio_ok\nresult=Success\n"
-                "class=OtherTest\ntest=indirect\n"
-                "at CarouseCutToolBar.ets:165\nresult=Error\n", encoding="utf-8",
+            task = {
+                "workspace_root": str(root), "project_root": str(repository),
+                "target": {"file_path": "demo/Templates/App/feature/src/main/ets/First.ets"},
+            }
+            (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+            original = (
+                "target: Templates/App/feature/src/main/ets/First.ets:10\n"
+                "counterpart: demo/Templates/App/feature/src/main/ets/Second.ets:20\n"
+                "helper: Templates\\App\\feature\\src\\main\\ets\\Helper.ets\n"
+                f"absolute: {target.as_posix()}\n"
+                "already relative: feature/src/main/ets/First.ets\n"
             )
-            cases = _parse_hypium_cases(result)
-            self.assertEqual({0, 1}, _target_test_cases(task_dir, module_root, "ohosTest", cases))
+            expected = (
+                "target: feature/src/main/ets/First.ets:10\n"
+                "counterpart: feature/src/main/ets/Second.ets:20\n"
+                "helper: feature\\src\\main\\ets\\Helper.ets\n"
+                "absolute: feature/src/main/ets/First.ets\n"
+                "already relative: feature/src/main/ets/First.ets\n"
+            )
+            for filename in ("refactor-prompt.md", "repair-prompt-1.md"):
+                with self.subTest(filename=filename):
+                    prompt_file = task_dir / filename
+                    prompt_file.write_text(original, encoding="utf-8")
+                    with patch("arkts_smell_refactor.gate.subprocess.run") as run, patch(
+                        "arkts_smell_refactor.gate._sync_production_changes", return_value=0,
+                    ):
+                        run.return_value.returncode = 0
+                        result = refactor_gate(task_dir, source, Path("deveco"),
+                            prompt_file=None if filename == "refactor-prompt.md" else prompt_file)
+                    self.assertEqual(0, result)
+                    command = run.call_args.args[0]
+                    attached = Path(command[command.index("-f") + 1])
+                    self.assertEqual(expected, attached.read_text(encoding="utf-8"))
+                    self.assertEqual(original, prompt_file.read_text(encoding="utf-8"))
+
+    def test_rebasing_does_not_rewrite_unrelated_project_paths(self):
+        root = Path.cwd() / "prompt-fixture"
+        task = {"workspace_root": str(root), "project_root": str(root / "demo")}
+        prompt = (
+            "Other/Templates/App/file.ets\n"
+            "Templates/AppArchive/file.ets\n"
+            "demo/Templates/OtherApp/file.ets\n"
+            "feature/src/main/ets/file.ets\n"
+        )
+        self.assertEqual(prompt, _normalize_agent_prompt_paths(prompt, task, root / "demo/Templates/App"))
 
     def test_refactor_prompt_is_attached_and_model_is_configurable(self):
         with tempfile.TemporaryDirectory() as temp:
