@@ -32,7 +32,7 @@ class LinterPolicyTests(unittest.TestCase):
             "linterMode": "skip",
         }
 
-    def _run(self, name, spec, context, cwd, task_dir, dry_run):
+    def _run(self, name, spec, context, cwd, task_dir, dry_run, **kwargs):
         if name.startswith("review-agent"):
             (task_dir / f"{name}.log").write_text('{"verdict":"PASS"}', encoding="utf-8")
         return CommandResult(name, "DRY_RUN" if dry_run else "PASS", exit_code=0)
@@ -41,7 +41,9 @@ class LinterPolicyTests(unittest.TestCase):
         with patch("arkts_smell_refactor.runner._run_spec", side_effect=self._run) as run:
             result = execute_pipeline(self.root, self.config)
         names = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(["refactor-agent", "smell", "build", "contract", "runtime", "test", "review-agent"], names)
+        self.assertEqual("refactor-agent", names[0])
+        self.assertCountEqual(["smell", "build", "contract"], names[1:4])
+        self.assertEqual(["runtime", "test", "review-agent"], names[4:])
         self.assertEqual("PASS", result["verdict"])
         self.assertEqual(0, result["repairAttempts"])
         self.assertEqual({"linterMode": "skip"}, result["validationPolicy"])
@@ -66,8 +68,8 @@ class LinterPolicyTests(unittest.TestCase):
         self.config.pop("repairAgent")
         for failed_gate in ("smell", "build", "contract", "runtime", "test"):
             with self.subTest(gate=failed_gate):
-                def fail_one(name, *args):
-                    return CommandResult(name, "FAIL", exit_code=1) if name == failed_gate else self._run(name, *args)
+                def fail_one(name, *args, **kwargs):
+                    return CommandResult(name, "FAIL", exit_code=1) if name == failed_gate else self._run(name, *args, **kwargs)
 
                 with patch("arkts_smell_refactor.runner._run_spec", side_effect=fail_one) as run:
                     result = execute_pipeline(self.root, self.config)
@@ -82,8 +84,8 @@ class LinterPolicyTests(unittest.TestCase):
         self.assertNotIn("review-agent", [call.args[0] for call in run.call_args_list])
 
     def test_semantic_failure_still_repairs_and_keeps_linter_skipped(self):
-        def fail_first_review(name, *args):
-            result = self._run(name, *args)
+        def fail_first_review(name, *args, **kwargs):
+            result = self._run(name, *args, **kwargs)
             if name == "review-agent":
                 (self.root / "review-agent.log").write_text(json.dumps({
                     "verdict": "FAIL", "issues": [{"severity": "blocking", "reason": "guard changed"}],
@@ -104,8 +106,8 @@ class LinterPolicyTests(unittest.TestCase):
     def test_required_linter_failure_still_triggers_repair(self):
         self.config["linterMode"] = "required"
 
-        def fail_first_linter(name, *args):
-            return CommandResult(name, "FAIL", exit_code=1) if name == "linter" else self._run(name, *args)
+        def fail_first_linter(name, *args, **kwargs):
+            return CommandResult(name, "FAIL", exit_code=1) if name == "linter" else self._run(name, *args, **kwargs)
 
         with patch("arkts_smell_refactor.runner._run_spec", side_effect=fail_first_linter):
             result = execute_pipeline(self.root, self.config)

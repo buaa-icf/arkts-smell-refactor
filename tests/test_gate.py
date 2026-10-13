@@ -422,6 +422,81 @@ class OrderVM {
             self.assertTrue(packed.exists())
             self.assertIn("copy", packed.read_text(encoding="utf-8"))
 
+    def test_review_pack_includes_transitive_relative_production_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_page = source / "feature/src/main/ets/pages/Page.ets"
+            mirror_page = mirror / "feature/src/main/ets/pages/Page.ets"
+            view_model = source / "feature/src/main/ets/viewModels/PageVM.ets"
+            mapper = source / "feature/src/main/ets/types/PageMapper.ets"
+            for path in (source_page, mirror_page, view_model, mapper):
+                path.parent.mkdir(parents=True, exist_ok=True)
+            source_page.write_text("export class Page {}", encoding="utf-8")
+            mirror_page.write_text(
+                "import { PageVM } from '../viewModels/PageVM'\nexport class Page { vm: PageVM }",
+                encoding="utf-8",
+            )
+            view_model.write_text(
+                "import { PageMapper } from '../types/PageMapper'\n"
+                "export class PageVM { copy(): void { PageMapper.copy() } }",
+                encoding="utf-8",
+            )
+            mapper.write_text("export class PageMapper { static copy(): void {} }", encoding="utf-8")
+
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            context = mirror.parent / "review-context-production/feature/src/main/ets"
+            self.assertTrue((context / "viewModels/PageVM.ets").exists())
+            self.assertTrue((context / "types/PageMapper.ets").exists())
+            manifest = json.loads((mirror.parent / "review-context.json").read_text(encoding="utf-8"))
+            self.assertIn("feature/src/main/ets/types/PageMapper.ets", manifest["productionDependencies"])
+
+    def test_review_pack_resolves_local_harmony_package_alias_and_reexport(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            mirror = root / "task/refactor-workspace"
+            source_page = source / "feature/book_person/src/main/ets/AccountCard.ets"
+            mirror_page = mirror / "feature/book_person/src/main/ets/AccountCard.ets"
+            feature_package = source / "feature/book_person/oh-package.json5"
+            common_package = source / "commons/common/oh-package.json5"
+            common_index = source / "commons/common/Index.ets"
+            utility = source / "commons/common/src/main/ets/utils/UserInfoUtil.ets"
+            for path in (source_page, mirror_page, feature_package, common_package, common_index, utility):
+                path.parent.mkdir(parents=True, exist_ok=True)
+            source_page.write_text("export class AccountCard {}", encoding="utf-8")
+            mirror_page.write_text(
+                "import { UserInfoUtil } from 'common'\n"
+                "export class AccountCard { update(): void { UserInfoUtil.updateBookCoins(1) } }",
+                encoding="utf-8",
+            )
+            feature_package.write_text(
+                '{"name":"book_person","main":"Index.ets","dependencies":'
+                '{"common":"file:../../commons/common"}}', encoding="utf-8",
+            )
+            common_package.write_text(
+                '{"name":"common","main":"Index.ets"}', encoding="utf-8",
+            )
+            common_index.write_text(
+                "export { UserInfoUtil } from './src/main/ets/utils/UserInfoUtil'",
+                encoding="utf-8",
+            )
+            utility.write_text(
+                "export class UserInfoUtil { static updateBookCoins(amount: number): void {} }",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(0, _sync_production_changes(mirror, source))
+            context = mirror.parent / "review-context-production/commons/common"
+            self.assertTrue((context / "Index.ets").exists())
+            self.assertTrue((context / "src/main/ets/utils/UserInfoUtil.ets").exists())
+            manifest = json.loads((mirror.parent / "review-context.json").read_text(encoding="utf-8"))
+            self.assertIn(
+                "commons/common/src/main/ets/utils/UserInfoUtil.ets",
+                manifest["productionDependencies"],
+            )
+
     def test_test_build_cache_is_excluded_from_refactor_workspace(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

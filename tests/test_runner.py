@@ -250,9 +250,87 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(1, result["repairAttempts"])
             initial = {step["name"]: step for step in result["steps"]}
             self.assertEqual("FAIL", initial["smell"]["status"])
-            self.assertEqual("SKIPPED", initial["build"]["status"])
+            self.assertIn(initial["build"]["status"], {"PASS", "SKIPPED"})
             self.assertEqual("PASS", initial["smell-repair-1"]["status"])
             self.assertEqual("PASS", initial["review-agent-repair-1"]["status"])
+
+    def test_parallel_gate_failure_cancels_slow_siblings_and_enters_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "risk-report.json").write_text('{"risks":[],"recommendedConstraints":[]}', encoding="utf-8")
+            marker = task_dir / "repaired"
+            python = __import__('sys').executable
+            smell = f"from pathlib import Path; raise SystemExit(0 if Path(r'{marker}').exists() else 1)"
+            slow = (
+                "import time; from pathlib import Path; "
+                f"time.sleep(0 if Path(r'{marker}').exists() else 8)"
+            )
+            repair = f"from pathlib import Path; Path(r'{marker}').write_text('ok')"
+            config = {
+                "repairAgent": {"command": [python, "-c", repair]},
+                "maxRepairAttempts": 1,
+                "gates": {
+                    "smell": {"command": [python, "-c", smell]},
+                    "build": {"command": [python, "-c", slow]},
+                    "test": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "linter": {"command": [python, "-c", slow]},
+                },
+            }
+            started = __import__('time').monotonic()
+            result = execute_pipeline(task_dir, config)
+            elapsed = __import__('time').monotonic() - started
+            initial = {step["name"]: step for step in result["steps"]}
+            self.assertLess(elapsed, 5)
+            self.assertEqual("FAIL", initial["smell"]["status"])
+            self.assertEqual("SKIPPED", initial["build"]["status"])
+            self.assertEqual("SKIPPED", initial["linter"]["status"])
+            self.assertEqual("SMELL_REMAINS_OR_MOVED", json.loads(
+                (task_dir / "failure-report-1.json").read_text(encoding="utf-8")
+            )["classification"])
+
+    def test_linter_failure_in_parallel_group_has_repair_analysis(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "risk-report.json").write_text('{"risks":[],"recommendedConstraints":[]}', encoding="utf-8")
+            marker = task_dir / "repaired"
+            python = __import__('sys').executable
+            linter = f"from pathlib import Path; raise SystemExit(0 if Path(r'{marker}').exists() else 1)"
+            repair = f"from pathlib import Path; Path(r'{marker}').write_text('ok')"
+            config = {
+                "repairAgent": {"command": [python, "-c", repair]},
+                "maxRepairAttempts": 1,
+                "gates": {
+                    "smell": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "build": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "test": {"command": [python, "-c", "raise SystemExit(0)"]},
+                    "linter": {"command": [python, "-c", linter]},
+                },
+                "reviewAgent": {"command": [
+                    python, "-c", "print('{\"verdict\":\"PASS\",\"issues\":[]}')",
+                ]},
+            }
+            result = execute_pipeline(task_dir, config)
+            self.assertEqual("PASS", result["verdict"])
+            report = json.loads((task_dir / "failure-report-1.json").read_text(encoding="utf-8"))
+            self.assertEqual("linter", report["stage"])
+            self.assertEqual("INTRODUCED_LINTER_FAILURE", report["classification"])
+
+    def test_total_task_timeout_stops_current_process_and_records_wall_time(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task_dir = Path(temp)
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            python = __import__('sys').executable
+            result = execute_pipeline(task_dir, {
+                "taskTimeoutSeconds": 0.5,
+                "refactorAgent": {"command": [python, "-c", "import time; time.sleep(8)"], "timeoutSeconds": 20},
+            })
+            self.assertEqual("BLOCKED", result["verdict"])
+            self.assertTrue(result["timedOut"])
+            self.assertEqual(0.5, result["timeoutSeconds"])
+            self.assertLess(result["durationSeconds"], 4)
+            self.assertIn("总执行时间超过限制", result["steps"][0]["reason"])
 
     def test_runtime_failure_is_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -451,6 +529,38 @@ class RunnerTests(unittest.TestCase):
                     self.assertEqual("current", report["summary"])
                     self.assertEqual("guard changed", report["issues"][0]["reason"])
 
+    def test_smell_failure_points_to_new_helper_not_original_target(self):
+        from arkts_smell_refactor.prompts import build_repair_prompt
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            task_data = self._task(temp)
+            task_data["target"]["file_path"] = "demo/pages/UserDetail.ets"
+            (task_dir / "task.json").write_text(json.dumps(task_data), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": ["model/UserEnumDisplayValues.ets", "pages/UserDetail.ets"],
+            }), encoding="utf-8")
+            helper = root / "demo/model/UserEnumDisplayValues.ets"
+            (task_dir / "smell-after.json").write_text(json.dumps([
+                {"filePath": str(helper), "line": 23,
+                 "message": "Method 'fromUserInfo' is feature-envious", "rule": "rule"},
+                {"filePath": str(root / "demo/pages/UserDetail.ets"), "line": 42,
+                 "message": "Method 'work' is feature-envious", "rule": "rule"},
+            ]), encoding="utf-8")
+
+            task = _task_from_file(task_dir / "task.json")
+            report = _build_failure_report(task_dir, task, CommandResult("smell", "FAIL"), 1)
+            self.assertEqual(
+                ["model/UserEnumDisplayValues.ets", "pages/UserDetail.ets"],
+                [issue["filePath"] for issue in report["issues"]],
+            )
+            prompt = build_repair_prompt(task, {}, report, 1)
+            self.assertIn("model/UserEnumDisplayValues.ets:23", prompt)
+            self.assertIn("pages/UserDetail.ets:42", prompt)
+            self.assertNotIn("pages/UserDetail.ets:23", prompt)
+
     def test_unattributed_test_failure_is_not_repairable(self):
         with tempfile.TemporaryDirectory() as temp:
             task_dir = Path(temp)
@@ -487,6 +597,131 @@ class RunnerTests(unittest.TestCase):
                 "UNATTRIBUTED_TEST_FAILURE",
                 report["classification"],
             )
+
+    def test_instrument_failure_ignores_successful_target_and_unrelated_build_warnings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            task_data = self._task(temp)
+            task_data["target"]["symbol"] = "getCropRatio"
+            (task_dir / "task.json").write_text(json.dumps(task_data), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": ["components/CarouseCutToolBar.ets"],
+            }), encoding="utf-8")
+            workspace = root / "validation"
+            result = workspace / "picture_beautification/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CarouseCutToolBarTest\n"
+                "test=get_crop_ratio_free_returns_0\nresult=Success\n"
+                "class=StickerToolBarInstrumentTest\n"
+                "test=build_renders_search_grid\n"
+                "Unable to find id: sticker_toolbar_test_host, error in beforeAll function\n"
+                "at StickerToolBar.test.ets:19\nresult=Error\n", encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            log = task_dir / "test.log"
+            log.write_text(
+                "WARN File: components/CarouseCutToolBar.ets:167 getCropRatio\n"
+                "TEST_CASE_FAILURE: 1/2 passed, 1 failed\n", encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module picture_beautification", output_file=str(log)), 1,
+            )
+            self.assertEqual("UNATTRIBUTED_TEST_FAILURE", report["classification"])
+            self.assertFalse(report["repairable"])
+            self.assertIn("StickerToolBar.test.ets", report["logTail"])
+            self.assertNotIn("CarouseCutToolBar.ets", report["logTail"])
+
+    def test_instrument_failure_in_changed_component_remains_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["components/CarouseCutToolBar.ets"]}', encoding="utf-8",
+            )
+            workspace = root / "validation"
+            result = workspace / "picture_beautification/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CarouseCutToolBarTest\n"
+                "test=get_crop_ratio_free_returns_0\n"
+                "Error in get_crop_ratio_free_returns_0, expected 0 but got 1\n"
+                "result=Error\n", encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module picture_beautification"), 1,
+            )
+            self.assertEqual("RELATED_TEST_FAILURE", report["classification"])
+            self.assertTrue(report["repairable"])
+
+    def test_target_instrument_host_missing_in_before_all_is_not_repairable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(json.dumps({
+                "changedProductionFiles": ["pages/AvatarUpload.ets"],
+            }), encoding="utf-8")
+            workspace = root / "validation"
+            result = workspace / "phone/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CropCheckImageAdaptTest\n"
+                "test=S1_image_exactly_fills_frame_keeps_identity_state\n"
+                "Error in S1_image_exactly_fills_frame_keeps_identity_state, "
+                "Component not found: crop_test_host_anchor, error in beforeAll function\n"
+                "at findById phone_test (AvatarUpload.test.ets:14:11)\nresult=Error\n",
+                encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module phone"), 1,
+            )
+            self.assertEqual("TEST_HOST_UNAVAILABLE", report["classification"])
+            self.assertFalse(report["repairable"])
+            self.assertIn("beforeAll", report["summary"])
+
+    def test_mixed_instrument_failures_do_not_send_unrelated_case_to_repair_agent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_dir = root / "task"
+            task_dir.mkdir()
+            (task_dir / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (task_dir / "refactor-changes.json").write_text(
+                '{"changedProductionFiles":["components/CarouseCutToolBar.ets"]}', encoding="utf-8",
+            )
+            workspace = root / "validation"
+            result = workspace / "picture_beautification/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                "class=CarouseCutToolBarTest\ntest=target_case\nresult=Failure\n"
+                "class=StickerToolBarInstrumentTest\ntest=unrelated_case\nresult=Error\n",
+                encoding="utf-8",
+            )
+            (task_dir / "validation-workspace.json").write_text(
+                json.dumps({"path": str(workspace)}), encoding="utf-8",
+            )
+            report = _build_failure_report(
+                task_dir, _task_from_file(task_dir / "task.json"),
+                CommandResult("test", "FAIL", command="gate hvigor --module picture_beautification"), 1,
+            )
+            self.assertEqual("UNATTRIBUTED_TEST_FAILURE", report["classification"])
+            self.assertFalse(report["repairable"])
 
     def test_changed_class_name_in_test_diagnostic_is_repairable_without_target_symbol(self):
         with tempfile.TemporaryDirectory() as temp:

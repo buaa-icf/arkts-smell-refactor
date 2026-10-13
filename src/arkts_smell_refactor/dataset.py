@@ -41,6 +41,30 @@ def _related_targets(message: str) -> list[dict[str, Any]]:
     return related
 
 
+def _test_identity(file_path: str, rule: str, message: str) -> tuple[str, str, str]:
+    return (file_path.replace("\\", "/"), rule, message)
+
+
+def _test_kind_catalog(workspace_root: Path) -> dict[tuple[str, str, str], str | None]:
+    catalog: dict[tuple[str, str, str], str | None] = {}
+    positive = workspace_root / "arkts-code-smell" / "dataset" / "positive"
+    for kind in ("local-test", "instrument-test"):
+        for path in (positive / kind).glob("*.json"):
+            records = read_json(path)
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                for message in record.get("messages", []):
+                    key = _test_identity(str(record.get("filePath", "")), str(message.get("rule", "")), str(message.get("message", "")))
+                    if key in catalog and catalog[key] != kind:
+                        catalog[key] = None
+                    else:
+                        catalog[key] = kind
+    return catalog
+
+
 def load_dataset_tasks(
     dataset_path: Path,
     workspace_root: Path,
@@ -49,6 +73,9 @@ def load_dataset_tasks(
     data = read_json(dataset_path)
     if not isinstance(data, list):
         raise ValueError("阳性数据集顶层必须是 JSON 数组")
+
+    dataset_kind = dataset_path.parent.name if dataset_path.parent.name in {"local-test", "instrument-test"} else None
+    test_kinds = {} if dataset_kind else _test_kind_catalog(workspace_root)
 
     tasks: list[RefactorTask] = []
     ordinal = 0
@@ -69,6 +96,11 @@ def load_dataset_tasks(
             if only_index is not None and ordinal != only_index:
                 continue
             rule = str(message.get("rule", ""))
+            test_kind = message.get("testKind", record.get("testKind", dataset_kind))
+            if test_kind is None:
+                test_kind = test_kinds.get(_test_identity(file_path, rule, str(message.get("message", ""))))
+            if test_kind is not None and test_kind not in {"local-test", "instrument-test"}:
+                raise ValueError(f"第 {record_index + 1} 条的 testKind 必须是 local-test 或 instrument-test")
             smell_type = RULE_TYPES.get(rule, slug(rule.replace("@extrulesproject/", "")))
             symbol = _symbol(str(message.get("message", "")))
             task_id = f"{smell_type}-{ordinal:04d}-{slug(symbol or Path(file_path).stem)}"
@@ -97,6 +129,7 @@ def load_dataset_tasks(
                     ),
                     raw={
                         "recordIndex": record_index, "messageIndex": message_index,
+                        **({"testKind": test_kind} if test_kind else {}),
                         **({"analysisContext": record["analysisContext"]} if isinstance(record.get("analysisContext"), dict) else {}),
                         **message,
                     },

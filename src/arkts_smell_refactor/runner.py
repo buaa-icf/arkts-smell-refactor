@@ -5,11 +5,14 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
 from .models import CommandResult, RefactorTask
+from .test_execution import failed_hypium_cases, is_test_host_unavailable, parse_hypium_cases
 from .utils import read_json, write_json, write_text
 
 
@@ -33,11 +36,17 @@ def load_config(path: Path) -> dict[str, Any]:
     return data
 
 
-def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = False, progress=None) -> dict[str, Any]:
+def execute_pipeline(
+    task_dir: Path, config: dict[str, Any], dry_run: bool = False, progress=None,
+    task_started_at: float | None = None,
+) -> dict[str, Any]:
     linter_mode = config.get("linterMode", "required")
     if linter_mode not in {"required", "skip"}:
         raise ValueError("linterMode 必须为 required 或 skip")
     validation_policy = {"linterMode": linter_mode}
+    pipeline_started = task_started_at if task_started_at is not None else time.monotonic()
+    task_timeout = float(config.get("taskTimeoutSeconds", 1200))
+    task_deadline = None if dry_run or task_timeout <= 0 else pipeline_started + task_timeout
     task = _task_from_file(task_dir / "task.json")
     context = _context(task_dir, task)
     results: list[CommandResult] = []
@@ -45,7 +54,10 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
     refactor = config.get("refactorAgent")
     if refactor:
         if progress: progress("重构 Agent", "开始")
-        results.append(_run_spec("refactor-agent", refactor, context, task.project_root, task_dir, dry_run))
+        results.append(_run_spec(
+            "refactor-agent", refactor, context, task.project_root, task_dir, dry_run,
+            task_deadline=task_deadline,
+        ))
         if progress: progress("重构 Agent", results[-1].status)
     else:
         results.append(CommandResult("refactor-agent", "SKIPPED", reason="config 未配置 refactorAgent"))
@@ -72,6 +84,7 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
         results.append(CommandResult("review-agent", "SKIPPED", reason=reason))
         result = _final_result(task.task_id, results, dry_run)
         result["validationPolicy"] = validation_policy
+        _add_timing(result, pipeline_started, task_timeout)
         write_json(task_dir / "result.json", result)
         return result
 
@@ -84,7 +97,10 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
 
     while True:
         suffix = "" if repair_number == 0 else f"-repair-{repair_number}"
-        gate_results = _run_gates_fail_fast(task_dir, task, config, context, dry_run, progress, suffix)
+        gate_results = _run_gates_fail_fast(
+            task_dir, task, config, context, dry_run, progress, suffix,
+            task_deadline=task_deadline,
+        )
         results.extend(gate_results)
         write_json(task_dir / "gates.json", {
             "schemaVersion": "1.0", "taskId": task.task_id,
@@ -113,8 +129,14 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
                     if retry_number:
                         review_retries += 1
                         if progress: progress(f"评审 Agent 环境重试第{retry_number}次", "开始")
-                        time.sleep(min(60, max(0, float(review.get("retryDelaySeconds", 2)))))
-                    review_result = _run_spec(review_name, review, context, str(task_dir), task_dir, dry_run)
+                        delay = min(60, max(0, float(review.get("retryDelaySeconds", 2))))
+                        if task_deadline is not None:
+                            delay = min(delay, max(0.0, task_deadline - time.monotonic()))
+                        time.sleep(delay)
+                    review_result = _run_spec(
+                        review_name, review, context, str(task_dir), task_dir, dry_run,
+                        task_deadline=task_deadline,
+                    )
                     # Retry identified tool failures only; missing commands/timeouts have no exit code.
                     if review_result.status != "BLOCKED" or review_result.exit_code is None or retry_number == max_retries:
                         break
@@ -140,7 +162,11 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
             results.append(skipped)
             terminal = [*gate_results, skipped]
 
-        failed = next((item for item in terminal if item.status in {"FAIL", "BLOCKED"}), None)
+        # Parallel gates may finish with both a defect and an environment blocker.
+        # A repair cannot resolve the blocker, even if FAIL precedes it in display order.
+        failed = next((item for item in terminal if item.status == "BLOCKED"), None)
+        if failed is None:
+            failed = next((item for item in terminal if item.status == "FAIL"), None)
         attempts.append({"attempt": repair_number, "steps": [item.to_dict() for item in terminal]})
         if dry_run or not failed or failed.status == "BLOCKED" or repair_number >= max_repairs or not repair_spec:
             break
@@ -159,7 +185,10 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
             write_text(repair_prompt, build_repair_prompt(task, risk, failure, repair_number, linter_mode=linter_mode))
             context["repair_prompt_file"] = str(repair_prompt.resolve())
             if progress: progress(f"修复 Agent 第{repair_number}轮", "开始")
-            repair_result = _run_spec(f"repair-agent-{repair_number}", repair_spec, context, task.project_root, task_dir, False)
+            repair_result = _run_spec(
+                f"repair-agent-{repair_number}", repair_spec, context, task.project_root,
+                task_dir, False, task_deadline=task_deadline,
+            )
             results.append(repair_result)
             if progress: progress(f"修复 Agent 第{repair_number}轮", repair_result.status)
             if repair_result.status == "PASS":
@@ -184,40 +213,86 @@ def execute_pipeline(task_dir: Path, config: dict[str, Any], dry_run: bool = Fal
     result["repairAttempts"] = repair_number
     result["reviewRetries"] = review_retries
     result["attempts"] = attempts
+    _add_timing(result, pipeline_started, task_timeout)
     write_json(task_dir / "result.json", result)
     return result
 
 
-def _run_gates_fail_fast(task_dir: Path, task: RefactorTask, config: dict[str, Any], context: dict[str, str], dry_run: bool, progress, suffix: str) -> list[CommandResult]:
-    gate_results: list[CommandResult] = []
-    stopped_by: str | None = None
-    gate_names = ["smell", "build"]
-    if "contract" in config.get("gates", {}):
-        gate_names.append("contract")
-    if "runtime" in config.get("gates", {}):
-        gate_names.append("runtime")
-    gate_names.extend(["test", "linter"])
-    for gate_name in gate_names:
-        display = gate_name
+def _run_gates_fail_fast(
+    task_dir: Path, task: RefactorTask, config: dict[str, Any],
+    context: dict[str, str], dry_run: bool, progress, suffix: str,
+    task_deadline: float | None = None,
+) -> list[CommandResult]:
+    """Run independent gates together, cancel siblings on failure, then run dependent gates."""
+    gates = config.get("gates", {})
+    ordered_names = ["smell", "build"]
+    if "contract" in gates:
+        ordered_names.append("contract")
+    if "runtime" in gates:
+        ordered_names.append("runtime")
+    ordered_names.extend(["test", "linter"])
+
+    parallel_names = [name for name in ("smell", "build", "contract", "linter") if name in ordered_names]
+    results_by_name: dict[str, CommandResult] = {}
+    stop_event = threading.Event()
+
+    def run_parallel(gate_name: str) -> CommandResult:
         result_name = gate_name + suffix
         if gate_name == "linter" and config.get("linterMode", "required") == "skip":
-            gate_results.append(CommandResult(result_name, "SKIPPED", reason="按 linterMode=skip 跳过，不参与验收或返修"))
-            if progress: progress(display, "SKIPPED (linterMode=skip)")
-            continue
-        if stopped_by:
-            gate_results.append(CommandResult(result_name, "SKIPPED", reason=f"{stopped_by} 未通过，fail-fast 跳过"))
-            continue
-        spec = config.get("gates", {}).get(gate_name)
+            return CommandResult(result_name, "SKIPPED", reason="按 linterMode=skip 跳过，不参与验收或返修")
+        spec = gates.get(gate_name)
         if not spec or not spec.get("enabled", True):
-            gate_results.append(CommandResult(result_name, "SKIPPED", reason="未配置或已禁用"))
+            return CommandResult(result_name, "SKIPPED", reason="未配置或已禁用")
+        return _run_spec(
+            result_name, spec, context, task.project_root, task_dir, dry_run,
+            cancel_event=stop_event, task_deadline=task_deadline,
+        )
+
+    runnable = [name for name in parallel_names
+                if (gates.get(name) or {}).get("enabled", True)
+                and not (name == "linter" and config.get("linterMode", "required") == "skip")]
+    for name in runnable:
+        if progress: progress(name, "开始")
+    with ThreadPoolExecutor(max_workers=max(1, len(parallel_names)), thread_name_prefix="arkts-gate") as pool:
+        future_names = {pool.submit(run_parallel, name): name for name in parallel_names}
+        pending = set(future_names)
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                name = future_names[future]
+                current = future.result()
+                results_by_name[name] = current
+                if progress: progress(name, current.status)
+                if not dry_run and current.status not in {"PASS", "SKIPPED"}:
+                    stop_event.set()
+
+    stopped = next(
+        (name for name in parallel_names if results_by_name[name].status in {"FAIL", "BLOCKED"}),
+        None,
+    )
+    sequential_names = [name for name in ("runtime", "test") if name in ordered_names]
+    for gate_name in sequential_names:
+        result_name = gate_name + suffix
+        if stopped:
+            results_by_name[gate_name] = CommandResult(
+                result_name, "SKIPPED", reason=f"{stopped} 未通过，fail-fast 跳过",
+            )
             continue
-        if progress: progress(display, "开始")
-        current = _run_spec(result_name, spec, context, task.project_root, task_dir, dry_run)
-        gate_results.append(current)
-        if progress: progress(display, current.status)
+        spec = gates.get(gate_name)
+        if not spec or not spec.get("enabled", True):
+            results_by_name[gate_name] = CommandResult(result_name, "SKIPPED", reason="未配置或已禁用")
+            continue
+        if progress: progress(gate_name, "开始")
+        current = _run_spec(
+            result_name, spec, context, task.project_root, task_dir, dry_run,
+            task_deadline=task_deadline,
+        )
+        results_by_name[gate_name] = current
+        if progress: progress(gate_name, current.status)
         if not dry_run and current.status != "PASS":
-            stopped_by = display
-    return gate_results
+            stopped = gate_name
+
+    return [results_by_name[name] for name in ordered_names]
 
 
 def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
@@ -226,11 +301,12 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     review_path = task_dir / ("review.json" if not review_suffix else f"review{review_suffix}.json")
     review = read_json(review_path) if logical_stage == "review-agent" and review_path.exists() else {}
     issues = review.get("issues", []) if isinstance(review, dict) else []
+    changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
     if logical_stage == "smell" and (task_dir / "smell-after.json").exists():
         issues = [
             {
                 "category": "remaining-smell",
-                "filePath": task.target.file_path,
+                "filePath": _smell_issue_file_path(task_dir, item, changes, task.target.file_path),
                 "line": item.get("line"),
                 "reason": item.get("message", "目标异味仍存在"),
             }
@@ -255,10 +331,35 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
         if runtime_log.is_file(): log_text = runtime_log.read_text(encoding="utf-8", errors="replace")[-12000:]
     if logical_stage == "contract" and (task_dir / "public-contract-results.json").is_file():
         log_text = json.dumps(read_json(task_dir / "public-contract-results.json"), ensure_ascii=False, indent=2)
-    changes = read_json(task_dir / "refactor-changes.json").get("changedProductionFiles", []) if (task_dir / "refactor-changes.json").exists() else []
-    attributable = _mentions_changed_production(log_text, changes)
+    # The hvigor log also contains successful compilations and unrelated ArkTS warnings.
+    # Only failed test cases may establish that a test failure belongs to this change.
+    test_failures = _failed_test_evidence(task_dir, failed) if logical_stage == "test" else None
+    if test_failures is not None:
+        log_text = "\n\n".join(_format_test_case(case) for case in test_failures)
+        # A mixed result cannot become green by repairing only the related cases.
+        # Never send unrelated failures to an agent with production-write access.
+        attributable = all(
+            case.get("targeted", False)
+            or _mentions_changed_production(_format_test_case(case), changes)
+            or any(re.search(
+                rf"(?im)^class={re.escape(Path(path).stem)}(?:Instrument)?Test\s*$", _format_test_case(case),
+            ) for path in changes)
+            or bool(task.target.symbol and task.target.symbol.lower() in _format_test_case(case).lower())
+            for case in test_failures
+        )
+    else:
+        if logical_stage == "test":
+            current_logs = _current_test_failure_logs(task_dir)
+            if current_logs is not None:
+                log_text = current_logs
+        attributable = _mentions_changed_production(log_text, changes)
+    host_unavailable = bool(
+        test_failures and attributable and all(is_test_host_unavailable(case["details"]) for case in test_failures)
+    )
     if logical_stage in {"smell", "contract", "runtime", "linter", "review-agent"}:
         repairable = True
+    elif logical_stage == "test" and test_failures is not None:
+        repairable = attributable and not host_unavailable
     elif logical_stage in {"build", "test"}:
         repairable = bool(attributable or (task.target.symbol and task.target.symbol.lower() in log_text.lower()))
     else:
@@ -266,7 +367,8 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     classification = {
         "smell": "SMELL_REMAINS_OR_MOVED",
         "build": "INTRODUCED_BUILD_FAILURE" if repairable else "UNATTRIBUTED_BUILD_FAILURE",
-        "test": "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE",
+        "test": ("TEST_HOST_UNAVAILABLE" if host_unavailable else
+                 "RELATED_TEST_FAILURE" if repairable else "UNATTRIBUTED_TEST_FAILURE"),
         "linter": "INTRODUCED_LINTER_FAILURE",
         "runtime": "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
         "contract": "PUBLIC_CONTRACT_BREAK",
@@ -276,10 +378,33 @@ def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandRes
     return {
         "schemaVersion": "1.0", "attempt": next_attempt, "stage": logical_stage,
         "classification": classification, "repairable": repairable,
-        "summary": summary or failed.reason or f"{logical_stage} 未通过",
+        "summary": ("目标测试在 beforeAll 阶段找不到测试宿主组件，尚未执行目标断言；不可归因于本次生产代码修改"
+                    if host_unavailable else summary or failed.reason or f"{logical_stage} 未通过"),
         "changedProductionFiles": changes, "issues": issues,
         "logTail": log_text,
     }
+
+
+def _smell_issue_file_path(
+    task_dir: Path, issue: dict[str, Any], changes: list[str], fallback: str,
+) -> str:
+    """Keep HomeCheck's actual file, expressed relative to the agent workspace."""
+    reported = str(issue.get("filePath") or "").replace("\\", "/")
+    if not reported:
+        return fallback
+    for changed in sorted(changes, key=len, reverse=True):
+        relative = changed.replace("\\", "/").lstrip("/")
+        if relative and (reported == relative or reported.endswith("/" + relative)):
+            return relative
+    workspace_file = task_dir / "validation-workspace.json"
+    if workspace_file.is_file():
+        source_root = read_json(workspace_file).get("sourceRoot")
+        if source_root:
+            try:
+                return Path(reported).resolve().relative_to(Path(source_root).resolve()).as_posix()
+            except (OSError, ValueError):
+                pass
+    return reported
 
 
 def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
@@ -294,6 +419,77 @@ def _mentions_changed_production(log_text: str, changes: list[str]) -> bool:
         if stem and re.search(rf"(?<![\w$]){re.escape(stem)}(?![\w$])", log_text, re.IGNORECASE):
             return True
     return False
+
+
+def _format_test_case(case: dict[str, Any]) -> str:
+    return f"class={case['suite']}\ntest={case['name']}\n{case['details']}\nresult={case['result']}"
+
+
+def _current_test_failures(task_dir: Path) -> list[dict[str, Any]] | None:
+    """Only the current attempt's failed jobs may supply repair evidence."""
+    manifest = task_dir / "test-results.json"
+    if not manifest.is_file():
+        return None
+    result = read_json(manifest)
+    plan = Path(str(result.get("plan", ""))).resolve()
+    if not plan.is_relative_to((task_dir / "test-attempts").resolve()):
+        return []
+    jobs = []
+    for job in result.get("jobs", []):
+        if job.get("status") not in {"FAIL", "BLOCKED"}:
+            continue
+        # Never read a previous repair's report or a shared Hvigor result path.
+        files = {"log": job.get("log"), **job.get("artifacts", {})}
+        valid = {name: Path(path) for name, path in files.items() if path
+                 and Path(path).resolve().is_relative_to(plan.parent) and Path(path).is_file()}
+        jobs.append(job | {"evidenceFiles": valid})
+    return jobs
+
+
+def _current_test_failure_logs(task_dir: Path) -> str | None:
+    jobs = _current_test_failures(task_dir)
+    if jobs is None:
+        return None
+    return "\n\n".join(job["evidenceFiles"]["log"].read_text(encoding="utf-8", errors="replace")
+                       for job in jobs if "log" in job["evidenceFiles"])
+
+
+def _failed_test_evidence(task_dir: Path, failed: CommandResult) -> list[dict[str, Any]] | None:
+    """Return only failing Hypium cases; None means no usable case-level report."""
+    jobs = _current_test_failures(task_dir)
+    if jobs is not None:
+        failures = []
+        for job in jobs:
+            report = job["evidenceFiles"].get("test_result.txt")
+            if report is None:
+                continue
+            for case in failed_hypium_cases(parse_hypium_cases(report)):
+                targeted = (job.get("selectionReason") == "target-named-suite"
+                            and case["suite"] in job.get("expectedSuites", []))
+                failures.append(case | {"targeted": targeted})
+        return failures or None
+    # Compatibility for custom test commands that predate auto-test manifests.
+    workspace_file = task_dir / "validation-workspace.json"
+    if not workspace_file.is_file() or not failed.command:
+        return None
+    module_match = re.search(r"(?:^|\s)--module\s+(\S+)", failed.command)
+    if not module_match:
+        return None
+    workspace = Path(str(read_json(workspace_file).get("path", "")))
+    module = module_match.group(1).strip('"\'')
+    if not workspace.is_dir():
+        return None
+    reports = [path for path in workspace.rglob("test_result.txt")
+               if path.parts[-6:-1] in {
+                   (".test", "default", "intermediates", "test", "coverage_data"),
+                   (".test", "default", "intermediates", "ohosTest", "coverage_data"),
+               } and path.parents[5].name == module]
+    if not reports:
+        return None
+    failures = []
+    for report in reports:
+        failures.extend(failed_hypium_cases(parse_hypium_cases(report)))
+    return failures or None
 
 
 def _build_agent_failure_report(task_dir: Path, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
@@ -345,7 +541,11 @@ def _build_agent_failure_report(task_dir: Path, failed: CommandResult, next_atte
     }
 
 
-def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_cwd: str, task_dir: Path, dry_run: bool) -> CommandResult:
+def _run_spec(
+    name: str, spec: dict[str, Any], context: dict[str, str], default_cwd: str,
+    task_dir: Path, dry_run: bool, cancel_event: threading.Event | None = None,
+    task_deadline: float | None = None,
+) -> CommandResult:
     command = spec.get("command")
     if not command:
         return CommandResult(name, "SKIPPED", reason="缺少 command")
@@ -355,9 +555,15 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
         return CommandResult(name, "DRY_RUN", command=_display_command(rendered), reason=f"cwd={cwd}")
     if not cwd.exists():
         return CommandResult(name, "BLOCKED", command=_display_command(rendered), reason=f"工作目录不存在：{cwd}")
+    if task_deadline is not None and time.monotonic() >= task_deadline:
+        return CommandResult(
+            name, "BLOCKED", command=_display_command(rendered),
+            reason="单条异味总执行时间超过限制",
+        )
 
     started = time.monotonic()
-    timeout = int(spec.get("timeoutSeconds", 1800))
+    command_timeout = float(spec.get("timeoutSeconds", 1800))
+    command_deadline = started + command_timeout
     try:
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         process = subprocess.Popen(
@@ -373,7 +579,28 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
             creationflags=creationflags,
             start_new_session=os.name != "nt",
         )
-        stdout, stderr = process.communicate(timeout=timeout)
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _terminate_process_tree(process)
+                stdout, stderr = process.communicate()
+                log_file = task_dir / f"{name}.log"
+                output = (stdout or "") + ("\n" + stderr if stderr else "")
+                write_text(log_file, output + "\nCANCELLED_BY_FAIL_FAST")
+                return CommandResult(
+                    name, "SKIPPED", _display_command(rendered),
+                    duration_seconds=round(time.monotonic() - started, 3),
+                    output_file=str(log_file), reason="同组门禁未通过，已由 fail-fast 终止",
+                )
+            now = time.monotonic()
+            effective_deadline = min(command_deadline, task_deadline) if task_deadline is not None else command_deadline
+            remaining = effective_deadline - now
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(rendered, command_timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
         output = (stdout or "") + ("\n" + stderr if stderr else "")
         log_file = task_dir / f"{name}.log"
         write_text(log_file, output)
@@ -401,7 +628,13 @@ def _run_spec(name: str, spec: dict[str, Any], context: dict[str, str], default_
         log_file = task_dir / f"{name}.log"
         output = _as_text(stdout or error.stdout) + ("\n" + _as_text(stderr or error.stderr) if stderr or error.stderr else "")
         write_text(log_file, output + "\nTIMEOUT")
-        return CommandResult(name, "BLOCKED", _display_command(rendered), duration_seconds=round(time.monotonic() - started, 3), output_file=str(log_file), reason=f"超过 {timeout} 秒")
+        total_timeout = task_deadline is not None and time.monotonic() >= task_deadline
+        reason = "单条异味总执行时间超过限制" if total_timeout else f"步骤执行时间超过 {command_timeout:g} 秒"
+        return CommandResult(
+            name, "BLOCKED", _display_command(rendered),
+            duration_seconds=round(time.monotonic() - started, 3),
+            output_file=str(log_file), reason=reason,
+        )
     except OSError as error:
         return CommandResult(name, "BLOCKED", _display_command(rendered), duration_seconds=round(time.monotonic() - started, 3), reason=str(error))
 
@@ -448,6 +681,11 @@ def _terminate_process_tree(process: subprocess.Popen) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
         )
+        # taskkill can report success late or fail to find a just-spawned child.
+        # Always terminate the direct process too so fail-fast and task deadlines
+        # do not wait for the original command timeout.
+        if process.poll() is None:
+            process.kill()
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -563,3 +801,15 @@ def _final_result(task_id: str, results: list[CommandResult], dry_run: bool, ter
     else:
         verdict = "INCOMPLETE"
     return {"schemaVersion": "1.0", "taskId": task_id, "verdict": verdict, "steps": [item.to_dict() for item in results]}
+
+
+def _add_timing(result: dict[str, Any], started: float, timeout_seconds: float) -> None:
+    """Record wall-clock task duration, including agent, validation, repair and review."""
+    duration = round(max(0.0, time.monotonic() - started), 3)
+    result["durationSeconds"] = duration
+    result["timeoutSeconds"] = timeout_seconds
+    result["timedOut"] = any(
+        item.get("status") == "BLOCKED"
+        and "总执行时间超过限制" in str(item.get("reason", ""))
+        for item in result.get("steps", [])
+    )

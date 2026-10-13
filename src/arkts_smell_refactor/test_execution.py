@@ -18,26 +18,54 @@ TEST_TOOL_BLOCKERS = (
 )
 
 
+def parse_hypium_cases(path: Path) -> list[dict[str, str]]:
+    cases: list[dict[str, str]] = []
+    suite = ""
+    name = ""
+    details: list[str] = []
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        if line.startswith("class="):
+            suite = line[6:].strip()
+        elif line.startswith("test="):
+            name, details = line[5:].strip(), []
+        elif line.startswith("result=") and name:
+            cases.append({"suite": suite, "name": name, "result": line[7:].strip(), "details": "\n".join(details)})
+            name = ""
+        elif name:
+            details.append(line)
+    return cases
+
+
+def is_test_host_unavailable(details: str) -> bool:
+    return bool(
+        re.search(r"(?i)(?:component not found|unable to find id)\s*:\s*[^\r\n]+", details)
+        and re.search(r"(?i)error in beforeAll function", details)
+    )
+
+
+def failed_hypium_cases(cases: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [case for case in cases if case["result"].lower() not in {"success", "ignore", "ignored", "skip", "skipped"}]
+
+
 def _result_evidence(path: Path, expected_suites: list[str]) -> dict[str, Any]:
     if not path.is_file():
         return {"status": "BLOCKED", "reason": "missing fresh test_result.txt"}
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     matches = re.findall(r"Tests run:\s*(\d+),\s*Failure:\s*(\d+),\s*Error:\s*(\d+),\s*Pass:\s*(\d+)", text)
     successes: dict[str, int] = {}
-    current_suite = ""
-    failed_case = False
-    for line in text.splitlines():
-        if line.startswith("class="):
-            current_suite = line.removeprefix("class=").strip()
-        elif line.startswith("result="):
-            result = line.removeprefix("result=").strip()
-            if result == "Success":
-                successes[current_suite] = successes.get(current_suite, 0) + 1
-            elif result.lower() not in {"ignore", "ignored", "skip", "skipped"}:
-                failed_case = True
+    cases = parse_hypium_cases(path)
+    failures = failed_hypium_cases(cases)
+    for case in cases:
+        if case["result"] == "Success":
+            successes[case["suite"]] = successes.get(case["suite"], 0) + 1
     summary = dict(zip(("tests", "failures", "errors", "passed"), map(int, matches[-1]))) if matches else None
-    evidence: dict[str, Any] = {"summary": summary, "suitePassCounts": successes}
-    if failed_case or (summary and (summary["failures"] or summary["errors"])):
+    evidence: dict[str, Any] = {"summary": summary, "suitePassCounts": successes, "failedCases": failures}
+    if failures and summary and summary["tests"] == len(failures) and summary["passed"] == 0 and all(
+        is_test_host_unavailable(case["details"]) for case in failures
+    ):
+        return evidence | {"status": "BLOCKED", "classification": "TEST_HOST_UNAVAILABLE",
+                           "reason": "test host unavailable in beforeAll; production assertions did not execute"}
+    if failures or (summary and (summary["failures"] or summary["errors"])):
         return evidence | {"status": "FAIL", "reason": "Hypium test cases failed"}
     if not summary or summary["tests"] <= 0 or summary["passed"] != summary["tests"]:
         return evidence | {"status": "BLOCKED", "reason": "missing, empty or incomplete Hypium summary"}
@@ -87,8 +115,15 @@ def run_test_plan(
             exit_code = completed.returncode
             evidence = _result_evidence(artifacts / "test_result.txt", job["expectedSuites"])
             if exit_code != 0:
-                evidence["status"] = "BLOCKED" if re.search(TEST_TOOL_BLOCKERS, output, re.IGNORECASE) else "FAIL"
+                blocked = (re.search(TEST_TOOL_BLOCKERS, output, re.IGNORECASE)
+                           or evidence.get("classification") == "TEST_HOST_UNAVAILABLE")
+                evidence["status"] = "BLOCKED" if blocked else "FAIL"
                 evidence["reason"] = f"Hvigor exited with code {exit_code}; " + evidence["reason"]
+            if job["kind"] == "instrument" and evidence["status"] == "PASS":
+                device_log = artifacts / "coverage.log"
+                device_text = device_log.read_text(encoding="utf-8", errors="replace") if device_log.is_file() else ""
+                if "OHOS_REPORT_RESULT:" not in device_text or "TestFinished-ResultCode: 0" not in device_text:
+                    evidence.update(status="BLOCKED", reason="missing fresh device execution completion evidence")
         except OSError as error:
             output, exit_code = str(error), None
             evidence = {"status": "BLOCKED", "reason": "cannot launch Hvigor: " + str(error)}

@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from arkts_smell_refactor.gate import hvigor_gate
 from arkts_smell_refactor.test_execution import _result_evidence, run_test_plan
 from arkts_smell_refactor.test_plan import build_test_plan
 from arkts_smell_refactor.utils import write_json
@@ -198,6 +199,9 @@ class TestGateTests(unittest.TestCase):
         file = self.source / job["modulePath"] / f".test/default/intermediates/{variant}/coverage_data/test_result.txt"
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(text, encoding="utf-8")
+        if job["kind"] == "instrument":
+            file.with_name("coverage.log").write_text(
+                "OHOS_REPORT_RESULT: stream=complete\nTestFinished-ResultCode: 0\n", encoding="utf-8")
         return file
 
     @staticmethod
@@ -280,6 +284,116 @@ class TestGateTests(unittest.TestCase):
         self.assertEqual(1, run.call_count)
         result = json.loads((self.task_dir / "test-results.json").read_text())
         self.assertEqual("instrument", result["pendingJobs"][0]["kind"])
+
+    def test_clone_without_method_name_runs_counterpart_and_cross_module_host(self):
+        self.suite("local")
+        self.suite("instrument", "Other", module="host")
+        self.task["smell_type"] = "code-clone"
+        self.task["target"].update(symbol=None, related_targets=[{
+            "filePath": "app/products/phone/src/main/ets/Other.ets",
+        }])
+        write_json(self.task_dir / "task.json", self.task)
+        plan = self.plan()
+        self.assertEqual({"PageTest", "OtherTest"}, {job["scope"] for job in plan["jobs"]})
+        def run(command, **kwargs):
+            job = next(job for job in plan["jobs"] if "scope=" + job["scope"] in command)
+            self.result_file(job, self.success(job["scope"]))
+            return subprocess.CompletedProcess(command, 0, "", "")
+        code, run = self.execute(plan, run)
+        self.assertEqual(0, code)
+        self.assertEqual(2, run.call_count)
+
+    def test_device_pass_requires_fresh_completion_log(self):
+        self.suite("instrument")
+        plan = self.plan()
+        for completion in (None, "OHOS_REPORT_RESULT: stream=done", "TestFinished-ResultCode: 0"):
+            with self.subTest(completion=completion):
+                def run(command, **kwargs):
+                    file = self.result_file(plan["jobs"][0], self.success()).with_name("coverage.log")
+                    if completion is None:
+                        file.unlink()
+                    else:
+                        file.write_text(completion, encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                code, _ = self.execute(plan, run)
+                self.assertEqual(3, code)
+                result = json.loads((self.task_dir / "test-results.json").read_text())
+                self.assertIn("device execution", result["jobs"][0]["reason"])
+
+    def test_stale_device_log_cannot_supply_completion_for_new_result(self):
+        self.suite("instrument")
+        plan = self.plan()
+        file = self.result_file(plan["jobs"][0], self.success())
+        def run(command, **kwargs):
+            self.assertFalse(file.with_name("coverage.log").exists())
+            file.write_text(self.success(), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        self.assertEqual(3, self.execute(plan, run)[0])
+
+    def test_all_cases_stopped_in_before_all_are_blocked(self):
+        self.suite("instrument")
+        plan = self.plan()
+        for exit_code in (0, 1):
+            with self.subTest(exit_code=exit_code):
+                def run(command, **kwargs):
+                    self.result_file(plan["jobs"][0],
+                        "class=PageTest\ntest=case\nComponent not found: scenario_bar, error in beforeAll function\n"
+                        "result=Error\nTests run: 1, Failure: 0, Error: 1, Pass: 0")
+                    return subprocess.CompletedProcess(command, exit_code, "", "")
+                self.assertEqual(3, self.execute(plan, run)[0])
+                result = json.loads((self.task_dir / "test-results.json").read_text())
+                self.assertEqual("TEST_HOST_UNAVAILABLE", result["jobs"][0]["classification"])
+
+    def test_component_missing_in_assertion_remains_a_failure(self):
+        self.suite("instrument")
+        plan = self.plan()
+        def run(command, **kwargs):
+            self.result_file(plan["jobs"][0],
+                "class=PageTest\ntest=case\nComponent not found: button at Page.ets:10\n"
+                "result=Error\nTests run: 1, Failure: 0, Error: 1, Pass: 0")
+            return subprocess.CompletedProcess(command, 1, "", "")
+        self.assertEqual(1, self.execute(plan, run)[0])
+
+    def test_unexpected_failure_is_not_hidden_by_passing_target_suite(self):
+        self.suite("local")
+        plan = self.plan()
+        def run(command, **kwargs):
+            self.result_file(plan["jobs"][0],
+                "class=PageTest\ntest=target\nresult=Success\n"
+                "class=OtherTest\ntest=indirect\nat Page.ets:10\nresult=Error\n"
+                "Tests run: 2, Failure: 0, Error: 1, Pass: 1")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        self.assertEqual(1, self.execute(plan, run)[0])
+
+    def test_auto_test_gate_uses_host_scope_and_requires_its_result(self):
+        self.suite("local", "LocalUnit")
+        self.suite("instrument", module="host")
+        task_dir = self.root / "runs/session/task"
+        task_dir.mkdir(parents=True)
+        write_json(task_dir / "task.json", self.task)
+        for actual_suite, expected_code in (("PageTest", 0), ("OtherTest", 3)):
+            with self.subTest(actual_suite=actual_suite):
+                def run(command, cwd, **kwargs):
+                    self.assertIn("module=host@ohosTest", command)
+                    self.assertIn("scope=PageTest", command)
+                    result = Path(cwd) / "products/phone/.test/default/intermediates/ohosTest/coverage_data/test_result.txt"
+                    result.parent.mkdir(parents=True, exist_ok=True)
+                    result.write_text(self.success(actual_suite), encoding="utf-8")
+                    result.with_name("coverage.log").write_text(
+                        "OHOS_REPORT_RESULT: stream=done\nTestFinished-ResultCode: 0", encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                with redirect_stdout(io.StringIO()), patch("arkts_smell_refactor.test_execution.subprocess.run", side_effect=run):
+                    self.assertEqual(expected_code, hvigor_gate(task_dir, self.source, Path("hvigorw"), None, "auto-test"))
+
+    def test_install_failure_clears_previous_attempt_evidence(self):
+        self.suite("local")
+        task_dir = self.root / "runs/session/task"
+        task_dir.mkdir(parents=True)
+        write_json(task_dir / "task.json", self.task)
+        write_json(task_dir / "test-results.json", {"status": "PASS", "jobs": [{"status": "PASS"}]})
+        with patch("arkts_smell_refactor.gate.subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
+            self.assertEqual(1, hvigor_gate(task_dir, self.source, Path("hvigorw"), Path("ohpm"), "auto-test"))
+        self.assertEqual([], json.loads((task_dir / "test-results.json").read_text())["jobs"])
 
 
 if __name__ == "__main__":

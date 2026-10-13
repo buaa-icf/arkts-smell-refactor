@@ -54,6 +54,32 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual("work", tasks[0].target.symbol)
             self.assertEqual("switch-statement", tasks[1].smell_type)
 
+    def test_test_kind_comes_from_dataset_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            instrument = root / "instrument-test"
+            instrument.mkdir()
+            dataset = instrument / "feature-envy.json"
+            dataset.write_text(json.dumps([{
+                "filePath": "demo/src/main/ets/Foo.ets", "sourceProject": "demo",
+                "messages": [{"rule": "@extrulesproject/feature-envy-check", "message": "Method 'foo' is feature-envious."}],
+            }]), encoding="utf-8")
+            self.assertEqual("instrument-test", load_dataset_tasks(dataset, root)[0].raw["testKind"])
+
+    def test_pasted_input_uses_dataset_catalog(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            catalog = root / "arkts-code-smell/dataset/positive/local-test"
+            catalog.mkdir(parents=True)
+            record = {"filePath": "demo/src/main/ets/Foo.ets", "sourceProject": "demo", "messages": [
+                {"rule": "@extrulesproject/long-method-check", "message": "Method 'foo' is too long."}
+            ]}
+            (catalog / "long-method.json").write_text(json.dumps([record]), encoding="utf-8")
+            pasted = root / "runs/input.json"
+            pasted.parent.mkdir()
+            pasted.write_text(json.dumps([record]), encoding="utf-8")
+            self.assertEqual("local-test", load_dataset_tasks(pasted, root)[0].raw["testKind"])
+
     def test_rejects_cleanarch_shape(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

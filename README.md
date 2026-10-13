@@ -193,10 +193,9 @@ python -m arkts_smell_refactor start --workspace "D:\ROG\Documents\harmonyos\fea
 粘贴 JSON
 → 静态风险分析
 → DevEco Code 重构
-→ HomeCheck 异味复检
-→ hvigorw 编译
+→ 并行验证：HomeCheck 异味复检、hvigorw 编译、公共契约、Code Linter
+→ 按风险执行 runtime smoke
 → Local Test 或 Instrument Test
-→ Code Linter
 → 独立 DevEco Code 评审
 → 失败时生成定向失败报告并最多修复 3 轮
 → 汇总 PASS / FAIL / BLOCKED
@@ -219,7 +218,7 @@ Agent 在隔离区执行 Hvigor 验证时自动产生的模块级 `BuildProfile.
 
 默认重构规范是保留原方法、所属类、签名和调用关系，优先使用 Extract Method、Extract Class 或 Introduce Delegate。也就是把依恋外部对象的逻辑提取出去，由原方法委托，而不是删除/搬走原方法再批量修改调用方。
 
-Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、diff 直接依赖的一跳生产实现、风险报告和前四层结果，并把其工作目录限制在任务目录；它不扫描原项目、调用点或测试代码，也不重复运行构建和测试。新增委托、Mapper、Builder、Helper 等依赖实现会进入 `review-context-production`，避免因收窄项目访问而丢失语义证据。
+Review Agent 与 Refactor Agent 相互独立。平台只向 Review Agent 提供重构前/后生产代码快照、统一 diff、相关生产依赖、风险报告和门禁结果，并把其工作目录限制在任务目录；它不扫描原项目、调用点或测试代码，也不重复运行构建和测试。依赖材料沿相对 import/export、本地 `file:` 包和模块入口递归收集，覆盖新增委托、Mapper、Builder、Helper 的调用链，通过已处理文件集合终止循环；材料写入 `review-context-production` 和 `review-context.json`。
 
 工具会自动从 PATH 查找实际安装的 `deveco`、`hvigorw`、`codelinter`，并自动定位同一工作区下的 `homecheck-extrule`。缺少工具时对应步骤记为 `BLOCKED/INCOMPLETE`，不会要求使用者临时拼接命令。
 
@@ -428,24 +427,29 @@ python -m arkts_smell_refactor run `
 
 ```text
 DevEco Code Refactor Agent
-  → 异味复检
-  → 编译
+  → 并行：异味复检、编译、已配置的公共契约、Code Linter（required 模式）
+  → runtime smoke（按风险启用）
   → 自动选择相关 Local Test / Instrument Test（必要时两者都运行）
-  → Code Linter（required 模式执行；skip 模式跳过）
   → 独立 DevEco Code Review Agent
 ```
 
-流水线严格 fail-fast：异味失败后跳过 build/test/linter/review，build 失败后跳过 test/linter/review，test 失败后跳过 linter/review；Review 只在本次必需门禁全部 PASS 后运行。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建，不删除仍可能被构建进程占用的旧工作区。每轮代码修改后重新从异味复检开始执行本次启用的全部门禁。`BLOCKED` 和无法归因到本次修改的 build/test 失败不进入代码修复 loop。
+流水线采用 fail-fast：并行组中任一门禁 FAIL/BLOCKED 时终止尚未完成的同组子进程，并跳过 runtime/test/review；已经完成的门禁保留实际结果。并行组完成后，runtime 与 test 依次执行，Review 只在本次必需门禁全部 PASS 后运行。`linterMode=skip` 时 Linter 不启动、不参与验收或返修。可归因于本次修改的失败会生成 `failure-report-N.json` 和 `repair-prompt-N.md`，交给隔离的重构 Agent 继续修复，最多修复 3 轮。每轮使用独立的 `refactor-workspace-repair-N`，从真实仓库中的上一轮代码创建；修改后重新执行本次启用的全部门禁。出现 `BLOCKED`（包括与其他门禁 FAIL 同时发生）或无法归因到本次修改的 build/test 失败时，不进入代码修复 loop。
+
+自动运行的单条任务默认总上限为 1200 秒，覆盖风险及提示词准备、Refactor、门禁、Repair 和 Review；到达上限后终止正在执行的子进程树并记为 BLOCKED。高级配置通过 `taskTimeoutSeconds` 调整，非正值表示关闭总上限；各步骤的 `timeoutSeconds` 仍独立生效。`result.json` 记录 `durationSeconds`、`timeoutSeconds` 和 `timedOut`，自动运行的 `summary.json` 同时记录任务与批次耗时。批次耗时包含输入解析后的初始化，任务耗时从该条风险分析准备开始；外部计时若还包含源码快照、启动等步骤，应保留原口径，不能直接替换为这里的任务耗时。20 分钟是执行保护上限，不是同类 7 分钟或跨类 15 分钟的达标阈值。
 
 HomeCheck 子进程使用任务内的 `homecheck-temp` 临时目录，避免 Windows 版 cloc 无法在系统临时目录创建文件。每次扫描保存独立报告，只接受本轮有效结果；扫描工具非零退出、报告缺失或格式错误记为 `BLOCKED`，不启动生产代码返修。只有扫描完成后仍命中目标或变更范围内异味，smell 才记为可返修的 `FAIL`。
 
 测试门禁使用 `auto-test`：读取工程根 `build-profile.json5` 的模块映射，在各模块的 `src/test` 与 `src/ohosTest` 中查找与目标文件、克隆关联文件同名的 `Foo.test.ets/ts/js` 或 `FooTest.test.ets/ts/js`，从 `describe` 提取套件名并设置 `scope`。测试可以位于其他宿主模块（例如 `phone` 模块测试 `order` 模块的页面）。同一目标两类测试都有时均运行；目标无法匹配、套件名无法静态确定或新增变更模块没有对应目标时，回退到该模块全部现有测试类型。该匹配是命名约定，不代表已证明方法覆盖率；不使用数据集目录名或 UI 装饰器猜测测试类型。
 
+数据集目录和显式 `testKind` 保留为任务元信息，不控制自动测试选择；交互粘贴不要求同一工作区下存在数据集目录。Code Clone 可以没有 `target.symbol`，仍按目标文件及关联片段选择套件。
+
 选择候选文件前，从各测试类型的 `List.test.ets/ts/js` 沿静态 import/export 检查可达性，排除未接入入口的遗留测试文件，也不将其加入模块回退的预期套件。例如 Local 目录留有 `RecommendBar.test.ets`，但入口只注册了 LocalUnit，而 Instrument 入口接入了 RecommendBar，则选择目标 Instrument。支持入口别名、间接注册与重导出；没有标准入口、存在动态加载或无法解析的相对依赖时保守保留候选，不静默免除某类测试。静态可达不保证运行时确实注册，实际套件与用例证据仍必须通过下面的检查。
 
-Local Test 使用 `test -p module=<模块名>`，Instrument Test 使用 `onDeviceTest -p module=<模块名>@ohosTest`，均开启 coverage。设备测试需要已连接设备和可用签名。每个子任务运行前清除验证副本中的旧结果，运行后必须同时满足 Hvigor 成功退出、产生新的 Hypium 结果、实际执行非零用例且无失败，以及预期套件确实执行。仅构建/签名成功、零用例、缺失结果或缺失预期套件不会 PASS；环境或证据不足记为 BLOCKED，不交给 Agent 修改生产代码。子任务仍遵循 fail-fast。
+Local Test 使用 `test -p module=<模块名>`，Instrument Test 使用 `onDeviceTest -p module=<模块名>@ohosTest`，均开启 coverage。设备测试需要已连接设备和可用签名。每个子任务运行前清除验证副本中的旧结果，运行后必须同时满足 Hvigor 成功退出、产生新的 Hypium 结果、实际执行非零用例且无失败，以及预期套件确实执行。Instrument 还要求本轮 `coverage.log` 同时包含 `OHOS_REPORT_RESULT:` 和 `TestFinished-ResultCode: 0`。仅构建/签名成功、零用例、缺失结果或缺失预期套件不会 PASS；环境或证据不足记为 BLOCKED。所有用例在 beforeAll 因找不到宿主组件而中断时也记为 BLOCKED；断言阶段找不到组件仍是 FAIL。子任务仍遵循 fail-fast。
 
 `test-plan.json` 保存选择依据；`test-results.json` 保存最新汇总；`test-attempts/<时间戳>/` 保留各轮每个子任务的命令、耗时、日志和原始测试结果。以前只执行 Local Test 的实验需按新门禁重新计时，不能直接沿用为完整测试验收指标。高级配置直接执行外部测试命令时，应自行提供等价的结果校验。
+
+测试验收以本次选中套件的全部实际用例为准；模块回退时验收该模块实际运行的全部套件，不按方法名排除失败。返修归因只读取最新一轮失败子任务的报告：目标命名套件、指向变更生产文件的失败栈等可作为归因证据；通过子任务的编译日志、历史报告和无关失败不能单独触发生产代码返修。同一轮混有无法归因的失败时停止返修。只有编译失败、尚无用例结果时，使用本轮失败子任务的编译诊断。
 
 若验收不要求 Linter，可显式跳过，避免纯格式/命名问题触发修复循环：
 
@@ -454,8 +458,6 @@ python -m arkts_smell_refactor start --workspace D:\arktsProgram --linter-mode s
 ```
 
 通用 CLI 默认为 `--linter-mode required`；高级 `run --config` 用配置顶层 `"linterMode": "skip"` 表达相同策略。仅删除 Linter 配置或设置 `enabled: false` 不构成豁免，默认仍判 INCOMPLETE。跳过时不执行 Linter、不触发其返修，`gates.json` 和 `result.json` 保存 `validationPolicy.linterMode` 与 `linter: SKIPPED`；构建、测试、异味、已配置的契约/runtime 门禁和语义评审仍需通过。新批次需注明该策略，与历史完整门禁结果分别报告。
-
-本机的 `tools/run_code_clone_series.ps1` 与 `tools/run_long_method_series.ps1` 已按当前实验要求默认使用 `-LinterMode skip`，可传 `-LinterMode required` 恢复完整门禁。这两个本地脚本原本就在 `.gitignore` 中，不随 Git 变更交付；可复用的开关实现位于上述 CLI 和 pipeline 配置中。
 
 required 模式会把目标 ArkTS 项目 `code-linter.json5` 中明确配置的命名、可见性、分号、尾逗号、引号等风格规则摘录到首轮和返修 Prompt。摘要与自动门禁共用配置定位逻辑，保留文件范围、原始选项、关闭项和例外；不执行配置中的文本。`ruleSet` 的继承规则及未写出的默认选项尚未展开，因此摘要不能代替实际 Linter，也不保证消除全部返修。skip 模式不读取或注入此摘要。恢复 Linter 的实际耗时收益需重新实验确认。
 
@@ -481,7 +483,7 @@ Refactor/Repair Agent 的内部验证只允许使用 DevEco Code 的 `build_proj
 
 同步采用事务式变更清单：平台先扫描并分类整轮修改，存在未授权文件时不回写任何文件，也不更新正式的 `changedProductionFiles`；候选修改和拒绝原因单独写入 `agent-change-attempt-*.json`。Refactor/Repair Agent 自身失败也会生成失败报告，区分 `MODIFICATION_BOUNDARY_VIOLATION`、`NO_ALLOWED_PRODUCTION_CHANGE` 和一般执行失败。可重新规划的边界失败会把拒绝文件和平台边界交给下一轮，而不是再次使用旧的 smell 报告。
 
-证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。测试失败只有在日志明确指向本次修改文件、对应的类型名或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL，但不会让 Agent 猜测性修改生产代码。
+证书校验、SSL/TLS、鉴权、网络不可达、签名和设备缺失属于 `BLOCKED`，不会进入代码修复 loop。Instrument Test 的目标用例如果全部在 `beforeAll` 阶段因测试宿主组件找不到而报错，也记为 `TEST_HOST_UNAVAILABLE` / `BLOCKED`：用例已被选中，但尚未执行目标逻辑，需要检查测试宿主的启动与页面配置，不能让修复 Agent 猜测性修改生产代码。其他测试失败只有在日志明确指向本次修改文件、对应的类型名或目标符号时才进入 loop；否则标记为 `UNATTRIBUTED_TEST_FAILURE`，最终测试门禁仍为 FAIL。
 
 自动配置按完整 SSL/TLS 标记及明确的签名失败信息识别环境阻塞，避免把 `ProcessLibs`、成功的 `SignHap` 或类型诊断中的 `signature` 误分类。`result.json` 的阻塞步骤 `reason` 会记录正则实际命中的文本。ArkTS 类型错误保持 `FAIL`，可归因于本次修改时进入修复 loop；例如抽取方法后将 `string | undefined` 传给严格的 `string` 或 `Date` 参数。
 
@@ -586,6 +588,6 @@ python -m unittest discover -s tests -v
 3. 静态调用点与条件分支分析是文本/词法级近似，后续可接入 ArkTS AST/类型分析提高符号、类型和闭包捕获精度。
 4. 自动返修最多 3 轮；当前 build/test 归因依据错误日志是否命中本次修改文件或目标符号，复杂跨模块错误仍可能被保守判为不可返修。
 5. 暂未接入 Data Clumps 和循环依赖的特殊输入格式。
-6. 当前按任务顺序执行门禁，不并行运行构建和测试。
+6. 异味、编译、公共契约和 Linter 可并行；build 与 test 仍保持串行并复用验证工作区，避免 Hvigor 缓存、构建产物和设备竞争。
 
 后续可进一步用 ArkTS 编译诊断结构化输出增强 build/test 的失败归因，再考虑批量调度和可视化报告。
