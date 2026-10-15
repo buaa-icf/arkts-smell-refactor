@@ -1,0 +1,26 @@
+<idea-plugin>
+    <id>org.buaa.arktsrefactor</id>
+    <name>ArkTS Refactor</name>
+    <version>0.1.0</version>
+    <vendor>BUAA</vendor>
+    <description><![CDATA[
+        Detect ArkTS code smells, inspect refactoring risks, validate isolated candidates,
+        review changes and apply them from DevEco Studio.
+    ]]></description>
+    <idea-version since-build="243" until-build="243.*"/>
+    <depends>com.intellij.modules.platform</depends>
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="ArkTS Refactor" anchor="right"
+                    factoryClass="org.buaa.arktsrefactor.ui.RefactorToolWindowFactory"
+                    icon="/icons/arktsRefactor.svg"/>
+        <applicationConfigurable id="org.buaa.arktsrefactor.settings"
+                                 displayName="ArkTS Refactor"
+                                 instance="org.buaa.arktsrefactor.ui.SettingsConfigurable"/>
+    </extensions>
+    <actions>
+        <action id="ArkTSRefactor.Open" class="org.buaa.arktsrefactor.action.OpenPanelAction"
+                text="ArkTS Refactor" description="Open ArkTS smell detection and refactoring">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
