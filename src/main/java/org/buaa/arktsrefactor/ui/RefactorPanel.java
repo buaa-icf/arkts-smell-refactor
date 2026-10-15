@@ -2,6 +2,13 @@ package org.buaa.arktsrefactor.ui;
 
 import com.google.gson.*;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
+import com.intellij.diff.DiffContentFactory;
+import com.intellij.diff.DiffManager;
+import com.intellij.diff.requests.SimpleDiffRequest;
+import com.intellij.openapi.fileTypes.FileTypeManager;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
@@ -14,6 +21,9 @@ import com.intellij.ui.table.JBTable;
 import org.buaa.arktsrefactor.model.Issue;
 import org.buaa.arktsrefactor.service.ProjectSessionService;
 import org.buaa.arktsrefactor.service.SourceNavigationService;
+import org.buaa.arktsrefactor.service.FileTransaction;
+import org.buaa.arktsrefactor.bridge.PythonBridgeClient;
+import org.buaa.arktsrefactor.persistence.PluginSettings;
 
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -24,11 +34,11 @@ import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.regex.Pattern;
 
 public final class RefactorPanel extends JBPanel<RefactorPanel> implements Disposable {
     private final Project project;
@@ -50,6 +60,17 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final JButton cancel = new JButton("取消");
     private final JCheckBox followLog = new JCheckBox("跟随日志", true);
     private List<Issue> renderedIssues = List.of();
+    private final JBTextArea risk = textArea();
+    private final JBTextArea validation = textArea();
+    private final DefaultListModel<JsonObject> historyModel = new DefaultListModel<>();
+    private final JBList<JsonObject> historyList = new JBList<>(historyModel);
+    private JsonArray renderedHistory;
+    private final JBTextArea instructions = new JBTextArea(3, 36);
+    private final DefaultListModel<JsonObject> changes = new DefaultListModel<>();
+    private final JBList<JsonObject> changeList = new JBList<>(changes);
+    private JButton analyzeButton, generateButton, diffButton, applyButton, validateButton, undoButton, discardButton;
+    private JsonObject renderedPrepared, renderedCandidate;
+    private boolean panelDisposed;
 
     public RefactorPanel(Project project) {
         super(new BorderLayout(6, 6));
@@ -58,7 +79,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         JPanel top = new JPanel(new BorderLayout(4, 4));
         top.add(new JBLabel("工程：" + project.getName()), BorderLayout.NORTH);
-        JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        JPanel tools = new JPanel(new GridLayout(0, 3, 4, 4));
         tools.add(scope);
         tools.add(button("规则…", this::chooseRules));
         tools.add(button("开始检测", this::detect));
@@ -88,10 +109,49 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         });
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JBScrollPane(table), new JBScrollPane(details));
         split.setResizeWeight(.6); results.add(split, BorderLayout.CENTER);
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        JPanel actions = new JPanel(new GridLayout(0, 2, 4, 4));
         actions.add(button("打开代码", this::navigate)); actions.add(button("关联片段…", this::related));
+        analyzeButton = button("分析重构风险", this::analyze); actions.add(analyzeButton);
         results.add(actions, BorderLayout.SOUTH);
         tabs.addTab("检测结果", results);
+        JPanel task = new JPanel(new BorderLayout(4, 4));
+        JPanel input = new JPanel(new BorderLayout(4, 4));
+        input.add(new JBLabel("业务说明（编辑后需重新分析）"), BorderLayout.NORTH);
+        instructions.setLineWrap(true); instructions.setWrapStyleWord(true);
+        instructions.getAccessibleContext().setAccessibleName("重构业务说明");
+        input.add(new JBScrollPane(instructions), BorderLayout.CENTER);
+        task.add(input, BorderLayout.NORTH); task.add(new JBScrollPane(risk), BorderLayout.CENTER);
+        JPanel taskActions = new JPanel(new GridLayout(0, 1, 4, 4));
+        generateButton = button("生成候选变更", service::generate); taskActions.add(generateButton);
+        taskActions.add(new JBLabel("<html>在工程副本中生成和验证，完成后可预览并应用。</html>")); task.add(taskActions, BorderLayout.SOUTH);
+        tabs.addTab("重构任务", task);
+
+        changeList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        changeList.setCellRenderer((list, value, index, selected, focus) -> {
+            var renderer = new DefaultListCellRenderer();
+            return renderer.getListCellRendererComponent(list, PythonBridgeClient.string(value, "changeType") + " · " +
+                    PythonBridgeClient.string(value, "relativePath") + " (" + PythonBridgeClient.string(value, "size") + " B)", index, selected, focus);
+        });
+        changeList.addListSelectionListener(e -> { if (diffButton != null) diffButton.setEnabled(!service.state().busy && changeList.getSelectedValue() != null); });
+        JPanel candidate = new JPanel(new BorderLayout(4, 4));
+        JSplitPane preview = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JBScrollPane(changeList), new JBScrollPane(validation));
+        preview.setResizeWeight(.4); candidate.add(preview, BorderLayout.CENTER);
+        JPanel candidateActions = new JPanel(new GridLayout(0, 2, 4, 4));
+        diffButton = button("查看 Diff", this::diff); candidateActions.add(diffButton);
+        applyButton = button("应用全部变更", this::apply); candidateActions.add(applyButton);
+        validateButton = button("重新验证", service::validateApplied); candidateActions.add(validateButton);
+        undoButton = button("撤销最近应用", service::undo); candidateActions.add(undoButton);
+        discardButton = button("放弃候选", service::discard); candidateActions.add(discardButton);
+        candidate.add(candidateActions, BorderLayout.SOUTH); tabs.addTab("变更预览", candidate);
+        historyList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        historyList.setCellRenderer((list, value, index, selected, focus) -> new DefaultListCellRenderer().getListCellRendererComponent(list,
+                PythonBridgeClient.string(value, "startedAt") + " · " + PythonBridgeClient.string(value, "method") + " · " +
+                PythonBridgeClient.string(value, "state") + " " + PythonBridgeClient.string(value, "verdict") + " " + PythonBridgeClient.string(value, "applyState"), index, selected, focus));
+        JPanel records = new JPanel(new BorderLayout()); records.add(new JBScrollPane(historyList), BorderLayout.CENTER);
+        JPanel recordActions = new JPanel(new GridLayout(0, 2, 4, 4));
+        recordActions.add(button("刷新记录", service::history)); recordActions.add(button("打开记录证据…", this::evidence));
+        recordActions.add(button("导出运行摘要…", this::exportHistory));
+        records.add(recordActions, BorderLayout.SOUTH); tabs.addTab("运行记录", records);
         tabs.addTab("环境", new JBScrollPane(environment));
         JPanel logPanel = new JPanel(new BorderLayout()); logPanel.add(new JBScrollPane(logs), BorderLayout.CENTER);
         logPanel.add(followLog, BorderLayout.SOUTH); tabs.addTab("运行日志", logPanel);
@@ -100,10 +160,24 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         progress.setPreferredSize(new Dimension(80, 5)); footer.add(progress, BorderLayout.NORTH);
         footer.add(status, BorderLayout.CENTER); add(footer, BorderLayout.SOUTH);
         search.getDocument().addDocumentListener(new DocumentListener() {
-            private void filter() { sorter.setRowFilter(search.getText().isBlank() ? null : RowFilter.regexFilter("(?i)" + Pattern.quote(search.getText()))); }
+            private void filter() {
+                String needle = search.getText().toLowerCase(java.util.Locale.ROOT);
+                sorter.setRowFilter(needle.isBlank() ? null : new RowFilter<IssueTableModel, Integer>() {
+                    @Override public boolean include(Entry<? extends IssueTableModel, ? extends Integer> entry) {
+                        Issue issue = model.rows.get(entry.getIdentifier());
+                        String text = issue.label() + " " + issue.path() + " " + issue.symbol() + " " + issue.message() + " " + issue.rule();
+                        return text.toLowerCase(java.util.Locale.ROOT).contains(needle);
+                    }
+                });
+            }
             @Override public void insertUpdate(DocumentEvent e) { filter(); }
             @Override public void removeUpdate(DocumentEvent e) { filter(); }
             @Override public void changedUpdate(DocumentEvent e) { filter(); }
+        });
+        instructions.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { controls(); }
+            @Override public void removeUpdate(DocumentEvent e) { controls(); }
+            @Override public void changedUpdate(DocumentEvent e) { controls(); }
         });
         service.subscribe(listener); render();
     }
@@ -178,14 +252,113 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
 
     private void showIssue() {
         Issue issue = selected();
-        if (issue == null) { details.setText("选择一条异味查看检测证据。"); return; }
+        if (issue == null) { details.setText("选择一条异味查看检测证据。"); controls(); return; }
         StringBuilder text = new StringBuilder(issue.label()).append("  ·  ").append(issue.symbol()).append('\n')
                 .append(issue.path()).append(':').append(issue.line()).append('\n').append(issue.message())
-                .append("\n\n规则：").append(issue.rule()).append("\n状态：").append(issue.supported() ? "可分析重构风险" : "此规则仅支持只读查看");
+                .append("\n\n规则：").append(issue.rule()).append("\n状态：").append(issue.supported() ? "可分析重构风险" : "此规则或文件仅支持只读查看");
         for (JsonElement item : issue.data().getAsJsonArray("relatedTargets")) {
             text.append("\n关联片段：").append(item.getAsJsonObject().get("filePath").getAsString());
         }
         details.setText(text.toString()); details.setCaretPosition(0);
+        controls();
+    }
+
+    private void analyze() {
+        Issue issue = selected(); if (issue == null || !issue.supported() || !saveProjectDocuments()) return;
+        service.prepare(issue, instructions.getText());
+    }
+
+    private void apply() {
+        var candidate = service.state().candidate;
+        if (candidate == null) return;
+        int count = candidate.getAsJsonArray("changes").size();
+        if (Messages.showYesNoDialog(project, "将完整应用 " + count + " 个文件变更，并重新验证当前工程。可通过 IDE Undo 撤销。", "应用候选变更", "应用全部变更", "返回预览", Messages.getQuestionIcon()) == Messages.YES)
+            service.apply();
+    }
+
+    private void diff() {
+        JsonObject selectedChange = changeList.getSelectedValue();
+        JsonObject candidate = service.state().candidate;
+        if (selectedChange == null || candidate == null) return;
+        String name = PythonBridgeClient.string(selectedChange, "relativePath");
+        Path run = Path.of(PythonBridgeClient.string(candidate, "runDirectory"));
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                Path allowedRun = Path.of(PluginSettings.getInstance().getState().runs).toRealPath();
+                if (!run.toRealPath().startsWith(allowedRun)) throw new IllegalArgumentException("Diff 产物目录越界");
+                Path afterPath = run.resolve("content/after").resolve(name).toRealPath();
+                if (!afterPath.startsWith(run.resolve("content/after").toRealPath())) throw new IllegalArgumentException("Diff 文件路径越界");
+                if (Files.size(afterPath) > 8L * 1024 * 1024) throw new IllegalArgumentException("此资源过大，请在证据文件中查看大小和哈希");
+                byte[] after = Files.readAllBytes(afterPath);
+                if (!FileTransaction.sha(after).equals(PythonBridgeClient.string(selectedChange, "afterSha256"))) throw new IllegalArgumentException("候选内容变化，请重新生成");
+                byte[] before = null;
+                if (!selectedChange.get("beforeSha256").isJsonNull()) {
+                    Path beforePath = run.resolve("content/before").resolve(name).toRealPath();
+                    if (!beforePath.startsWith(run.resolve("content/before").toRealPath())) throw new IllegalArgumentException("基线文件路径越界");
+                    if (Files.size(beforePath) > 8L * 1024 * 1024) throw new IllegalArgumentException("基线资源过大，请在证据文件中查看大小和哈希");
+                    before = Files.readAllBytes(beforePath);
+                    if (!FileTransaction.sha(before).equals(selectedChange.get("beforeSha256").getAsString())) throw new IllegalArgumentException("基线内容变化");
+                }
+                byte[] frozenBefore = before;
+                ApplicationManager.getApplication().invokeLater(() -> safe(() -> {
+                    if (panelDisposed || project.isDisposed()) return;
+                    try {
+                        var factory = DiffContentFactory.getInstance(); var type = FileTypeManager.getInstance().getFileTypeByFileName(name);
+                        DiffManager.getInstance().showDiff(project, new SimpleDiffRequest(name,
+                                frozenBefore == null ? factory.createEmpty() : factory.createFromBytes(project, frozenBefore, type, name),
+                                factory.createFromBytes(project, after, type, name), "生成时本地基线", "最终候选"));
+                    } catch (Exception e) { throw new IllegalStateException(e.getMessage(), e); }
+                }), ModalityState.any());
+            } catch (Exception e) {
+                ApplicationManager.getApplication().invokeLater(() -> { if (!panelDisposed && !project.isDisposed()) Messages.showErrorDialog(project, e.getMessage(), "无法打开 Diff"); }, ModalityState.any());
+            }
+        });
+    }
+
+    private void evidence() {
+        String directory = historyList.getSelectedValue() == null ? service.state().runDirectory : PythonBridgeClient.string(historyList.getSelectedValue(), "runDirectory");
+        if (directory.isBlank()) return;
+        Path path = Path.of(directory);
+        try { if (!path.toRealPath().startsWith(Path.of(PluginSettings.getInstance().getState().runs).toRealPath())) throw new IllegalArgumentException("证据目录越界"); }
+        catch (java.io.IOException e) { throw new IllegalArgumentException("证据目录不存在", e); }
+        var root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(path);
+        if (root == null) return;
+        var descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor().withRoots(root);
+        var file = FileChooser.chooseFile(descriptor, project, root);
+        if (file != null) FileEditorManager.getInstance(project).openFile(file, true);
+    }
+
+    private void exportHistory() {
+        JsonObject selected = historyList.getSelectedValue();
+        if (selected == null) throw new IllegalArgumentException("请先刷新并选择运行记录");
+        var folder = FileChooser.chooseFile(FileChooserDescriptorFactory.createSingleFolderDescriptor(), project, null);
+        if (folder == null) return;
+        JsonObject record = selected.deepCopy();
+        Path destination = Path.of(folder.getPath()).resolve("arkts-run-" + java.util.UUID.randomUUID() + ".json");
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                Files.writeString(destination, new GsonBuilder().setPrettyPrinting().create().toJson(record), java.nio.charset.StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE);
+                ApplicationManager.getApplication().invokeLater(() -> { if (!panelDisposed && !project.isDisposed()) Messages.showInfoMessage(project, "已导出：" + destination, "运行摘要"); }, ModalityState.any());
+            } catch (Exception e) {
+                ApplicationManager.getApplication().invokeLater(() -> { if (!panelDisposed && !project.isDisposed()) Messages.showErrorDialog(project, e.getMessage(), "导出失败"); }, ModalityState.any());
+            }
+        });
+    }
+
+    private void controls() {
+        if (analyzeButton == null) return;
+        var state = service.state(); Issue issue = selected();
+        boolean instructionsMatch = state.prepared != null && instructions.getText().equals(PythonBridgeClient.string(state.prepared, "instructions"));
+        analyzeButton.setEnabled(!state.busy && issue != null && issue.supported());
+        generateButton.setEnabled(!state.busy && !state.applied && !state.stale && state.prepared != null && issue != null &&
+                issue.id().equals(state.activeIssueId) && instructionsMatch);
+        diffButton.setEnabled(!state.busy && changeList.getSelectedValue() != null);
+        applyButton.setEnabled(!state.busy && !state.stale && !state.applied && instructionsMatch && state.candidate != null && "PASS".equals(PythonBridgeClient.string(state.candidate, "verdict")));
+        validateButton.setEnabled(!state.busy && !state.stale && state.applied && state.candidate != null);
+        undoButton.setEnabled(!state.busy && service.canUndo());
+        discardButton.setEnabled(!state.busy && !state.applied && state.candidate != null);
+        instructions.setEnabled(!state.busy);
     }
 
     private void navigate() { Issue issue = selected(); if (issue != null) SourceNavigationService.open(project, issue); }
@@ -227,9 +400,55 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             int caret = logs.getCaretPosition(); logs.setText(state.log);
             logs.setCaretPosition(followLog.isSelected() ? logs.getDocument().getLength() : Math.min(caret, logs.getDocument().getLength()));
         }
+        if (renderedPrepared != state.prepared) {
+            renderedPrepared = state.prepared;
+            if (state.risk != null) {
+                risk.setText(riskText(state.risk)); risk.setCaretPosition(0); tabs.setSelectedIndex(1);
+            } else risk.setText("选择问题并分析风险。静态建议会与实际候选变更分别显示。");
+        }
+        if (renderedCandidate != state.candidate) {
+            renderedCandidate = state.candidate; changes.clear();
+            if (state.candidate != null) {
+                for (JsonElement entry : state.candidate.getAsJsonArray("changes")) changes.addElement(entry.getAsJsonObject());
+                if (!changes.isEmpty()) changeList.setSelectedIndex(0);
+                tabs.setSelectedIndex(2);
+            }
+        }
+        StringBuilder summary = new StringBuilder();
+        if (state.candidate != null) summary.append("候选验证：").append(PythonBridgeClient.string(state.candidate, "verdict"))
+                .append("\n应用状态：").append(state.applied ? "已应用" : "未应用").append(state.stale ? " / 内容已变化" : "").append('\n');
+        if (state.result != null) {
+            summary.append("本轮结论：").append(PythonBridgeClient.string(state.result, "verdict")).append('\n');
+            if (state.result.has("validationPolicy")) summary.append("策略：").append(state.result.get("validationPolicy")).append('\n');
+            if (state.result.has("steps")) for (JsonElement element : state.result.getAsJsonArray("steps")) {
+                JsonObject step = element.getAsJsonObject(); summary.append(PythonBridgeClient.string(step, "name")).append("  ")
+                        .append(PythonBridgeClient.string(step, "status")).append("  ").append(PythonBridgeClient.string(step, "reason")).append('\n');
+            }
+        }
+        state.steps.forEach((name, value) -> summary.append(name).append(": ").append(value).append('\n'));
+        validation.setText(summary.toString());
+        if (renderedHistory != state.history) {
+            renderedHistory = state.history; historyModel.clear();
+            for (JsonElement element : state.history) historyModel.addElement(element.getAsJsonObject());
+            if (!historyModel.isEmpty()) historyList.setSelectedIndex(0);
+        }
+        controls();
     }
 
-    @Override public void dispose() { service.unsubscribe(listener); }
+    private static String riskText(JsonObject report) {
+        StringBuilder text = new StringBuilder("静态风险：").append(PythonBridgeClient.string(report, "riskLevel"));
+        if (report.has("callers")) text.append("\n生产调用点：").append(PythonBridgeClient.string(report.getAsJsonObject("callers"), "production"));
+        text.append("\n测试信息由独立测试计划和实际结果提供。\n\n风险证据：\n");
+        if (report.has("risks")) for (JsonElement item : report.getAsJsonArray("risks")) {
+            var value = item.getAsJsonObject(); text.append("• ").append(PythonBridgeClient.string(value, "level")).append(" ").append(PythonBridgeClient.string(value, "evidence")).append('\n');
+        }
+        text.append("\n必须保持的约束：\n");
+        if (report.has("recommendedConstraints")) for (JsonElement item : report.getAsJsonArray("recommendedConstraints")) text.append("• ").append(PythonBridgeClient.string(item.getAsJsonObject(), "instruction")).append('\n');
+        text.append("\n详细静态画像与局限：\n").append(new GsonBuilder().setPrettyPrinting().create().toJson(report));
+        return text.toString();
+    }
+
+    @Override public void dispose() { panelDisposed = true; service.unsubscribe(listener); }
 
     private static final class IssueTableModel extends AbstractTableModel {
         private List<Issue> rows = List.of();
@@ -239,7 +458,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         @Override public String getColumnName(int column) { return columns[column]; }
         @Override public Object getValueAt(int row, int column) {
             Issue issue = rows.get(row);
-            return switch (column) { case 0 -> issue.label(); case 1 -> issue.path(); case 2 -> issue.line(); case 3 -> issue.symbol().isBlank() ? "关联片段" : issue.symbol(); default -> issue.text("severity"); };
+            return switch (column) { case 0 -> issue.label(); case 1 -> issue.path(); case 2 -> issue.line(); case 3 -> issue.symbol().isBlank() ? ("code-clone".equals(issue.text("smellType")) ? "关联片段" : "未解析符号") : issue.symbol(); default -> issue.text("severity"); };
         }
         @Override public Class<?> getColumnClass(int column) { return column == 2 ? Integer.class : String.class; }
     }

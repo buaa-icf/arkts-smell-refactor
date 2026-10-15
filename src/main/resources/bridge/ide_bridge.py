@@ -53,6 +53,14 @@ def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def hash_file(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def contained(root: Path, target: Path) -> Path:
     resolved = target.resolve()
     if not resolved.is_relative_to(root.resolve()):
@@ -111,16 +119,17 @@ def normalize_issues(records, root: Path):
             related = []
             for match in re.finditer(r"similar to\s+(.+?\.(?:ets|ts))(?:\s*>\s*[^:]+)?:(\d+)-(\d+)", message["message"], re.I):
                 related_path = file_in_project(root, match.group(1))
-                related.append({"filePath": str(related_path), "startLine": int(match.group(2)), "endLine": int(match.group(3))})
+                related.append({"filePath": str(related_path), "reportedPath": match.group(1), "startLine": int(match.group(2)), "endLine": int(match.group(3)), "sourceSha256": hash_file(related_path)})
             result.append({"issueId": str(uuid.uuid4()), "filePath": path.relative_to(root).as_posix(),
                            "absolutePath": str(path), "rule": message["rule"],
                            "smellType": RULES.get(message["rule"], "unsupported"),
                            "severity": str(message.get("severity", "")), "message": message["message"],
                            "symbol": symbol_match.group(1) if symbol_match else None,
                            "startLine": max(1, line), "endLine": max(1, end), "relatedTargets": related,
-                           "sourceSha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                           "sourceSha256": hash_file(path),
                            "rawMessage": message, "commitHash": str(record.get("commitHash", "")),
-                           "supported": message["rule"] in RULES})
+                           "supported": message["rule"] in RULES and allowed_production(path.relative_to(root).as_posix()) and
+                                        all(allowed_production(Path(item["filePath"]).relative_to(root).as_posix()) for item in related)})
     return result
 
 
@@ -225,6 +234,7 @@ def scan(params: dict, config: dict, root: Path, run: Path):
     files = [file_in_project(root, p) for p in selected] if selected else list(source_files(scope))
     if scope.is_file() and not selected:
         files = [scope] if scope.suffix.lower() in {".ets", ".ts"} else []
+    files = [path for path in files if not any(part.lower() in {"test", "ohostest"} for part in path.relative_to(root).parts)]
     if not files:
         raise BridgeError("INVALID_INPUT", "检测范围内没有生产 .ets/.ts 文件")
     rules = params.get("rules") or list(RULES)
@@ -251,6 +261,16 @@ def scan(params: dict, config: dict, root: Path, run: Path):
                "--includeRules=" + ",".join(RULES[rule] if RULES[rule] != "code-clone" else "code-clone-fragment" for rule in rules)]
     if run_tool(command, homecheck, run / "scan.log") != 0:
         raise BridgeError("TOOL_UNAVAILABLE", "HomeCheck 扫描失败，请查看本轮日志")
+    summary_path = output / "summary.json"
+    if not summary_path.is_file():
+        raise BridgeError("ARTIFACT_UNAVAILABLE", "扫描器未生成本轮执行摘要")
+    repositories = read_json(summary_path).get("repositories", [])
+    expected_rules = set(rules)
+    if len(repositories) != 1 or repositories[0].get("sharedRun", {}).get("success") is not True:
+        raise BridgeError("TOOL_UNAVAILABLE", "HomeCheck 实际扫描未成功，空报告不能视为零异味")
+    executed = {item.get("ruleName") for item in repositories[0].get("runs", []) if item.get("success") is True}
+    if not expected_rules.issubset(executed):
+        raise BridgeError("TOOL_UNAVAILABLE", "本轮没有完成全部选中规则")
     reports = list((output / "runs").glob("*/issuesReport.json"))
     report = reports[0] if len(reports) == 1 else output / "issuesReport.json"
     if not report.is_file():
@@ -278,7 +298,355 @@ def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | No
         return {"issues": normalize_issues(records, root)}
     if method == "scan.start":
         return scan(params, config, root, run)
+    if method == "task.prepare":
+        return prepare_candidate(params, config, root, run)
+    if method == "task.execute":
+        return execute_candidate(params, config, root, run)
+    if method == "task.validateApplied":
+        return validate_applied(params, config, root, run)
+    if method in {"candidate.check", "candidate.describe"}:
+        candidate_run, candidate = load_run(params["candidateId"], config, root, "candidate.json")
+        if method == "candidate.check":
+            if candidate["verdict"] != "PASS" or snapshot(Path(candidate["originalRoot"])) != candidate["baselineFiles"] or configuration_digest(config) != candidate["configDigest"]:
+                raise BridgeError("BASELINE_CHANGED", "工程、工具配置或验证结论不满足应用条件")
+            for item in candidate["changes"]:
+                for phase in ("before", "after"):
+                    expected = item.get(phase + "Sha256")
+                    if expected is not None:
+                        path = contained(candidate_run, candidate_run / "content" / phase / item["relativePath"])
+                        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                            raise BridgeError("CANDIDATE_CHANGED", "冻结候选内容已变化")
+        return candidate
+    if method == "history.list":
+        records = []
+        run_root = Path(config["runs"]).resolve()
+        for path in run_root.glob("*/session.json"):
+            try:
+                item = read_json(path)
+                if item.get("projectRoot") == str(root):
+                    if item.get("state") == "RUNNING":
+                        item["state"] = "INTERRUPTED"
+                    item["runDirectory"] = str(path.parent)
+                    transaction = path.parent / "apply-transaction.json"
+                    if transaction.is_file():
+                        item["applyState"] = read_json(transaction).get("state", "UNKNOWN")
+                    records.append(item)
+            except (OSError, ValueError):
+                continue
+        records.sort(key=lambda x: x.get("startedAt", ""), reverse=True)
+        return {"records": records[:200]}
     raise BridgeError("INVALID_REQUEST", f"未实现的方法：{method}")
+
+
+def snapshot(root: Path):
+    result = {}
+    for directory, directories, filenames in os.walk(root, followlinks=False):
+        directories[:] = sorted(d for d in directories if d not in IGNORED)
+        for name in directories + filenames:
+            path = Path(directory) / name
+            if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+                raise BridgeError("PATH_OUTSIDE_ROOT", f"候选工程不支持符号链接或 junction：{path}")
+            contained(root, path)
+        for name in sorted(filenames):
+            path = Path(directory) / name
+            result[path.relative_to(root).as_posix()] = hash_file(path)
+    return result
+
+
+def copy_project(source: Path, destination: Path):
+    # Validate links before shutil can dereference them into the snapshot.
+    snapshot(source)
+    shutil.copytree(source, destination, ignore=lambda directory, names: [name for name in names if name in IGNORED])
+
+
+def allowed_production(relative: str):
+    path = Path(relative)
+    normalized = "/" + path.as_posix().lower()
+    if any(part in {"test", "ohostest", "appscope"} for part in normalized.split("/")):
+        return False
+    return ("/src/main/resources/" in normalized or
+            ("/src/main/" in normalized and path.suffix.lower() in {".ets", ".ts"}) or
+            (path.name.lower() == "index.ets" and len(path.parts) >= 2))
+
+
+def harmony_root(target: Path, root: Path):
+    for parent in target.parents:
+        if not parent.is_relative_to(root):
+            break
+        if (parent / "build-profile.json5").is_file() and (parent / "hvigor/hvigor-config.json5").is_file():
+            return parent
+    raise BridgeError("INVALID_INPUT", "目标不属于可构建的 Harmony 工程（缺少 build-profile.json5 或 hvigor 配置）")
+
+
+def configuration_digest(config: dict):
+    data = dict(config)
+    data["pythonRuntime"] = sys.version
+    backend = Path(config.get("backend", "")) / "src/arkts_smell_refactor"
+    data["backendSources"] = {p.relative_to(backend).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                              for p in backend.rglob("*.py") if p.is_file()}
+    package = Path(config.get("homecheck", "")) / "extrulesproject-1.0.0.tgz"
+    data["rulePackage"] = hashlib.sha256(package.read_bytes()).hexdigest() if package.is_file() else None
+    data["tools"] = {}
+    for name, value in discover_tools(config).items():
+        path = Path(value) if value else None
+        data["tools"][name] = {"path": value, "size": path.stat().st_size, "mtime": path.stat().st_mtime_ns} if path and path.is_file() else value
+    sdk = Path(config.get("studio", "")) / "sdk/default/openharmony/ets"
+    data["sdkMetadata"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sdk.glob("*.json") if p.is_file()}
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+
+def load_run(identifier: str, config: dict, root: Path, manifest: str):
+    try:
+        uuid.UUID(identifier)
+    except (ValueError, TypeError):
+        raise BridgeError("INVALID_REQUEST", "任务标识必须为 UUID")
+    run_root = Path(config["runs"]).resolve()
+    run = contained(run_root, run_root / identifier)
+    data = read_json(run / manifest)
+    if not Path(data["originalRoot"]).resolve().is_relative_to(root):
+        raise BridgeError("PATH_OUTSIDE_ROOT", "任务不属于当前工程")
+    return run, data
+
+
+def prepare_candidate(params: dict, config: dict, root: Path, run: Path):
+    from arkts_smell_refactor.dataset import load_dataset_tasks
+    from arkts_smell_refactor.risk import analyze_risks
+    from arkts_smell_refactor.prompts import build_refactor_prompt, build_review_prompt
+    from arkts_smell_refactor.public_contract import prepare_public_contract
+    from arkts_smell_refactor.runtime_smoke import prepare_runtime_smoke
+    from arkts_smell_refactor.automatic import _review_risk
+
+    issue = params["issue"]
+    if issue.get("rule") not in RULES:
+        raise BridgeError("UNSUPPORTED_RULE", "首版重构仅开放四条已联调规则")
+    target = contained(root, Path(issue["absolutePath"]))
+    if hash_file(target) != issue.get("sourceSha256"):
+        raise BridgeError("BASELINE_CHANGED", "检测后目标代码已变化，请重新检测")
+    original = harmony_root(target, root)
+    if not allowed_production(target.relative_to(original).as_posix()):
+        raise BridgeError("INVALID_INPUT", "目标不属于允许重构的生产源码")
+    related = issue.get("relatedTargets", [])
+    for entry in related:
+        related_path = contained(root, Path(entry["filePath"]))
+        if not related_path.is_relative_to(original) or not allowed_production(related_path.relative_to(original).as_posix()):
+            raise BridgeError("INVALID_INPUT", "关联片段必须是同工程内允许重构的生产源码")
+        if hash_file(related_path) != entry.get("sourceSha256"):
+            raise BridgeError("BASELINE_CHANGED", "检测后关联片段已变化，请重新检测")
+        if harmony_root(related_path, root) != original:
+            raise BridgeError("INVALID_INPUT", "首版不支持跨 Harmony 工程的关联重构")
+    baseline = snapshot(original)
+    emit("workflow.changed", {"status": "冻结工程基线并分析风险…"})
+    saved = run / "baseline"
+    copy_project(original, saved)
+    if snapshot(saved) != baseline or snapshot(original) != baseline:
+        raise BridgeError("BASELINE_CHANGED", "工程在创建快照时发生变化")
+    stage = run / "staging" / original.name
+    copy_project(saved, stage)
+    relative = target.relative_to(original).as_posix()
+    message = dict(issue["rawMessage"])
+    text = str(message["message"])
+    for entry in related:
+        replacement = f"{original.name}/{Path(entry['filePath']).relative_to(original).as_posix()}"
+        text = text.replace(entry.get("reportedPath", entry["filePath"]), replacement)
+    text = text.replace(str(original), str(stage)).replace(original.as_posix(), stage.as_posix())
+    message["message"] = text
+    record = {"filePath": f"{original.name}/{relative}", "sourceProject": original.name,
+              "commitHash": issue.get("commitHash", ""), "messages": [message]}
+    write_json(run / "input.json", [record])
+    task = load_dataset_tasks(run / "input.json", stage.parent)[0]
+    task.target.related_targets = [{"filePath": f"{original.name}/{Path(item['filePath']).relative_to(original).as_posix()}",
+                                   "range": {"startLine": item["startLine"], "endLine": item["endLine"]}} for item in related]
+    task_dir = run / "backend"
+    risk = analyze_risks(task)
+    write_json(task_dir / "task.json", task.to_dict()); write_json(task_dir / "risk-report.json", risk)
+    write_json(task_dir / "review-risk.json", _review_risk(risk))
+    prepare_runtime_smoke(task, risk, task_dir); prepare_public_contract(task, task_dir)
+    prompt = build_refactor_prompt(task, risk, linter_mode=config.get("linterMode", "required"))
+    if params.get("instructions", "").strip():
+        prompt += "\n\n用户业务说明（不得改变平台约束和门禁）：\n" + params["instructions"][:8000]
+    (task_dir / "refactor-prompt.md").write_text(prompt, encoding="utf-8")
+    review = build_review_prompt(task, risk) + "\n只使用平台提供的生产基线、当前快照、依赖与 Diff；不得访问原始工程或测试。\n"
+    (task_dir / "review-prompt.md").write_text(review, encoding="utf-8")
+    data = {"taskHandle": run.name, "taskId": task.task_id, "originalRoot": str(original),
+            "targetRelativePath": relative, "issue": issue, "baselineFiles": baseline,
+            "configDigest": configuration_digest(config), "risk": risk, "runDirectory": str(run)}
+    write_json(run / "prepared.json", data)
+    return data
+
+
+def pipeline_config(task_dir: Path, config: dict):
+    from arkts_smell_refactor.automatic import _auto_config
+    from arkts_smell_refactor.runner import _task_from_file
+    task = _task_from_file(task_dir / "task.json")
+    risk = read_json(task_dir / "risk-report.json")
+    result = _auto_config(task, task_dir, risk, discover_tools(config),
+                          read_json(task_dir / "runtime-smoke-plan.json"), read_json(task_dir / "public-contract-plan.json"),
+                          linter_mode=config.get("linterMode", "required"))
+    settings = task_dir / "bridge-settings.json"
+    write_json(settings, config)
+    adapter = str(Path(__file__).resolve())
+    for key in ("refactorAgent", "repairAgent"):
+        if result.get(key):
+            command = [sys.executable, adapter, "--gate", "refactor", "--task-dir", str(task_dir),
+                       "--settings", str(settings), "--source-root", task.project_root]
+            if key == "repairAgent":
+                command += ["--prompt-file", "{repair_prompt_file}"]
+            result[key]["command"] = command
+    if discover_tools(config).get("homecheck"):
+        result["gates"]["smell"]["command"] = [sys.executable, adapter, "--gate", "smell", "--task-dir", str(task_dir),
+                                                 "--settings", str(settings), "--source-root", task.project_root]
+    return result
+
+
+class EventLogWriter:
+    def write(self, value):
+        if value.strip():
+            emit("log.appended", {"text": value[:8000]})
+        return len(value)
+
+    def flush(self):
+        pass
+
+
+def pipeline_progress(name, status):
+    emit("step.updated", {"stepId": name, "status": status})
+    emit("workflow.changed", {"status": f"{name}: {status}"})
+
+
+def execute_candidate(params: dict, config: dict, root: Path, run: Path):
+    import arkts_smell_refactor.runner as runner
+    prepared_run, prepared = load_run(params["taskHandle"], config, root, "prepared.json")
+    original = Path(prepared["originalRoot"])
+    if snapshot(original) != prepared["baselineFiles"] or configuration_digest(config) != prepared["configDigest"]:
+        raise BridgeError("BASELINE_CHANGED", "准备后工程或工具配置变化，请重新分析")
+    if not inspect_environment(config)["canRefactor"]:
+        raise BridgeError("TOOL_UNAVAILABLE", "重构环境不完整，请先检查环境")
+    stage = run / "staging" / original.name
+    copy_project(prepared_run / "baseline", stage)
+    task_dir = run / "backend"
+    shutil.copytree(prepared_run / "backend", task_dir)
+    old_prefix = str(prepared_run / "staging")
+    for path in task_dir.iterdir():
+        if path.suffix in {".json", ".md"}:
+            text = path.read_text(encoding="utf-8")
+            # JSON stores escaped Windows paths; replace both encodings.
+            text = text.replace(json.dumps(old_prefix)[1:-1], json.dumps(str(stage.parent))[1:-1]).replace(old_prefix, str(stage.parent))
+            path.write_text(text, encoding="utf-8")
+    original_writer = runner.write_text
+    def write_log(path, text):
+        original_writer(path, text)
+        if Path(path).suffix == ".log":
+            emit("log.appended", {"text": f"\n[{Path(path).name}]\n"})
+            for offset in range(0, len(text), 8000):
+                emit("log.appended", {"text": text[offset:offset + 8000]})
+    runner.write_text = write_log
+    try:
+        with contextlib.redirect_stdout(EventLogWriter()):
+            result = runner.execute_pipeline(task_dir, pipeline_config(task_dir, config), progress=pipeline_progress)
+    finally:
+        runner.write_text = original_writer
+    before, after = prepared["baselineFiles"], snapshot(stage)
+    deleted = set(before) - set(after)
+    changed = [name for name, digest in after.items() if before.get(name) != digest]
+    if deleted or any(not allowed_production(name) for name in changed):
+        raise BridgeError("INVALID_INPUT", "候选包含删除、重命名或非生产文件修改，整项拒绝应用")
+    if snapshot(original) != before:
+        raise BridgeError("BASELINE_CHANGED", "生成期间原始工程已变化，候选失效")
+    entries = []
+    for name in changed:
+        frozen_after = run / "content/after" / name
+        frozen_after.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(stage / name, frozen_after)
+        frozen_before = run / "content/before" / name
+        if name in before:
+            frozen_before.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(prepared_run / "baseline" / name, frozen_before)
+        entries.append({"relativePath": name, "kind": "resource" if "/src/main/resources/" in "/" + name else "source",
+                        "changeType": "modified" if name in before else "added", "beforeSha256": before.get(name),
+                        "afterSha256": after[name], "size": frozen_after.stat().st_size})
+    if not entries and result["verdict"] == "PASS":
+        result["verdict"] = "FAIL"
+        result["reason"] = "候选没有最终生产修改"
+    manifest = {"candidateId": run.name, "taskHandle": prepared_run.name, "taskId": prepared["taskId"],
+                "originalRoot": str(original), "baselineFiles": before, "afterFiles": after,
+                "configDigest": prepared["configDigest"], "changes": entries,
+                "verdict": result["verdict"], "runDirectory": str(run), "result": result}
+    write_json(run / "candidate.json", manifest)
+    return {"candidate": manifest, "result": result, "runDirectory": str(run)}
+
+
+def validate_applied(params: dict, config: dict, root: Path, run: Path):
+    from arkts_smell_refactor.runner import _task_from_file, _context, _run_gates_fail_fast, _final_result
+    from arkts_smell_refactor.models import CommandResult
+    candidate_run, candidate = load_run(params["candidateId"], config, root, "candidate.json")
+    original = Path(candidate["originalRoot"])
+    if candidate["verdict"] != "PASS" or snapshot(original) != candidate["afterFiles"] or configuration_digest(config) != candidate["configDigest"]:
+        raise BridgeError("BASELINE_CHANGED", "应用内容或配置与已验证候选不同，请重新检测")
+    stage = run / "staging" / original.name
+    copy_project(original, stage)
+    task_dir = run / "backend"
+    shutil.copytree(candidate_run / "backend", task_dir)
+    old_prefix = str(candidate_run / "staging")
+    for path in task_dir.iterdir():
+        if path.suffix in {".json", ".md"}:
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(json.dumps(old_prefix)[1:-1], json.dumps(str(stage.parent))[1:-1]).replace(old_prefix, str(stage.parent))
+            path.write_text(text, encoding="utf-8")
+    task = _task_from_file(task_dir / "task.json")
+    plan = pipeline_config(task_dir, config)
+    with contextlib.redirect_stdout(EventLogWriter()):
+        steps = _run_gates_fail_fast(task_dir, task, plan, _context(task_dir, task), False, pipeline_progress, "")
+    required = [step for step in steps if not (step.name == "linter" and config.get("linterMode") == "skip" and step.status == "SKIPPED")]
+    required.append(CommandResult("review-agent", "PASS", reason="复用完全相同源码、依赖、策略的候选 PASS 评审"))
+    result = _final_result(task.task_id, required, False)
+    result["validationPolicy"] = {"linterMode": config.get("linterMode", "required")}
+    result["reviewEvidenceFrom"] = str(candidate_run)
+    write_json(task_dir / "result.json", result)
+    response = {"result": result, "runDirectory": str(run)}
+    if result["verdict"] == "PASS":
+        if snapshot(original) != candidate["afterFiles"]:
+            raise BridgeError("BASELINE_CHANGED", "工程在验证时变化，结果已失效")
+        refreshed = scan({"scopePath": str(original)}, config, root, run)
+        response["issues"] = refreshed["issues"]
+    return response
+
+
+def gate_main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gate", required=True, choices=("refactor", "smell"))
+    parser.add_argument("--task-dir", type=Path, required=True)
+    parser.add_argument("--settings", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--prompt-file", type=Path)
+    args = parser.parse_args()
+    config = read_json(args.settings)
+    configure_environment(config)
+    import arkts_smell_refactor.gate as gate
+    source = args.source_root.resolve()
+    run_root = Path(config["runs"]).resolve()
+    contained(run_root, source); contained(run_root, args.task_dir)
+    if args.gate == "smell":
+        original_reader = gate.read_json
+        project_config = (Path(config["homecheck"]) / "config/projectConfig.json").resolve()
+        def reader(path):
+            value = original_reader(path)
+            if Path(path).resolve() == project_config:
+                sdk = Path(config["studio"]) / "sdk/default"
+                value.update(ohosSdkPath=str(sdk / "openharmony/ets"), hmsSdkPath=str(sdk / "hms/ets"))
+            return value
+        gate.read_json = reader
+        return gate.smell_gate(args.task_dir, Path(config["homecheck"]), source)
+    original_sync = gate._sync_production_changes
+    def checked_sync(mirror, target):
+        before, after = snapshot(target), snapshot(mirror)
+        deleted = [name for name in before if allowed_production(name) and name not in after]
+        if deleted:
+            print("Refactor Agent 删除了生产文件，拒绝同步：" + ", ".join(deleted), file=sys.stderr)
+            return 4
+        return original_sync(mirror, target)
+    gate._sync_production_changes = checked_sync
+    return gate.refactor_gate(args.task_dir, source, Path(discover_tools(config)["deveco"]), args.prompt_file)
 
 
 def main():
@@ -288,7 +656,10 @@ def main():
         line = sys.stdin.readline(8 * 1024 * 1024 + 1)
         if len(line) > 8 * 1024 * 1024:
             raise BridgeError("INVALID_REQUEST", "请求超过 8 MiB")
-        request = json.loads(line)
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise BridgeError("INVALID_REQUEST", "请求必须为 JSON 对象")
+        request = value
         if request.get("protocolVersion") != 1:
             raise BridgeError("UNSUPPORTED_PROTOCOL", "仅支持协议版本 1")
         config = request["config"]
@@ -297,11 +668,13 @@ def main():
         if not root.is_dir():
             raise BridgeError("INVALID_INPUT", "当前工程目录不存在")
         method = request["method"]
-        if method not in {"session.hello", "environment.inspect", "issues.import"}:
+        if method not in {"session.hello", "environment.inspect", "issues.import", "history.list", "candidate.check", "candidate.describe"}:
             run = create_run(config, root, method)
         result = dispatch(method, request.get("params", {}), config, root, run)
         if run:
             session = read_json(run / "session.json"); session["state"] = "SUCCEEDED"
+            if isinstance(result.get("result"), dict):
+                session["verdict"] = result["result"].get("verdict")
             write_json(run / "session.json", session); write_json(run / "response.json", result)
         response = {"protocolVersion": 1, "type": "response", "requestId": request.get("requestId"), "ok": True, "result": result}
         OUTPUT.write(json.dumps(response, ensure_ascii=False) + "\n"); OUTPUT.flush()
@@ -318,4 +691,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(gate_main() if "--gate" in sys.argv else main())

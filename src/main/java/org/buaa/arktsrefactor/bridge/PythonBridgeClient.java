@@ -71,6 +71,9 @@ public final class PythonBridgeClient {
             }
             if (exit != 0) throw new IOException("后端异常退出：" + exit);
             return response.getAsJsonObject("result");
+        } catch (Exception error) {
+            if (cancelled.get()) throw new CancellationException("操作已取消");
+            throw error;
         } finally {
             if (process.isAlive()) terminate(process);
             active = null;
@@ -107,7 +110,14 @@ public final class PythonBridgeClient {
         Path directory = Path.of(PathManager.getSystemPath(), "arkts-refactor", "bridge", digest.substring(0, 16));
         Files.createDirectories(directory);
         Path script = directory.resolve("ide_bridge.py");
-        if (!Files.exists(script) || !MessageDigest.isEqual(bytes, Files.readAllBytes(script))) Files.write(script, bytes);
+        if (!Files.exists(script) || !MessageDigest.isEqual(bytes, Files.readAllBytes(script))) {
+            Path temporary = Files.createTempFile(directory, "adapter-", ".tmp");
+            try {
+                Files.write(temporary, bytes);
+                try { Files.move(temporary, script, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+                catch (AtomicMoveNotSupportedException e) { Files.move(temporary, script, StandardCopyOption.REPLACE_EXISTING); }
+            } finally { Files.deleteIfExists(temporary); }
+        }
         return script;
     }
 

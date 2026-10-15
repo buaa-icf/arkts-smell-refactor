@@ -18,6 +18,11 @@
                                  instance="org.buaa.arktsrefactor.ui.SettingsConfigurable"/>
     </extensions>
     <actions>
+        <action id="ArkTSRefactor.Detect" class="org.buaa.arktsrefactor.action.DetectSmellsAction"
+                text="检测 ArkTS 代码异味" description="Detect smells in the selected file or directory">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
         <action id="ArkTSRefactor.Open" class="org.buaa.arktsrefactor.action.OpenPanelAction"
                 text="ArkTS Refactor" description="Open ArkTS smell detection and refactoring">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
