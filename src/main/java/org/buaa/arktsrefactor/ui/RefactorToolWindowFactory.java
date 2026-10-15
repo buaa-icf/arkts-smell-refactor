@@ -11,6 +11,7 @@ public final class RefactorToolWindowFactory implements ToolWindowFactory, DumbA
     @Override public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow window) {
         RefactorPanel panel = new RefactorPanel(project);
         var content = ContentFactory.getInstance().createContent(panel, "", false);
+        content.setDisposer(panel);
         window.getContentManager().addContent(content);
     }
 }

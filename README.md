@@ -28,6 +28,11 @@ Python ≥ 3.10；本机 `arkts-smell-refactor` 源码；HomeCheck 扩展规则�
 ## 实施进度
 
 - 阶段一：Java 21、插件描述符、原生 Tool Window、Tools 菜单、持久化设置及 ZIP 构建。
-- 后续阶段：检测结果与定位、候选重构、Diff、应用事务和历史。
+- 阶段二：本地 Python 适配器、环境检查、四规则检测、JSON 文件/粘贴导入、结果筛选、源码/关联片段定位、进程树取消和日志。
+- 后续阶段：候选重构、Diff、应用事务和历史。
+
+适配器作为插件资源发布，每次操作启动独立 Python worker；协议使用版本 1 JSONL，不要求修改后端仓库或安装新 Python 包。
+
+桥接测试：`python -m unittest discover -s tests -v`。真实 HomeCheck 开发机烟测：`python tools/smoke_detect.py`。
 
 插件的真实加载和 Harmony 工程执行需在目标 DevEco 中验收；构建/结构检查不代替宿主交互验收。
