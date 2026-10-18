@@ -2,6 +2,8 @@
 
 更新：2026-10-18，插件版本 0.1.5。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
 
+Gradle 工程根目录现为主仓库下的 `deveco-plugin/`，本页构建和测试命令均在该目录执行；[仓库集成说明](repository-integration.md)记录迁移方式。
+
 ## 已实现流程
 
 1. 打开 Tools → ArkTS Refactor，设置 Python、后端、HomeCheck、DevEco SDK 和任务目录；进入“环境”页自动检查，也可点击工具栏“环境检查”。

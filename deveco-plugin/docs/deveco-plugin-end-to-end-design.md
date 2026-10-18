@@ -2,7 +2,8 @@
 
 日期：2026-10-14  
 状态：设计稿；本文描述待实现行为，现有能力单独标明。  
-插件仓库：`C:\Users\RoyCai\Desktop\group_project\deveco_plugin\deveco_plugin`  
+插件工程：`C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor\deveco-plugin`（2026-10-18 合仓后位置）
+
 后端仓库：`C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor`  
 编译 JDK：`D:\tool\java21`。
 

@@ -10,6 +10,22 @@
 
 工具的目标不仅是自动化。它在重构前搜索生产代码与测试代码调用点、公开 API、ArkUI 响应式状态及异味专项风险，并把这些风险变成明确约束，从源头降低接口断裂、状态刷新失效、UI ID 改变等重构失败。
 
+## DevEco Studio 插件
+
+仓库同时包含 [ArkTS Refactor 插件](deveco-plugin/README.md)，可在 DevEco Studio 中完成异味检测、风险分析、候选重构、Diff 预览、应用与复检。
+
+`deveco-plugin/` 是独立 Gradle 工程根目录，使用 Java 21；后端 Python 源码仍位于本仓库 `src/arkts_smell_refactor/`。从仓库根目录构建：
+
+```powershell
+cd deveco-plugin
+$env:JAVA_HOME = 'D:\tool\java21'
+./gradlew.bat '-PdevecoStudioPath=D:/tool/DevEco/DevEco Studio' test buildPlugin verifyPluginStructure
+python -m unittest discover -s tests -v
+```
+
+安装包生成于 `deveco-plugin/build/distributions/deveco_plugin-0.1.5.zip`。
+安装、工具配置及操作说明见 [插件使用文档](deveco-plugin/docs/implementation-status.md)，仓库布局与迁移验证见 [集成说明](deveco-plugin/docs/repository-integration.md)。
+
 ## 当前版本范围
 
 第一版只接受阳性数据集的标准格式：
@@ -50,6 +66,7 @@ Code Clone 的专属画像默认要求保留原文件导出、类/组件/Builder
 
 ```text
 arkts-smell-refactor/
+├─ deveco-plugin/      DevEco 插件独立 Gradle 工程、UI、适配器和测试
 ├─ src/arkts_smell_refactor/
 │  ├─ dataset.py       数据集展开与异味信息解析
 │  ├─ risk.py          纯静态风险分析

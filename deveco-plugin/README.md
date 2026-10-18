@@ -4,7 +4,15 @@
 
 适配目标：DevEco Studio 6.1.1.300（DS-243），Java 21。技术设计见 [docs](docs/README.md)。
 
+## 仓库布局
+
+本项目位于 `arkts-smell-refactor/deveco-plugin`，该目录就是独立 Gradle 工程根目录。
+在 IDE 中打开或导入此目录，后端 Python 源码位于其父目录的 `src/arkts_smell_refactor`。
+迁移与合仓说明见 [仓库集成说明](docs/repository-integration.md)。
+
 ## 编译
+
+以下命令在 `deveco-plugin` 目录执行；从仓库根目录先运行 `cd deveco-plugin`。
 
 ```powershell
 $env:JAVA_HOME = 'D:\tool\java21'

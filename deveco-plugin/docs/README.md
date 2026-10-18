@@ -4,6 +4,8 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [仓库集成说明](repository-integration.md) | 合仓布局、提交历史、构建入口和迁移验证 |
+| [PR 标题与说明](pull-request.md) | 合入 dev_cly 的可复用 PR 文案 |
 | [主体实现与使用](implementation-status.md) | 当前功能、操作流程、构建测试、设计差异和实际验收边界 |
 | [端到端 UI 与实现设计](deveco-plugin-end-to-end-design.md) | 现状核验、完整用户流程、界面布局、操作状态、候选变更与应用、Java 21、实施顺序和验收 |
 | [后端桥接协议](backend-bridge-protocol.md) | 当前 CLI/产物映射、拟新增 JSONL 协议、字段转换、事件、取消、日志与恢复 |
