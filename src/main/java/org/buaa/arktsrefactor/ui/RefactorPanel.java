@@ -74,7 +74,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final DefaultListModel<JsonObject> changes = new DefaultListModel<>();
     private final JBList<JsonObject> changeList = new JBList<>(changes);
     private JButton analyzeButton, generateButton, diffButton, applyButton, validateButton, undoButton, discardButton;
-    private JButton openRunLogButton;
+    private JButton openRunLogButton, restoreCandidateButton;
     private JsonObject renderedPrepared, renderedCandidate;
     private boolean panelDisposed;
 
@@ -165,7 +165,9 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         JPanel candidateActions = new JPanel(new GridLayout(0, 2, 4, 4));
         diffButton = button("查看 Diff", this::diff); candidateActions.add(diffButton);
         applyButton = button("应用全部变更", this::apply); candidateActions.add(applyButton);
-        validateButton = button("重新验证", service::validateApplied); candidateActions.add(validateButton);
+        validateButton = button("重新验证候选", () -> {
+            if (service.state().applied) service.validateApplied(); else service.validateCandidate();
+        }); candidateActions.add(validateButton);
         undoButton = button("撤销最近应用", service::undo); candidateActions.add(undoButton);
         discardButton = button("放弃候选", service::discard); candidateActions.add(discardButton);
         candidate.add(candidateActions, BorderLayout.SOUTH); tabs.addTab("变更预览", candidate);
@@ -177,6 +179,11 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         JPanel recordActions = new JPanel(new GridLayout(0, 2, 4, 4));
         recordActions.add(button("刷新记录", service::history)); recordActions.add(button("打开记录证据…", this::evidence));
         recordActions.add(button("导出运行摘要…", this::exportHistory));
+        restoreCandidateButton = button("恢复候选", () -> {
+            JsonObject record = historyList.getSelectedValue();
+            if (record != null && record.has("candidateId")) service.restoreCandidate(PythonBridgeClient.string(record, "candidateId"));
+        }); recordActions.add(restoreCandidateButton);
+        historyList.addListSelectionListener(e -> controls());
         records.add(recordActions, BorderLayout.SOUTH); tabs.addTab("运行记录", records);
         tabs.addTab("环境", new JBScrollPane(environment));
         JPanel logPanel = new JPanel(new BorderLayout()); logPanel.add(new JBScrollPane(logs), BorderLayout.CENTER);
@@ -365,8 +372,17 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             Path run = Path.of(directory).toRealPath();
             if (!run.startsWith(root)) throw new IllegalArgumentException("日志目录越界");
             boolean opened = false;
-            for (String name : new String[]{"backend/refactor-agent.log", "backend/repair-agent.log", "backend/review-agent.log", "scan/HomeCheck.log", "scan.log"}) {
-                Path path = run.resolve(name);
+            List<Path> paths = new ArrayList<>();
+            var result = service.state().result;
+            if (result != null && result.has("steps")) for (JsonElement value : result.getAsJsonArray("steps")) {
+                JsonObject step = value.getAsJsonObject();
+                if (!List.of("FAIL", "BLOCKED", "INCOMPLETE").contains(PythonBridgeClient.string(step, "status"))) continue;
+                String file = PythonBridgeClient.string(step, "logPath");
+                if (file.isBlank()) file = PythonBridgeClient.string(step, "output_file");
+                if (!file.isBlank()) paths.add(Path.of(file));
+            }
+            if (paths.isEmpty()) for (String name : new String[]{"backend/refactor-agent.log", "backend/smell.log", "backend/review-agent.log", "scan/HomeCheck.log", "scan.log"}) paths.add(run.resolve(name));
+            for (Path path : paths.stream().distinct().toList()) {
                 if (!Files.isRegularFile(path)) continue;
                 if (!path.toRealPath().startsWith(run)) throw new IllegalArgumentException("日志文件通过链接离开本轮目录");
                 var file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(path);
@@ -403,7 +419,13 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
                 issue.id().equals(state.activeIssueId) && instructionsMatch);
         diffButton.setEnabled(!state.busy && changeList.getSelectedValue() != null);
         applyButton.setEnabled(!state.busy && !state.stale && !state.applied && instructionsMatch && state.candidate != null && "PASS".equals(PythonBridgeClient.string(state.candidate, "verdict")));
-        validateButton.setEnabled(!state.busy && !state.stale && state.applied && state.candidate != null);
+        applyButton.setToolTipText(state.candidate != null && !"PASS".equals(PythonBridgeClient.string(state.candidate, "verdict"))
+                ? "候选副本验证尚未通过：" + PythonBridgeClient.string(state.result, "failureReason") : "将已通过验证的冻结候选应用到原工程");
+        validateButton.setText(state.applied ? "重新验证原工程" : "重新验证候选");
+        validateButton.setToolTipText(state.applied ? "验证已应用后的原工程" : "重试已有候选的门禁与评审；不重新运行重构 Agent");
+        validateButton.setEnabled(!state.busy && !state.stale && state.candidate != null && instructionsMatch);
+        JsonObject selectedRecord = historyList.getSelectedValue();
+        restoreCandidateButton.setEnabled(!state.busy && selectedRecord != null && selectedRecord.has("hasCandidate") && selectedRecord.get("hasCandidate").getAsBoolean());
         undoButton.setEnabled(!state.busy && service.canUndo());
         discardButton.setEnabled(!state.busy && !state.applied && state.candidate != null);
         instructions.setEnabled(!state.busy);
@@ -454,6 +476,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         }
         if (renderedPrepared != state.prepared) {
             renderedPrepared = state.prepared;
+            if (state.prepared != null && state.prepared.has("restored")) instructions.setText(PythonBridgeClient.string(state.prepared, "instructions"));
             if (state.risk != null) {
                 risk.setText(riskText(state.risk)); risk.setCaretPosition(0); tabs.setSelectedIndex(1);
             } else risk.setText("选择问题并分析风险。静态建议会与实际候选变更分别显示。");
@@ -467,8 +490,10 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             }
         }
         StringBuilder summary = new StringBuilder();
-        if (state.candidate != null) summary.append("候选验证：").append(PythonBridgeClient.string(state.candidate, "verdict"))
-                .append("\n应用状态：").append(state.applied ? "已应用" : "未应用").append(state.stale ? " / 内容已变化" : "").append('\n');
+        if (state.candidate != null) summary.append("候选副本验证：").append(PythonBridgeClient.string(state.candidate, "verdict"))
+                .append("\n原工程状态：").append(state.applied ? "已应用" : "尚未应用").append(state.stale ? " / 内容已变化" : "").append('\n');
+        if (state.candidate != null && !state.applied && !"PASS".equals(PythonBridgeClient.string(state.candidate, "verdict")))
+            summary.append("应用条件：候选副本的必需门禁与评审通过。可先重新验证候选。\n");
         if (state.result != null) {
             summary.append("本轮结论：").append(PythonBridgeClient.string(state.result, "verdict")).append('\n');
             String reason = PythonBridgeClient.string(state.result, "failureReason");

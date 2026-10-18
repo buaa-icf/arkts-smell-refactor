@@ -169,11 +169,34 @@ public final class ProjectSessionService implements Disposable {
         if (state.prepared == null) return;
         JsonObject params = new JsonObject(); params.addProperty("taskHandle", PythonBridgeClient.string(state.prepared, "taskHandle"));
         state.candidate = null; state.result = null;
-        run("task.execute", params, "正在生成并验证候选…", result -> {
-            state.candidate = result.getAsJsonObject("candidate"); state.result = result.getAsJsonObject("result");
-            String reason = PythonBridgeClient.string(state.result, "failureReason");
-            state.status = "候选验证：" + PythonBridgeClient.string(state.result, "verdict") +
-                    (reason.isBlank() ? "" : "；" + reason) + "；当前工程尚未应用修改。";
+        run("task.execute", params, "正在生成并验证候选…", this::candidateResult);
+    }
+
+    private void candidateResult(JsonObject response) {
+        state.candidate = response.getAsJsonObject("candidate"); state.result = response.getAsJsonObject("result");
+        String verdict = PythonBridgeClient.string(state.result, "verdict");
+        String reason = PythonBridgeClient.string(state.result, "failureReason");
+        state.status = "候选副本验证：" + verdict + (reason.isBlank() ? "" : "；" + reason) +
+                (verdict.equals("BLOCKED") ? "。修复环境后可重新验证候选。" : "。") + "原工程状态：尚未应用。";
+    }
+
+    public void validateCandidate() {
+        if (state.candidate == null || state.applied || state.stale) return;
+        JsonObject params = new JsonObject(); params.addProperty("candidateId", PythonBridgeClient.string(state.candidate, "candidateId"));
+        run("task.validateCandidate", params, "正在重新验证候选副本…", this::candidateResult);
+    }
+
+    public void restoreCandidate(String identifier) {
+        JsonObject params = new JsonObject(); params.addProperty("candidateId", identifier);
+        run("candidate.restore", params, "正在恢复冻结候选…", response -> {
+            state.prepared = response.getAsJsonObject("prepared"); state.risk = state.prepared.getAsJsonObject("risk");
+            Issue issue = new Issue(state.prepared.getAsJsonObject("issue"));
+            state.issues = List.of(issue); state.activeIssueId = issue.id();
+            state.scanTarget = issue.absolutePath(); state.scanMessage = "已恢复候选对应的异味；候选验证通过后可应用。";
+            state.applied = false; state.stale = false;
+            state.runDirectory = PythonBridgeClient.string(response, "runDirectory");
+            candidateResult(response);
+            state.status = "已恢复候选，可查看 Diff 或点击“重新验证候选”。原工程状态：尚未应用。";
         });
     }
 
