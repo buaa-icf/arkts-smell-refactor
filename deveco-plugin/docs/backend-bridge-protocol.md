@@ -1,7 +1,9 @@
 # DevEco 插件与 ArkTS 重构后端桥接协议
 
-日期：2026-10-14  
-协议：拟新增 `ide-bridge/1`，尚未实现。  
+日期：2026-10-14
+
+协议：拟新增 `ide-bridge/1`，尚未实现。
+
 关联：[端到端 UI 与实现设计](deveco-plugin-end-to-end-design.md)。
 
 ## 1. 当前接口与缺口

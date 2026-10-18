@@ -1,10 +1,13 @@
 # DevEco 代码异味检测与重构插件：端到端 UI 技术设计
 
-日期：2026-10-14  
-状态：设计稿；本文描述待实现行为，现有能力单独标明。  
+日期：2026-10-14
+
+状态：设计稿；本文描述待实现行为，现有能力单独标明。
+
 插件工程：`C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor\deveco-plugin`（2026-10-18 合仓后位置）
 
-后端仓库：`C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor`  
+后端仓库：`C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor`
+
 编译 JDK：`D:\tool\java21`。
 
 ## 1. 目标与设计决定
