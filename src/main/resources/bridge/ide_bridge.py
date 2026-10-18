@@ -169,19 +169,22 @@ def inspect_environment(config: dict):
     studio = Path(config.get("studio", ""))
     backend = Path(config.get("backend", ""))
     node = config.get("node") or shutil.which("node")
+    node = (shutil.which(node) or node) if node else None
     tools = discover_tools(config)
     rows = [{"name": "Python", "path": sys.executable, "available": sys.version_info >= (3, 10)},
             {"name": "重构后端", "path": str(backend), "available": (backend / "src/arkts_smell_refactor/runner.py").is_file()},
             {"name": "Node", "path": node or "", "available": bool(node and (Path(node).is_file() or shutil.which(node)))},
-            {"name": "HomeCheck", "path": str(homecheck), "available": (homecheck / "node_modules/homecheck/lib/run.js").is_file() and (homecheck / "extrulesproject-1.0.0.tgz").is_file()},
+            {"name": "HomeCheck", "path": str(homecheck), "available": all((homecheck / name).is_file() for name in
+             ("node_modules/homecheck/lib/run.js", "extrulesproject-1.0.0.tgz", "config/projectConfig.json", "config/ruleConfig.json"))},
             {"name": "ArkTS SDK", "path": str(studio / "sdk/default/openharmony/ets"), "available": (studio / "sdk/default/openharmony/ets").is_dir()}]
     for name, value in tools.items():
         if name != "homecheck":
-            rows.append({"name": name, "path": value or "", "available": bool(value and Path(value).is_file())})
+            resolved = (shutil.which(value) or value) if value else ""
+            rows.append({"name": name, "path": resolved, "available": bool(resolved and Path(resolved).is_file())})
+    for row in rows:
+        row["required"] = row["name"] != "codelinter" or config.get("linterMode", "required") == "required"
     detection = all(row["available"] for row in rows if row["name"] in {"Python", "Node", "HomeCheck", "ArkTS SDK"})
-    candidate = detection and all(row["available"] for row in rows if row["name"] in {"重构后端", "deveco", "hvigorw", "ohpm"})
-    if config.get("linterMode", "required") == "required":
-        candidate = candidate and bool(tools["codelinter"])
+    candidate = all(row["available"] for row in rows if row["required"])
     return {"tools": rows, "canDetect": detection, "canRefactor": candidate,
             "pythonVersion": sys.version.split()[0], "supportedRules": list(RULES)}
 
@@ -370,7 +373,7 @@ def scan(params: dict, config: dict, root: Path, run: Path):
 
 def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | None):
     if method == "session.hello":
-        return {"protocolVersion": 1, "adapterVersion": "0.1.4", "transport": "one-request-per-process", "supportedRules": list(RULES)}
+        return {"protocolVersion": 1, "adapterVersion": "0.1.5", "transport": "one-request-per-process", "supportedRules": list(RULES)}
     if method == "environment.inspect":
         return inspect_environment(config)
     if method == "issues.import":

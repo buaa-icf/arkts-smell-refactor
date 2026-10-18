@@ -137,6 +137,32 @@ class BridgeTests(unittest.TestCase):
         prepared = bridge.prepare_candidate({"issue": issue, "instructions": "keep public entry"}, config, self.root, run)
         return prepared
 
+    def test_environment_required_linter_must_actually_exist(self):
+        config = self.backend_config()
+        config["linter"] = str(Path(self.directory.name) / "missing-linter.exe")
+        result = bridge.inspect_environment(config)
+        self.assertTrue(result["canDetect"])
+        self.assertFalse(result["canRefactor"])
+        linter = next(row for row in result["tools"] if row["name"] == "codelinter")
+        self.assertTrue(linter["required"])
+        self.assertFalse(linter["available"])
+
+    def test_environment_skip_policy_marks_linter_optional(self):
+        config = self.backend_config()
+        config["linter"] = str(Path(self.directory.name) / "missing-linter.exe")
+        config["linterMode"] = "skip"
+        result = bridge.inspect_environment(config)
+        self.assertTrue(result["canRefactor"])
+        self.assertFalse(next(row for row in result["tools"] if row["name"] == "codelinter")["required"])
+
+    def test_environment_requires_homecheck_configuration_files(self):
+        config = self.backend_config()
+        (Path(config["homecheck"]) / "config/projectConfig.json").unlink()
+        result = bridge.inspect_environment(config)
+        self.assertFalse(result["canDetect"])
+        self.assertFalse(result["canRefactor"])
+        self.assertFalse(next(row for row in result["tools"] if row["name"] == "HomeCheck")["available"])
+
     def test_candidate_pipeline_uses_snapshot_and_retains_frozen_changes(self):
         config = self.backend_config()
         original = self.source.read_bytes()
