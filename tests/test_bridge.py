@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -89,6 +90,25 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(2, process.returncode)
         self.assertEqual("UNSUPPORTED_PROTOCOL", json.loads(process.stdout)["error"]["code"])
 
+    def test_utf8_wire_survives_windows_gbk_environment_and_chinese_paths(self):
+        source = self.source.parent / "我的余额.ets"
+        source.write_text("class Balance {}", encoding="utf-8")
+        record = self.record(message="方法过长，请拆分")
+        record["filePath"] = source.relative_to(self.root).as_posix()
+        request = {"protocolVersion": 1, "requestId": "utf8-request", "method": "issues.import",
+                   "projectRoot": str(self.root), "config": {"homecheck": "C:/项目/arkts异味检查工具"},
+                   "params": {"records": record}}
+        # Gson sends literal Chinese as UTF-8. ASCII-escaped json.dumps had hidden this failure.
+        process = subprocess.run([sys.executable, str(ADAPTER_PATH)],
+                                 input=json.dumps(request, ensure_ascii=False).encode("utf-8"), capture_output=True,
+                                 env=dict(os.environ, PYTHONIOENCODING="gbk", PYTHONUTF8="0"))
+        self.assertEqual(0, process.returncode, process.stderr.decode("utf-8"))
+        response = json.loads(process.stdout.decode("utf-8"))
+        self.assertEqual("utf8-request", response["requestId"])
+        self.assertTrue(response["ok"])
+        self.assertEqual(str(source), response["result"]["issues"][0]["absolutePath"])
+        self.assertIn("方法过长，请拆分", process.stdout.decode("utf-8"))
+
     def backend_config(self):
         # Resolve relative to the repository rather than the installed plugin resource.
         backend = Path(__file__).resolve().parents[3] / "arkts-smell-refactor"
@@ -173,6 +193,38 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(bridge.BridgeError) as error:
                 bridge.scan({"rules": ["@extrulesproject/long-method-check"]}, config, self.root, run)
         self.assertEqual("TOOL_UNAVAILABLE", error.exception.code)
+
+    def scan_fixture(self, records):
+        config = self.backend_config()
+        run = bridge.create_run(config, self.root, "scan.start")
+        other = self.source.parent / "Other.ets"
+        other.write_text("class Other {}", encoding="utf-8")
+        def successful_scan(command, cwd, log):
+            self.assertEqual([self.source.relative_to(self.root).as_posix()],
+                             bridge.read_json(run / "project.json")["checkFiles"])
+            bridge.write_json(run / "scan/summary.json", {"repositories": [{"sharedRun": {"success": True},
+                              "runs": [{"ruleName": rule, "success": True} for rule in bridge.RULES]}]})
+            bridge.write_json(run / "scan/runs/Example/issuesReport.json", records)
+            return 0
+        with patch.object(bridge, "run_tool", side_effect=successful_scan):
+            return bridge.scan({"scopePath": str(self.source)}, config, self.root, run)
+
+    def test_selected_file_scan_reports_exact_scope_and_filters_other_files(self):
+        other_record = self.record()
+        other_record["filePath"] = "entry/src/main/ets/Other.ets"
+        result = self.scan_fixture([self.record(), other_record])
+        self.assertEqual(1, len(result["issues"]))
+        self.assertEqual(str(self.source), result["scopePath"])
+        self.assertEqual([str(self.source)], result["scannedFiles"])
+        self.assertEqual(1, result["fileCount"])
+        self.assertEqual(list(bridge.RULES), result["rules"])
+        bridge.emit.assert_any_call("scan.started", {key: result[key] for key in ("scopePath", "scannedFiles", "fileCount", "rules")})
+
+    def test_successful_scan_with_zero_findings_is_a_completed_scan(self):
+        result = self.scan_fixture([])
+        self.assertEqual([], result["issues"])
+        self.assertEqual(1, result["fileCount"])
+        self.assertEqual(str(self.source), result["scopePath"])
 
     def test_real_backend_orchestrates_controlled_tools_in_candidate_only(self):
         config = self.backend_config(); original = self.source.read_bytes(); prepared = self.prepare(config)

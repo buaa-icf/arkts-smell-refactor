@@ -240,6 +240,9 @@ def scan(params: dict, config: dict, root: Path, run: Path):
     rules = params.get("rules") or list(RULES)
     if any(rule not in RULES for rule in rules):
         raise BridgeError("UNSUPPORTED_RULE", "扫描规则不受支持")
+    scan_scope = {"scopePath": str(scope), "scannedFiles": [str(path) for path in files],
+                  "fileCount": len(files), "rules": rules}
+    emit("scan.started", scan_scope)
     homecheck = Path(config["homecheck"]).resolve()
     if not inspect_environment(config)["canDetect"]:
         raise BridgeError("TOOL_UNAVAILABLE", "检测环境不完整，请检查 Node、HomeCheck 和 ArkTS SDK")
@@ -254,13 +257,14 @@ def scan(params: dict, config: dict, root: Path, run: Path):
     rule_config["extRuleSet"] = [{"ruleSetName": "extrulesproject", "packagePath": str(homecheck / "extrulesproject-1.0.0.tgz"),
                                   "extRules": {rule: 2 for rule in rules}}]
     write_json(run / "project.json", project_config); write_json(run / "rules.json", rule_config)
-    emit("workflow.changed", {"status": f"检测 {len(files)} 个文件"})
+    emit("workflow.changed", {"status": f"正在运行 HomeCheck：{len(files)} 个文件，{len(rules)} 条规则…"})
     command = [config.get("node") or "node", str(homecheck / "scripts/gitcodeArktsPerfTest.js"),
                "--f1=false", "--dashboard=false", f"--baseProjectConfig={run / 'project.json'}",
                f"--baseRuleConfig={run / 'rules.json'}", f"--outputDir={output}",
                "--includeRules=" + ",".join(RULES[rule] if RULES[rule] != "code-clone" else "code-clone-fragment" for rule in rules)]
     if run_tool(command, homecheck, run / "scan.log") != 0:
         raise BridgeError("TOOL_UNAVAILABLE", "HomeCheck 扫描失败，请查看本轮日志")
+    emit("workflow.changed", {"status": "正在核对执行摘要并读取检测结果…"})
     summary_path = output / "summary.json"
     if not summary_path.is_file():
         raise BridgeError("ARTIFACT_UNAVAILABLE", "扫描器未生成本轮执行摘要")
@@ -278,12 +282,12 @@ def scan(params: dict, config: dict, root: Path, run: Path):
     issues = normalize_issues(read_json(report), root)
     allowed_files = {str(path) for path in files}
     issues = [issue for issue in issues if issue["absolutePath"] in allowed_files]
-    return {"issues": issues, "runDirectory": str(run), "reportPath": str(report)}
+    return {"issues": issues, "runDirectory": str(run), "reportPath": str(report), **scan_scope}
 
 
 def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | None):
     if method == "session.hello":
-        return {"protocolVersion": 1, "adapterVersion": "0.1.0", "transport": "one-request-per-process", "supportedRules": list(RULES)}
+        return {"protocolVersion": 1, "adapterVersion": "0.1.1", "transport": "one-request-per-process", "supportedRules": list(RULES)}
     if method == "environment.inspect":
         return inspect_environment(config)
     if method == "issues.import":
@@ -691,4 +695,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows pipes otherwise inherit the locale codec (often GBK). The Java peer uses UTF-8.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     raise SystemExit(gate_main() if "--gate" in sys.argv else main())

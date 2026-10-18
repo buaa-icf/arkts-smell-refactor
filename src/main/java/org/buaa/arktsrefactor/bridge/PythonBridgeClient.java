@@ -28,8 +28,11 @@ public final class PythonBridgeClient {
         request.addProperty("requestId", UUID.randomUUID().toString());
         request.addProperty("method", method); request.addProperty("projectRoot", projectRoot);
         request.add("params", params); request.add("config", JSON.toJsonTree(config));
-        Process process = new ProcessBuilder(config.python, "-u", script.toString())
-                .directory(script.getParent().toFile()).start();
+        ProcessBuilder builder = new ProcessBuilder(config.python, "-X", "utf8", "-u", script.toString())
+                .directory(script.getParent().toFile());
+        builder.environment().put("PYTHONIOENCODING", "utf-8");
+        builder.environment().put("PYTHONUTF8", "1");
+        Process process = builder.start();
         active = process;
         if (cancelled.get()) terminate(process);
         Thread errors = Thread.ofVirtual().start(() -> {
@@ -56,7 +59,13 @@ public final class PythonBridgeClient {
                     catch (RuntimeException e) { throw new IOException("后端输出不是合法 JSONL：" + line.substring(0, Math.min(180, line.length())), e); }
                     if (!item.has("protocolVersion") || item.get("protocolVersion").getAsInt() != 1) throw new IOException("后端协议版本不匹配");
                     if ("response".equals(string(item, "type"))) {
-                        if (!string(item, "requestId").equals(string(request, "requestId"))) throw new IOException("后端响应不属于当前请求");
+                        if (!string(item, "requestId").equals(string(request, "requestId"))) {
+                            if (string(item, "requestId").isBlank() && item.has("ok") && !item.get("ok").getAsBoolean()) {
+                                JsonObject error = item.getAsJsonObject("error");
+                                throw new IOException("后端无法读取请求：" + string(error, "code") + "：" + string(error, "message"));
+                            }
+                            throw new IOException("后端响应不属于当前请求");
+                        }
                         response = item;
                     } else events.accept(item);
                 }
