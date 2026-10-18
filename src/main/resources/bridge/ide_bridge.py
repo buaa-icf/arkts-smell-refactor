@@ -370,7 +370,7 @@ def scan(params: dict, config: dict, root: Path, run: Path):
 
 def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | None):
     if method == "session.hello":
-        return {"protocolVersion": 1, "adapterVersion": "0.1.3", "transport": "one-request-per-process", "supportedRules": list(RULES)}
+        return {"protocolVersion": 1, "adapterVersion": "0.1.4", "transport": "one-request-per-process", "supportedRules": list(RULES)}
     if method == "environment.inspect":
         return inspect_environment(config)
     if method == "issues.import":
@@ -391,6 +391,18 @@ def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | No
         return execute_candidate(params, config, root, run)
     if method == "task.validateApplied":
         return validate_applied(params, config, root, run)
+    if method == "task.validateCandidate":
+        return validate_candidate(params, config, root, run)
+    if method == "candidate.restore":
+        candidate_run, candidate, prepared_run, prepared = load_candidate_for_validation(params["candidateId"], config, root)
+        summarize_failure(candidate_run / "backend", candidate.get("result", {}))
+        restored = dict(prepared)
+        restored["restored"] = True
+        if "instructions" not in restored:
+            prompt = (prepared_run / "backend/refactor-prompt.md").read_text(encoding="utf-8")
+            marker = "\n\n用户业务说明（不得改变平台约束和门禁）：\n"
+            restored["instructions"] = prompt.split(marker, 1)[1] if marker in prompt else ""
+        return {"candidate": candidate, "prepared": restored, "result": candidate.get("result", {}), "runDirectory": str(candidate_run)}
     if method in {"candidate.check", "candidate.describe"}:
         candidate_run, candidate = load_run(params["candidateId"], config, root, "candidate.json")
         if method == "candidate.check":
@@ -414,6 +426,9 @@ def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | No
                     if item.get("state") == "RUNNING":
                         item["state"] = "INTERRUPTED"
                     item["runDirectory"] = str(path.parent)
+                    item["hasCandidate"] = (path.parent / "candidate.json").is_file()
+                    if item["hasCandidate"]:
+                        item["candidateId"] = path.parent.name
                     transaction = path.parent / "apply-transaction.json"
                     if transaction.is_file():
                         item["applyState"] = read_json(transaction).get("state", "UNKNOWN")
@@ -556,7 +571,7 @@ def prepare_candidate(params: dict, config: dict, root: Path, run: Path):
     (task_dir / "review-prompt.md").write_text(review, encoding="utf-8")
     data = {"taskHandle": run.name, "taskId": task.task_id, "originalRoot": str(original),
             "targetRelativePath": relative, "issue": issue, "baselineFiles": baseline,
-            "configDigest": configuration_digest(config), "risk": risk, "runDirectory": str(run)}
+            "configDigest": configuration_digest(config), "risk": risk, "runDirectory": str(run), "instructions": params.get("instructions", "")}
     write_json(run / "prepared.json", data)
     return data
 
@@ -600,12 +615,36 @@ def pipeline_progress(name, status):
     emit("workflow.changed", {"status": f"{name}: {status}"})
 
 
+def run_pipeline_logged(task_dir: Path, plan: dict):
+    import arkts_smell_refactor.runner as runner
+    original_writer = runner.write_text
+    def write_log(path, text):
+        original_writer(path, text)
+        if Path(path).suffix == ".log":
+            emit("log.appended", {"text": f"\n[{Path(path).name}]\n"})
+            for offset in range(0, len(text), 8000):
+                emit("log.appended", {"text": text[offset:offset + 8000]})
+    runner.write_text = write_log
+    try:
+        with contextlib.redirect_stdout(EventLogWriter()):
+            return runner.execute_pipeline(task_dir, plan, progress=pipeline_progress)
+    finally:
+        runner.write_text = original_writer
+
+
 def summarize_failure(task_dir: Path, result: dict):
     """Attach bounded, readable diagnostics; full logs remain in the controlled task directory."""
     for step in result.get("steps", []):
         if step.get("status") not in {"FAIL", "BLOCKED", "INCOMPLETE"}:
             continue
         reason = step.get("reason") or ""
+        if str(step.get("name", "")).startswith("smell") and step.get("status") == "FAIL":
+            try:
+                findings = read_json(task_dir / "smell-after.json")
+                if findings:
+                    reason = f"候选仍有 {len(findings)} 条目标或变更异味：" + str(findings[0].get("message", ""))[:350]
+            except (OSError, ValueError, AttributeError, IndexError):
+                pass
         output_file = step.get("output_file")
         if output_file:
             try:
@@ -613,6 +652,10 @@ def summarize_failure(task_dir: Path, result: dict):
                 text = log_tail(output, 12000)
                 if "File attachment path is outside the allowed roots:" in text:
                     reason = "Agent 无法读取工作区允许范围之外的提示词附件。"
+                elif "cloc" in text.lower() and "creation of private cache subdirectory" in text:
+                    reason = "CLOC 临时缓存创建失败，候选异味复检未完成。"
+                elif "SMELL_GATE_BLOCKED:" in text:
+                    reason = text.rsplit("SMELL_GATE_BLOCKED:", 1)[-1].splitlines()[0].strip()[:500]
                 elif not reason:
                     for line in text.splitlines():
                         match = re.match(r"\s*(?:error:|Error:)\s*(.+)", line)
@@ -662,8 +705,58 @@ def refactor_agent_gate(task_dir: Path, source: Path, deveco: Path, prompt_file:
     return gate._sync_production_changes(workspace, source)
 
 
+def smell_candidate_gate(task_dir: Path, source: Path, config: dict):
+    """Validate the candidate copy, using the same direct detector as initial scanning."""
+    import arkts_smell_refactor.gate as gate
+    (task_dir / "smell-after.json").unlink(missing_ok=True)
+    try:
+        task = read_json(task_dir / "task.json")
+        target = task["target"]
+        rule = task["rule"]
+        target_source = contained(source, Path(task["workspace_root"]) / target["file_path"])
+        files = gate._smell_scan_files(task_dir, source, target_source)
+        related = target.get("related_targets", target.get("relatedTargets", []))
+        for item in related:
+            path = contained(source, Path(task["workspace_root"]) / item.get("filePath", item.get("file_path", "")))
+            if path.is_file() and path not in files:
+                files.append(path)
+        scan_run = task_dir / "smell-scans" / str(uuid.uuid4())
+        scan_run.mkdir(parents=True)
+        response = scan({"scopePath": str(source), "files": [str(path) for path in files], "rules": [rule]}, config, source, scan_run)
+        risk = read_json(task_dir / "risk-report.json") if (task_dir / "risk-report.json").is_file() else {}
+        owner = risk.get("target", {}).get("owner")
+        target_text = target_source.read_text(encoding="utf-8", errors="replace")
+        changed_lines = gate._smell_changed_lines(task_dir, source, files)
+        remaining = []
+        for issue in response["issues"]:
+            if issue["rule"] != rule:
+                continue
+            path = Path(issue["absolutePath"])
+            message = issue["rawMessage"]
+            line = int(message.get("line", message.get("rangeStart", 1)))
+            reported = gate._reported_symbol(message["message"])
+            same_target = path == target_source and gate._symbol_matches(reported, target.get("symbol"))
+            if same_target and owner:
+                same_target = gate._owner_at_line(target_text, line, target_source.stem) == owner
+            relative = path.relative_to(source).as_posix()
+            changed_symbol = gate._issue_touches_changed_symbol(path.read_text(encoding="utf-8", errors="replace"), reported, line,
+                                                               changed_lines.get(relative, set()))
+            if same_target or changed_symbol or rule == "@extrulesproject/code-clone-fragment-check":
+                remaining.append({**message, "filePath": issue["filePath"]})
+        write_json(task_dir / "smell-after.json", remaining)
+        write_json(task_dir / "smell-evidence.json", {"sourceRoot": str(source), "reportPath": response["reportPath"],
+                   "scannedFiles": response["scannedFiles"], "remaining": len(remaining)})
+        if remaining:
+            print(f"目标或变更方法仍有异味：{len(remaining)} 条", file=sys.stderr)
+            return 1
+        print("候选副本异味复检通过；原工程无需预先应用修改。")
+        return 0
+    except (BridgeError, OSError, ValueError, KeyError) as error:
+        print(f"SMELL_GATE_BLOCKED: 候选副本检测未完成：{error}", file=sys.stderr, flush=True)
+        return 3
+
+
 def execute_candidate(params: dict, config: dict, root: Path, run: Path):
-    import arkts_smell_refactor.runner as runner
     prepared_run, prepared = load_run(params["taskHandle"], config, root, "prepared.json")
     original = Path(prepared["originalRoot"])
     if snapshot(original) != prepared["baselineFiles"] or configuration_digest(config) != prepared["configDigest"]:
@@ -681,19 +774,14 @@ def execute_candidate(params: dict, config: dict, root: Path, run: Path):
             # JSON stores escaped Windows paths; replace both encodings.
             text = text.replace(json.dumps(old_prefix)[1:-1], json.dumps(str(stage.parent))[1:-1]).replace(old_prefix, str(stage.parent))
             path.write_text(text, encoding="utf-8")
-    original_writer = runner.write_text
-    def write_log(path, text):
-        original_writer(path, text)
-        if Path(path).suffix == ".log":
-            emit("log.appended", {"text": f"\n[{Path(path).name}]\n"})
-            for offset in range(0, len(text), 8000):
-                emit("log.appended", {"text": text[offset:offset + 8000]})
-    runner.write_text = write_log
-    try:
-        with contextlib.redirect_stdout(EventLogWriter()):
-            result = runner.execute_pipeline(task_dir, pipeline_config(task_dir, config), progress=pipeline_progress)
-    finally:
-        runner.write_text = original_writer
+    result = run_pipeline_logged(task_dir, pipeline_config(task_dir, config))
+    return freeze_candidate(run, stage, original, prepared_run, prepared, config, result, prepared["configDigest"])
+
+
+def freeze_candidate(run: Path, stage: Path, original: Path, prepared_run: Path, prepared: dict, config: dict, result: dict, digest: str):
+    task_dir = run / "backend"
+    if configuration_digest(config) != digest:
+        raise BridgeError("BASELINE_CHANGED", "验证期间工具或配置发生变化，请重新验证")
     summarize_failure(task_dir, result)
     before, after = prepared["baselineFiles"], snapshot(stage)
     deleted = set(before) - set(after)
@@ -721,10 +809,82 @@ def execute_candidate(params: dict, config: dict, root: Path, run: Path):
     write_json(task_dir / "result.json", result)
     manifest = {"candidateId": run.name, "taskHandle": prepared_run.name, "taskId": prepared["taskId"],
                 "originalRoot": str(original), "baselineFiles": before, "afterFiles": after,
-                "configDigest": prepared["configDigest"], "changes": entries,
+                "configDigest": digest, "changes": entries,
                 "verdict": result["verdict"], "runDirectory": str(run), "result": result}
     write_json(run / "candidate.json", manifest)
     return {"candidate": manifest, "result": result, "runDirectory": str(run)}
+
+
+def load_candidate_for_validation(identifier: str, config: dict, root: Path):
+    candidate_run, candidate = load_run(identifier, config, root, "candidate.json")
+    original = Path(candidate["originalRoot"])
+    if snapshot(original) != candidate["baselineFiles"]:
+        raise BridgeError("BASELINE_CHANGED", "原工程已变化或候选已应用，请重新检测；不能复用旧候选")
+    prepared_run, prepared = load_run(candidate["taskHandle"], config, root, "prepared.json")
+    if Path(prepared["originalRoot"]) != original or prepared["baselineFiles"] != candidate["baselineFiles"] or snapshot(prepared_run / "baseline") != candidate["baselineFiles"]:
+        raise BridgeError("CANDIDATE_CHANGED", "冻结基线已变化，不能恢复候选")
+    if not candidate["changes"]:
+        raise BridgeError("INVALID_INPUT", "此记录没有生产代码候选变更，请重新生成")
+    seen = set()
+    for item in candidate["changes"]:
+        name = item["relativePath"]
+        if name.casefold() in seen or not allowed_production(name) or ".." in Path(name).parts or Path(name).is_absolute():
+            raise BridgeError("CANDIDATE_CHANGED", "候选文件路径不符合生产变更要求")
+        seen.add(name.casefold())
+        for phase, manifest in (("before", candidate["baselineFiles"]), ("after", candidate["afterFiles"])):
+            expected = item.get(phase + "Sha256")
+            if expected != manifest.get(name):
+                raise BridgeError("CANDIDATE_CHANGED", "候选内容哈希与清单不一致")
+            if expected is not None:
+                file = contained(candidate_run, candidate_run / "content" / phase / name)
+                if hash_file(file) != expected:
+                    raise BridgeError("CANDIDATE_CHANGED", "冻结候选内容已变化")
+    return candidate_run, candidate, prepared_run, prepared
+
+
+def validate_candidate(params: dict, config: dict, root: Path, run: Path):
+    candidate_run, candidate, prepared_run, prepared = load_candidate_for_validation(params["candidateId"], config, root)
+    original = Path(candidate["originalRoot"])
+    digest = configuration_digest(config)
+    stage = run / "staging" / original.name
+    copy_project(prepared_run / "baseline", stage)
+    for item in candidate["changes"]:
+        target = contained(stage, stage / item["relativePath"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate_run / "content/after" / item["relativePath"], target)
+    if snapshot(stage) != candidate["afterFiles"]:
+        raise BridgeError("CANDIDATE_CHANGED", "重建后的候选与冻结清单不同")
+    task_dir = run / "backend"
+    task_dir.mkdir()
+    old_prefix, new_prefix = str(candidate_run / "staging"), str(stage.parent)
+    for path in (candidate_run / "backend").iterdir():
+        if path.is_file() and path.suffix in {".json", ".md"}:
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(json.dumps(old_prefix)[1:-1], json.dumps(new_prefix)[1:-1]).replace(old_prefix, new_prefix)
+            (task_dir / path.name).write_text(text, encoding="utf-8")
+    for item in candidate["changes"]:
+        if item.get("beforeSha256") is not None:
+            baseline = task_dir / "baseline-production" / item["relativePath"]
+            baseline.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate_run / "content/before" / item["relativePath"], baseline)
+    write_json(task_dir / "refactor-changes.json", {
+        "changedProductionFiles": [item["relativePath"] for item in candidate["changes"] if item["kind"] == "source"],
+        "changedProductionResources": [item["relativePath"] for item in candidate["changes"] if item["kind"] == "resource"]})
+    plan = pipeline_config(task_dir, config)
+    plan.pop("refactorAgent", None); plan.pop("repairAgent", None); plan["maxRepairAttempts"] = 0
+    emit("workflow.changed", {"status": "正在重新验证冻结候选：执行门禁与评审…"})
+    result = run_pipeline_logged(task_dir, plan)
+    result["refactorEvidenceFrom"] = str(candidate_run)
+    for step in result.get("steps", []):
+        if step.get("name") == "refactor-agent" and step.get("status") == "SKIPPED":
+            step["reason"] = "使用已有冻结候选，本次不重新执行重构 Agent"
+    # Validation and review are read-only with respect to the frozen production candidate.
+    if snapshot(stage) != candidate["afterFiles"]:
+        raise BridgeError("CANDIDATE_CHANGED", "验证期间候选源码发生变化，不能采用本轮结果")
+    response = freeze_candidate(run, stage, original, prepared_run, prepared, config, result, digest)
+    response["candidate"]["revalidatedFrom"] = candidate["candidateId"]
+    write_json(run / "candidate.json", response["candidate"])
+    return response
 
 
 def validate_applied(params: dict, config: dict, root: Path, run: Path):
@@ -751,6 +911,7 @@ def validate_applied(params: dict, config: dict, root: Path, run: Path):
     required = [step for step in steps if not (step.name == "linter" and config.get("linterMode") == "skip" and step.status == "SKIPPED")]
     required.append(CommandResult("review-agent", "PASS", reason="复用完全相同源码、依赖、策略的候选 PASS 评审"))
     result = _final_result(task.task_id, required, False)
+    summarize_failure(task_dir, result)
     result["validationPolicy"] = {"linterMode": config.get("linterMode", "required")}
     result["reviewEvidenceFrom"] = str(candidate_run)
     write_json(task_dir / "result.json", result)
@@ -779,16 +940,7 @@ def gate_main():
     run_root = Path(config["runs"]).resolve()
     contained(run_root, source); contained(run_root, args.task_dir)
     if args.gate == "smell":
-        original_reader = gate.read_json
-        project_config = (Path(config["homecheck"]) / "config/projectConfig.json").resolve()
-        def reader(path):
-            value = original_reader(path)
-            if Path(path).resolve() == project_config:
-                sdk = Path(config["studio"]) / "sdk/default"
-                value.update(ohosSdkPath=str(sdk / "openharmony/ets"), hmsSdkPath=str(sdk / "hms/ets"))
-            return value
-        gate.read_json = reader
-        return gate.smell_gate(args.task_dir, Path(config["homecheck"]), source)
+        return smell_candidate_gate(args.task_dir, source, config)
     return refactor_agent_gate(args.task_dir, source, Path(discover_tools(config)["deveco"]), args.prompt_file)
 
 
@@ -811,7 +963,7 @@ def main():
         if not root.is_dir():
             raise BridgeError("INVALID_INPUT", "当前工程目录不存在")
         method = request["method"]
-        if method not in {"session.hello", "environment.inspect", "issues.import", "history.list", "candidate.check", "candidate.describe"}:
+        if method not in {"session.hello", "environment.inspect", "issues.import", "history.list", "candidate.check", "candidate.describe", "candidate.restore"}:
             run = create_run(config, root, method)
         result = dispatch(method, request.get("params", {}), config, root, run)
         if run:

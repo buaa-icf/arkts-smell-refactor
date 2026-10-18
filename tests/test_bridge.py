@@ -405,6 +405,128 @@ class BridgeTests(unittest.TestCase):
         bridge.summarize_failure(task_dir, result)
         self.assertNotIn("logPath", result["steps"][0])
 
+    def test_smell_gate_validates_candidate_without_applying_to_original(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        original = self.source.read_bytes()
+        response = {"issues": [], "reportPath": "controlled-report", "scannedFiles": [str(stage / relative)]}
+        with patch.object(bridge, "scan", return_value=response) as detector:
+            self.assertEqual(0, bridge.smell_candidate_gate(task_dir, stage, {}))
+        self.assertEqual(stage, detector.call_args.args[2])
+        self.assertEqual([str(stage / relative)], detector.call_args.args[0]["files"])
+        self.assertEqual(original, self.source.read_bytes())
+        self.assertEqual([], bridge.read_json(task_dir / "smell-after.json"))
+
+    def test_remaining_smell_fails_and_tool_failure_blocks_without_stale_findings(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        issue = bridge.normalize_issues(self.record(), stage)[0]
+        response = {"issues": [issue], "reportPath": "controlled-report", "scannedFiles": [str(stage / relative)]}
+        with patch.object(bridge, "scan", return_value=response):
+            self.assertEqual(1, bridge.smell_candidate_gate(task_dir, stage, {}))
+        self.assertEqual(1, len(bridge.read_json(task_dir / "smell-after.json")))
+        with patch.object(bridge, "scan", side_effect=bridge.BridgeError("TOOL_UNAVAILABLE", "fixture detector unavailable")):
+            self.assertEqual(3, bridge.smell_candidate_gate(task_dir, stage, {}))
+        self.assertFalse((task_dir / "smell-after.json").exists())
+
+    def make_frozen_candidate(self, verdict="BLOCKED"):
+        config = self.backend_config(); prepared = self.prepare(config)
+        def fake_pipeline(task_dir, plan, **kwargs):
+            task = bridge.read_json(task_dir / "task.json")
+            (Path(task["project_root"]) / self.source.relative_to(self.root)).write_text("class Page { update() { return 2; } }\n", encoding="utf-8")
+            return {"verdict": verdict, "steps": []}
+        run = bridge.create_run(config, self.root, "task.execute")
+        with patch("arkts_smell_refactor.runner.execute_pipeline", side_effect=fake_pipeline):
+            candidate = bridge.execute_candidate({"taskHandle": prepared["taskHandle"]}, config, self.root, run)["candidate"]
+        return config, candidate, run
+
+    def test_blocked_candidate_restores_and_revalidates_without_refactoring(self):
+        config, candidate, candidate_run = self.make_frozen_candidate()
+        original = self.source.read_bytes()
+        prepared_path = Path(config["runs"]) / candidate["taskHandle"] / "prepared.json"
+        legacy = bridge.read_json(prepared_path); legacy.pop("instructions")
+        bridge.write_json(prepared_path, legacy)
+        restored = bridge.dispatch("candidate.restore", {"candidateId": candidate["candidateId"]}, config, self.root, None)
+        self.assertEqual("BLOCKED", restored["candidate"]["verdict"])
+        self.assertEqual("keep public entry", restored["prepared"]["instructions"])
+        script = Path(self.directory.name) / "candidate_validation.py"
+        script.write_text("import sys,json\nassert sys.argv[1] not in ('refactor','repair')\n"
+                          "print(json.dumps({'verdict':'PASS','issues':[]}) if sys.argv[1]=='review' else 'validated')\n", encoding="utf-8")
+        spec = lambda phase: {"command": [sys.executable, str(script), phase], "timeoutSeconds": 10}
+        plan = {"refactorAgent": spec("refactor"), "repairAgent": spec("repair"), "maxRepairAttempts": 3,
+                "gates": {key: spec(key) for key in ("smell", "build", "test", "linter")}, "reviewAgent": spec("review")}
+        run = bridge.create_run(config, self.root, "task.validateCandidate")
+        with patch.object(bridge, "pipeline_config", return_value=plan):
+            response = bridge.validate_candidate({"candidateId": candidate["candidateId"]}, config, self.root, run)
+        self.assertEqual("PASS", response["candidate"]["verdict"])
+        self.assertEqual(candidate["candidateId"], response["candidate"]["revalidatedFrom"])
+        self.assertEqual("BLOCKED", bridge.read_json(candidate_run / "candidate.json")["verdict"])
+        self.assertEqual("PASS", next(step["status"] for step in response["result"]["steps"] if step["name"] == "review-agent"))
+        self.assertEqual("SKIPPED", response["result"]["steps"][0]["status"])
+        self.assertEqual(original, self.source.read_bytes())
+        checked = bridge.dispatch("candidate.check", {"candidateId": response["candidate"]["candidateId"]}, config, self.root, None)
+        self.assertEqual("PASS", checked["verdict"])
+
+    def test_restore_rejects_changed_original_and_tampered_frozen_bytes(self):
+        config, candidate, run = self.make_frozen_candidate()
+        original = self.source.read_bytes()
+        self.source.write_text("user edit", encoding="utf-8")
+        with self.assertRaisesRegex(bridge.BridgeError, "原工程已变化"):
+            bridge.load_candidate_for_validation(candidate["candidateId"], config, self.root)
+        self.source.write_bytes(original)
+        (run / "content/after" / candidate["changes"][0]["relativePath"]).write_text("tampered", encoding="utf-8")
+        with self.assertRaisesRegex(bridge.BridgeError, "冻结候选内容已变化"):
+            bridge.load_candidate_for_validation(candidate["candidateId"], config, self.root)
+
+    def test_revalidation_cannot_promote_blocked_gates_to_applicable_candidate(self):
+        config, candidate, previous = self.make_frozen_candidate()
+        run = bridge.create_run(config, self.root, "task.validateCandidate")
+        def blocked(task_dir, plan, **kwargs):
+            self.assertNotIn("refactorAgent", plan)
+            self.assertNotIn("repairAgent", plan)
+            return {"verdict": "BLOCKED", "steps": [{"name": "smell", "status": "BLOCKED", "reason": "scanner unavailable"}]}
+        with patch("arkts_smell_refactor.runner.execute_pipeline", side_effect=blocked):
+            result = bridge.validate_candidate({"candidateId": candidate["candidateId"]}, config, self.root, run)
+        self.assertEqual("BLOCKED", result["candidate"]["verdict"])
+        with self.assertRaises(bridge.BridgeError):
+            bridge.dispatch("candidate.check", {"candidateId": result["candidate"]["candidateId"]}, config, self.root, None)
+
+    def test_clone_without_symbol_still_fails_and_scans_related_file(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        other = stage / relative.parent / "Other.ets"
+        other.write_text("class Other {}", encoding="utf-8")
+        task = bridge.read_json(task_dir / "task.json")
+        task["rule"] = "@extrulesproject/code-clone-fragment-check"
+        task["target"]["symbol"] = None
+        task["target"]["related_targets"] = [{"filePath": "Example/entry/src/main/ets/Other.ets"}]
+        bridge.write_json(task_dir / "task.json", task)
+        record = self.record(rule=task["rule"], message="Code Clone: Page.ets:1-2 is similar to Example/entry/src/main/ets/Other.ets:1-2.")
+        response = {"issues": bridge.normalize_issues(record, stage), "reportPath": "controlled-report", "scannedFiles": [str(stage / relative), str(other)]}
+        with patch.object(bridge, "scan", return_value=response) as detector:
+            self.assertEqual(1, bridge.smell_candidate_gate(task_dir, stage, {}))
+        self.assertIn(str(other), detector.call_args.args[0]["files"])
+
+    def test_smell_moved_to_new_method_does_not_pass_target_recheck(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        (stage / relative).write_text("class Page {\n  update() { return this.newMethod(); }\n  newMethod() { return 1; }\n}\n", encoding="utf-8")
+        record = self.record(message="Method 'newMethod' is too long", line=3)
+        response = {"issues": bridge.normalize_issues(record, stage), "reportPath": "controlled-report", "scannedFiles": [str(stage / relative)]}
+        with patch.object(bridge, "scan", return_value=response):
+            self.assertEqual(1, bridge.smell_candidate_gate(task_dir, stage, {}))
+        self.assertIn("newMethod", bridge.read_json(task_dir / "smell-after.json")[0]["message"])
+
+    def test_smell_diagnostic_separates_tool_failure_from_remaining_smell(self):
+        task_dir = Path(self.directory.name) / "backend"
+        task_dir.mkdir()
+        log = task_dir / "smell.log"
+        log.write_text("cloc-2.10.exe: creation of private cache subdirectory failed\nSMELL_GATE_BLOCKED: scan unavailable", encoding="utf-8")
+        blocked = {"verdict": "BLOCKED", "steps": [{"name": "smell", "status": "BLOCKED", "reason": "generic tool blocker", "output_file": str(log)}]}
+        bridge.summarize_failure(task_dir, blocked)
+        self.assertIn("CLOC", blocked["failureReason"])
+        bridge.write_json(task_dir / "smell-after.json", [{"message": "Method 'applyNormalAttribute' is feature-envious"}])
+        log.write_text("remaining smell", encoding="utf-8")
+        failed = {"verdict": "FAIL", "steps": [{"name": "smell", "status": "FAIL", "output_file": str(log)}]}
+        bridge.summarize_failure(task_dir, failed)
+        self.assertIn("applyNormalAttribute", failed["failureReason"])
+
     def test_real_backend_orchestrates_controlled_tools_in_candidate_only(self):
         config = self.backend_config(); original = self.source.read_bytes(); prepared = self.prepare(config)
         script = Path(self.directory.name) / "fixture_tool.py"
