@@ -31,7 +31,7 @@ else:
                       "    total += 1;\n" * 160 + "    return total;\n  }\n}\n", encoding="utf-8")
 before = hashlib.sha256(source.read_bytes()).hexdigest()
 config = {"node": "D:/tool/NodeJs/node.exe", "studio": "D:/tool/DevEco/DevEco Studio",
-          "backend": str(workspace.parent.parent / "arkts-smell-refactor"),
+          "backend": str(workspace.parent),
           "homecheck": str(workspace.parent.parent / "arkts异味检查工具/homecheck-extrule"),
           "runs": str(args.runs.resolve() if args.runs else workspace / "build/smoke-detection/runs")}
 params = {"scopePath": str(source)}

@@ -110,10 +110,10 @@ class BridgeTests(unittest.TestCase):
         self.assertIn("方法过长，请拆分", process.stdout.decode("utf-8"))
 
     def backend_config(self):
-        # Resolve relative to the repository rather than the installed plugin resource.
-        backend = Path(__file__).resolve().parents[3] / "arkts-smell-refactor"
-        if not (backend / "src/arkts_smell_refactor").is_dir():
-            self.skipTest("configured development backend not found")
+        # The standalone Gradle plugin lives directly inside the Python backend repository.
+        backend = Path(__file__).resolve().parents[2]
+        self.assertTrue((backend / "src/arkts_smell_refactor/runner.py").is_file(),
+                        "Bridge tests require the parent repository's backend sources")
         tools = Path(self.directory.name) / "tools"
         (tools / "homecheck/node_modules/homecheck/lib").mkdir(parents=True)
         (tools / "homecheck/node_modules/homecheck/lib/run.js").write_text("", encoding="utf-8")
