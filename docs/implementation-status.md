@@ -1,6 +1,6 @@
 # 插件主体实现与使用
 
-更新：2026-10-18，插件版本 0.1.2。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
+更新：2026-10-18，插件版本 0.1.3。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
 
 ## 已实现流程
 
@@ -31,6 +31,14 @@
 
 “查看运行日志”在检测期间也可使用；HomeCheck 文件日志与控制台日志均实时推送。失败后可点“打开本轮日志…”在编辑器中查看本轮 `scan/HomeCheck.log` 和 `scan.log`。错误返回保留日志路径、退出码和有长度限制的诊断内容；顶部错误及底部状态按窗口宽度换行。
 
+## Agent 提示词附件范围
+
+0.1.2 的一次真实重构任务 `4193710a-c90e-43bc-b10d-eae1a2b515e5` 在 `backend/refactor-agent.log` 中报错 `File attachment path is outside the allowed roots`。后端把提示词写到 `backend/refactor-agent-prompt.md`，而 Agent 的 `--dir` 是 `backend/refactor-workspace`，附件不在 Agent 工作区中，导致读取提示词时退出；后续 smell/build/test/linter/review 均跳过，真实工程未应用修改。
+
+0.1.3 的插件适配器复用后端生产副本与变更同步策略，在 Agent 工作区内创建唯一的临时提示词附件，通过 `-f` 传入，并在 CLI 返回或抛异常时清理。审计用的提示词仍保留在任务目录。初次重构与 repair 共用该入口；生产删除拒绝、测试排除与原工程保护仍适用。
+
+失败步骤从本轮受控日志提取简短原因，写入 `result.json`、候选结果和界面；“变更预览”顶部优先显示原因，“打开本轮日志…”也支持 Agent 日志。此次验证使用受控 CLI 检查附件真实位置、生产同步、失败清理及删除拒绝，未再次调用真实 Agent 或宣称完整门禁通过。升级后需重新检测、分析并生成候选。
+
 ## 构建与测试
 
 ```powershell
@@ -44,7 +52,7 @@ python -m unittest discover -s tests -v
 
 Java 事务测试覆盖：多文件应用与 Undo/Redo、BOM/CRLF 保持、资源二进制恢复、基线变化、新文件冲突、第二次写入失败回滚、用户后续编辑保护和越界/测试文件拒绝。
 
-当前回归集为 7 项 Java 事务测试与 27 项 Python 桥接测试。完整工程哈希在后台核对；应用临界区再次检查受影响文件、未保存编辑和设置变化。日志刷新合并到 UI 更新队列，避免每个日志块重新布局整个面板。
+当前回归集为 7 项 Java 事务测试与 31 项 Python 桥接测试。完整工程哈希在后台核对；应用临界区再次检查受影响文件、未保存编辑和设置变化。日志刷新合并到 UI 更新队列，避免每个日志块重新布局整个面板。
 
 Python 测试覆盖：输入展开、克隆无符号、目标/关联片段过期、测试代码只读、路径边界、JSONL 响应、协议版本、候选冻结与原工程不被回写、删除拒绝、实际 runner 的受控工具编排，以及应用后验证不再次执行 Agent。
 

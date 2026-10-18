@@ -365,14 +365,14 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             Path run = Path.of(directory).toRealPath();
             if (!run.startsWith(root)) throw new IllegalArgumentException("日志目录越界");
             boolean opened = false;
-            for (String name : new String[]{"scan/HomeCheck.log", "scan.log"}) {
+            for (String name : new String[]{"backend/refactor-agent.log", "backend/repair-agent.log", "backend/review-agent.log", "scan/HomeCheck.log", "scan.log"}) {
                 Path path = run.resolve(name);
                 if (!Files.isRegularFile(path)) continue;
                 if (!path.toRealPath().startsWith(run)) throw new IllegalArgumentException("日志文件通过链接离开本轮目录");
                 var file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(path);
                 if (file != null) { FileEditorManager.getInstance(project).openFile(file, true); opened = true; }
             }
-            if (!opened) throw new IllegalArgumentException("本轮尚未生成检测日志，请查看面板中的运行日志。");
+            if (!opened) throw new IllegalArgumentException("本轮尚未生成日志，请查看面板中的运行日志。");
         } catch (java.io.IOException e) { throw new IllegalArgumentException("无法读取本轮日志：" + e.getMessage(), e); }
     }
 
@@ -471,6 +471,8 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
                 .append("\n应用状态：").append(state.applied ? "已应用" : "未应用").append(state.stale ? " / 内容已变化" : "").append('\n');
         if (state.result != null) {
             summary.append("本轮结论：").append(PythonBridgeClient.string(state.result, "verdict")).append('\n');
+            String reason = PythonBridgeClient.string(state.result, "failureReason");
+            if (!reason.isBlank()) summary.append("失败原因：").append(reason).append('\n');
             if (state.result.has("validationPolicy")) summary.append("策略：").append(state.result.get("validationPolicy")).append('\n');
             if (state.result.has("steps")) for (JsonElement element : state.result.getAsJsonArray("steps")) {
                 JsonObject step = element.getAsJsonObject(); summary.append(PythonBridgeClient.string(step, "name")).append("  ")
@@ -478,7 +480,9 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             }
         }
         state.steps.forEach((name, value) -> summary.append(name).append(": ").append(value).append('\n'));
-        validation.setText(summary.toString());
+        if (!validation.getText().equals(summary.toString())) {
+            validation.setText(summary.toString()); validation.setCaretPosition(0);
+        }
         if (renderedHistory != state.history) {
             renderedHistory = state.history; historyModel.clear();
             for (JsonElement element : state.history) historyModel.addElement(element.getAsJsonObject());

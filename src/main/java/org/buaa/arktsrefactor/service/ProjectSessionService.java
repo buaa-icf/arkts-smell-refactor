@@ -171,7 +171,9 @@ public final class ProjectSessionService implements Disposable {
         state.candidate = null; state.result = null;
         run("task.execute", params, "正在生成并验证候选…", result -> {
             state.candidate = result.getAsJsonObject("candidate"); state.result = result.getAsJsonObject("result");
-            state.status = "候选验证：" + PythonBridgeClient.string(state.result, "verdict") + "；当前工程尚未应用修改。";
+            String reason = PythonBridgeClient.string(state.result, "failureReason");
+            state.status = "候选验证：" + PythonBridgeClient.string(state.result, "verdict") +
+                    (reason.isBlank() ? "" : "；" + reason) + "；当前工程尚未应用修改。";
         });
     }
 
