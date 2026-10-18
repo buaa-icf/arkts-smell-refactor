@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import codecs
 import hashlib
 import json
 import os
@@ -28,9 +29,10 @@ SEQUENCE = 0
 
 
 class BridgeError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, details: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 def emit(event: str, data: dict):
@@ -195,7 +197,7 @@ def create_run(config: dict, root: Path, method: str):
     return run
 
 
-def run_tool(command: list[str], cwd: Path, log: Path, timeout: int = 1200):
+def run_tool(command: list[str], cwd: Path, log: Path, timeout: int = 1200, follow_log: Path | None = None):
     log.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     scratch = log.parent / "temp"
@@ -204,6 +206,34 @@ def run_tool(command: list[str], cwd: Path, log: Path, timeout: int = 1200):
     process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, encoding="utf-8", errors="replace", env=env)
     timed_out = threading.Event()
+    stopped = threading.Event()
+
+    def follow():
+        offset = 0
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while True:
+            finished = stopped.is_set()
+            try:
+                if follow_log.is_file():
+                    with follow_log.open("rb") as stream:
+                        stream.seek(offset)
+                        while block := stream.read(8000):
+                            offset += len(block)
+                            text = decoder.decode(block)
+                            if text:
+                                emit("log.appended", {"text": text})
+            except OSError:
+                pass  # A not-yet-created or rotating log must not stop the detector.
+            if finished:
+                remaining = decoder.decode(b"", final=True)
+                if remaining:
+                    emit("log.appended", {"text": remaining})
+                return
+            stopped.wait(0.2)
+
+    follower = threading.Thread(target=follow, daemon=True) if follow_log else None
+    if follower:
+        follower.start()
 
     def stop():
         if process.poll() is None:
@@ -226,6 +256,41 @@ def run_tool(command: list[str], cwd: Path, log: Path, timeout: int = 1200):
         return exit_code
     finally:
         timer.cancel()
+        process.stdout.close()
+        stopped.set()
+        if follower:
+            follower.join(timeout=2)
+
+
+def scope_rule_ignores(config: dict, root: Path):
+    scoped = dict(config)
+    for key in ("ignore", "excluded"):
+        if isinstance(config.get(key), list):
+            scoped[key] = [str(pattern) if Path(pattern).is_absolute() else
+                           root.as_posix().rstrip("/") + "/" + str(pattern).replace("\\", "/").lstrip("/")
+                           for pattern in config[key]]
+    if isinstance(config.get("overrides"), list):
+        scoped["overrides"] = [scope_rule_ignores(item, root) for item in config["overrides"]]
+    return scoped
+
+
+def log_tail(path: Path, limit: int = 8000):
+    if not path.is_file():
+        return ""
+    with path.open("rb") as stream:
+        stream.seek(max(0, path.stat().st_size - limit))
+        return stream.read(limit).decode("utf-8", errors="replace")
+
+
+def scan_failure(run: Path, reason: str, exit_code: int | None = None):
+    logs = [run / "scan.log", run / "scan/HomeCheck.log"]
+    diagnostic = "\n".join(f"[{path.name}]\n{log_tail(path)}" for path in logs if path.is_file())
+    emit("log.appended", {"text": "\n" + reason + "\n" + diagnostic + "\n"})
+    errors = [line for line in diagnostic.splitlines() if "[ERROR]" in line or re.search(r"\b(?:Error|error):", line)]
+    cause = errors[0].split(" - ", 1)[-1] if errors else ""
+    message = reason + ("：" + cause[:300] if cause else "")
+    return BridgeError("TOOL_UNAVAILABLE", message, {"runDirectory": str(run), "logPath": str(logs[-1] if logs[-1].is_file() else logs[0]),
+                       "exitCode": exit_code, "diagnostic": diagnostic})
 
 
 def scan(params: dict, config: dict, root: Path, run: Path):
@@ -249,34 +314,51 @@ def scan(params: dict, config: dict, root: Path, run: Path):
     project_config = read_json(homecheck / "config/projectConfig.json")
     sdk = Path(config["studio"]) / "sdk/default"
     output = run / "scan"
-    project_config.update({"projectName": root.name, "projectPath": str(root.parent),
+    project_config.update({"projectName": root.name, "projectPath": str(root) + os.sep,
                            "repos": [f"{root.name}={root}"], "checkFiles": [p.relative_to(root).as_posix() for p in files],
                            "datasetDir": "", "ohosSdkPath": str(sdk / "openharmony/ets"),
-                           "hmsSdkPath": str(sdk / "hms/ets"), "fix": "false", "reportDir": str(output), "logPath": str(output / "HomeCheck.log")})
-    rule_config = read_json(homecheck / "config/ruleConfig.json")
+                           "hmsSdkPath": str(sdk / "hms/ets"), "fix": "false", "reportDir": str(output), "logPath": str(output / "HomeCheck.log"),
+                           "homecheck_log_level": "info", "arkCheckPath": str(homecheck / "node_modules/homecheck"),
+                           "npmInstallDir": str(homecheck), "checkPath": str(run / "check-paths.json")})
+    write_json(run / "check-paths.json", {"checkPath": [{"filePath": str(path), "fixKey": []} for path in files]})
+    rule_config = scope_rule_ignores(read_json(homecheck / "config/ruleConfig.json"), root)
     rule_config["extRuleSet"] = [{"ruleSetName": "extrulesproject", "packagePath": str(homecheck / "extrulesproject-1.0.0.tgz"),
                                   "extRules": {rule: 2 for rule in rules}}]
     write_json(run / "project.json", project_config); write_json(run / "rules.json", rule_config)
     emit("workflow.changed", {"status": f"正在运行 HomeCheck：{len(files)} 个文件，{len(rules)} 条规则…"})
-    command = [config.get("node") or "node", str(homecheck / "scripts/gitcodeArktsPerfTest.js"),
-               "--f1=false", "--dashboard=false", f"--baseProjectConfig={run / 'project.json'}",
-               f"--baseRuleConfig={run / 'rules.json'}", f"--outputDir={output}",
-               "--includeRules=" + ",".join(RULES[rule] if RULES[rule] != "code-clone" else "code-clone-fragment" for rule in rules)]
-    if run_tool(command, homecheck, run / "scan.log") != 0:
-        raise BridgeError("TOOL_UNAVAILABLE", "HomeCheck 扫描失败，请查看本轮日志")
+    command = [config.get("node") or "node", str(Path(__file__).with_name("homecheck_scan.cjs")),
+               str(homecheck), str(run / "project.json"), str(run / "rules.json"), str(output / "summary.json")]
+    try:
+        exit_code = run_tool(command, homecheck, run / "scan.log", follow_log=output / "HomeCheck.log")
+    except (OSError, BridgeError) as error:
+        raise scan_failure(run, f"无法完成 HomeCheck 扫描：{error}") from error
+    if exit_code != 0:
+        raise scan_failure(run, f"HomeCheck 扫描失败（exit {exit_code}）", exit_code)
     emit("workflow.changed", {"status": "正在核对执行摘要并读取检测结果…"})
     summary_path = output / "summary.json"
     if not summary_path.is_file():
         raise BridgeError("ARTIFACT_UNAVAILABLE", "扫描器未生成本轮执行摘要")
-    repositories = read_json(summary_path).get("repositories", [])
-    expected_rules = set(rules)
-    if len(repositories) != 1 or repositories[0].get("sharedRun", {}).get("success") is not True:
-        raise BridgeError("TOOL_UNAVAILABLE", "HomeCheck 实际扫描未成功，空报告不能视为零异味")
-    executed = {item.get("ruleName") for item in repositories[0].get("runs", []) if item.get("success") is True}
-    if not expected_rules.issubset(executed):
-        raise BridgeError("TOOL_UNAVAILABLE", "本轮没有完成全部选中规则")
-    reports = list((output / "runs").glob("*/issuesReport.json"))
-    report = reports[0] if len(reports) == 1 else output / "issuesReport.json"
+    summary = read_json(summary_path)
+    if summary.get("runner") != "direct-homecheck" or summary.get("success") is not True:
+        raise scan_failure(run, "HomeCheck 实际扫描未成功，空报告不能视为零异味")
+    if set(rules) != set(summary.get("requestedRules", [])) or not set(rules).issubset(summary.get("loadedRules", [])):
+        raise scan_failure(run, "HomeCheck 没有加载全部选中规则")
+    detector_log = output / "HomeCheck.log"
+    # HomeCheck can swallow checker exceptions and still exit 0/write an empty report.
+    completed, failed, actual_count = False, False, None
+    if detector_log.is_file():
+        with detector_log.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                failed |= bool(re.search(r"\[ERROR\].*\[HomeCheck\]", line))
+                completed |= "[Main] Checking completed." in line
+                count = re.search(r"\[CheckEntry\] File count: (\d+)", line)
+                if count:
+                    actual_count = int(count.group(1))
+    if failed or not completed:
+        raise scan_failure(run, "HomeCheck 未完成检测或规则执行出错")
+    if actual_count != len(files):
+        raise scan_failure(run, "HomeCheck 实际文件数与请求不一致，部分目标可能被忽略")
+    report = output / "issuesReport.json"
     if not report.is_file():
         raise BridgeError("ARTIFACT_UNAVAILABLE", "本轮未生成唯一有效的 issuesReport.json")
     issues = normalize_issues(read_json(report), root)
@@ -287,7 +369,7 @@ def scan(params: dict, config: dict, root: Path, run: Path):
 
 def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | None):
     if method == "session.hello":
-        return {"protocolVersion": 1, "adapterVersion": "0.1.1", "transport": "one-request-per-process", "supportedRules": list(RULES)}
+        return {"protocolVersion": 1, "adapterVersion": "0.1.2", "transport": "one-request-per-process", "supportedRules": list(RULES)}
     if method == "environment.inspect":
         return inspect_environment(config)
     if method == "issues.import":
@@ -689,7 +771,8 @@ def main():
             session = read_json(run / "session.json"); session.update(state="FAILED", error=str(error))
             write_json(run / "session.json", session)
         response = {"protocolVersion": 1, "type": "response", "requestId": (request or {}).get("requestId"),
-                    "ok": False, "error": {"code": code, "message": str(error)}}
+                    "ok": False, "error": {"code": code, "message": str(error),
+                                             "details": error.details if isinstance(error, BridgeError) else {}}}
         OUTPUT.write(json.dumps(response, ensure_ascii=False) + "\n"); OUTPUT.flush()
         return 2
 

@@ -13,7 +13,11 @@ adapter_path = workspace / "src/main/resources/bridge/ide_bridge.py"
 parser = argparse.ArgumentParser()
 parser.add_argument("--project", type=Path)
 parser.add_argument("--file", type=Path)
+parser.add_argument("--runs", type=Path, help="Override run storage to reproduce the IDE cache location")
+parser.add_argument("--adapter", type=Path, help="Exercise an extracted plugin adapter instead of the source resource")
 args = parser.parse_args()
+if args.adapter:
+    adapter_path = args.adapter.resolve()
 if bool(args.project) != bool(args.file):
     parser.error("--project and --file must be supplied together")
 if args.file:
@@ -29,7 +33,7 @@ before = hashlib.sha256(source.read_bytes()).hexdigest()
 config = {"node": "D:/tool/NodeJs/node.exe", "studio": "D:/tool/DevEco/DevEco Studio",
           "backend": str(workspace.parent.parent / "arkts-smell-refactor"),
           "homecheck": str(workspace.parent.parent / "arkts异味检查工具/homecheck-extrule"),
-          "runs": str(workspace / "build/smoke-detection/runs")}
+          "runs": str(args.runs.resolve() if args.runs else workspace / "build/smoke-detection/runs")}
 params = {"scopePath": str(source)}
 if not args.file:
     params["rules"] = ["@extrulesproject/long-method-check"]

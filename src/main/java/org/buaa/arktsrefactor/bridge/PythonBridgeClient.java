@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -110,24 +112,31 @@ public final class PythonBridgeClient {
     }
 
     private static Path extractAdapter() throws Exception {
-        byte[] bytes;
-        try (InputStream stream = PythonBridgeClient.class.getResourceAsStream("/bridge/ide_bridge.py")) {
-            if (stream == null) throw new IOException("插件缺少 Python 适配器资源");
-            bytes = stream.readAllBytes();
+        Map<String, byte[]> resources = new LinkedHashMap<>();
+        MessageDigest hash = MessageDigest.getInstance("SHA-256");
+        for (String name : new String[]{"ide_bridge.py", "homecheck_scan.cjs"}) {
+            try (InputStream stream = PythonBridgeClient.class.getResourceAsStream("/bridge/" + name)) {
+                if (stream == null) throw new IOException("插件缺少适配器资源：" + name);
+                byte[] bytes = stream.readAllBytes();
+                resources.put(name, bytes); hash.update(bytes);
+            }
         }
-        String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        String digest = HexFormat.of().formatHex(hash.digest());
         Path directory = Path.of(PathManager.getSystemPath(), "arkts-refactor", "bridge", digest.substring(0, 16));
         Files.createDirectories(directory);
-        Path script = directory.resolve("ide_bridge.py");
-        if (!Files.exists(script) || !MessageDigest.isEqual(bytes, Files.readAllBytes(script))) {
-            Path temporary = Files.createTempFile(directory, "adapter-", ".tmp");
-            try {
-                Files.write(temporary, bytes);
-                try { Files.move(temporary, script, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-                catch (AtomicMoveNotSupportedException e) { Files.move(temporary, script, StandardCopyOption.REPLACE_EXISTING); }
-            } finally { Files.deleteIfExists(temporary); }
+        for (var resource : resources.entrySet()) {
+            Path target = directory.resolve(resource.getKey());
+            byte[] bytes = resource.getValue();
+            if (!Files.exists(target) || !MessageDigest.isEqual(bytes, Files.readAllBytes(target))) {
+                Path temporary = Files.createTempFile(directory, "adapter-", ".tmp");
+                try {
+                    Files.write(temporary, bytes);
+                    try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+                    catch (AtomicMoveNotSupportedException e) { Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING); }
+                } finally { Files.deleteIfExists(temporary); }
+            }
         }
-        return script;
+        return directory.resolve("ide_bridge.py");
     }
 
     public static String string(JsonObject value, String key) {

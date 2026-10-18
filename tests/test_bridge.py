@@ -185,8 +185,8 @@ class BridgeTests(unittest.TestCase):
     def test_zero_exit_with_failed_detector_summary_is_not_zero_issues(self):
         config = self.backend_config()
         run = bridge.create_run(config, self.root, "scan.start")
-        def failed_scan(command, cwd, log):
-            bridge.write_json(run / "scan/summary.json", {"repositories": [{"sharedRun": {"success": False}}]})
+        def failed_scan(command, cwd, log, **kwargs):
+            bridge.write_json(run / "scan/summary.json", {"runner": "direct-homecheck", "success": False})
             bridge.write_json(run / "scan/issuesReport.json", [])
             return 0
         with patch.object(bridge, "run_tool", side_effect=failed_scan):
@@ -194,17 +194,25 @@ class BridgeTests(unittest.TestCase):
                 bridge.scan({"rules": ["@extrulesproject/long-method-check"]}, config, self.root, run)
         self.assertEqual("TOOL_UNAVAILABLE", error.exception.code)
 
-    def scan_fixture(self, records):
+    def scan_fixture(self, records, change_evidence=None):
         config = self.backend_config()
         run = bridge.create_run(config, self.root, "scan.start")
         other = self.source.parent / "Other.ets"
         other.write_text("class Other {}", encoding="utf-8")
-        def successful_scan(command, cwd, log):
+        def successful_scan(command, cwd, log, **kwargs):
+            self.assertEqual("homecheck_scan.cjs", Path(command[1]).name)
+            self.assertNotIn("gitcodeArktsPerfTest.js", " ".join(command))
             self.assertEqual([self.source.relative_to(self.root).as_posix()],
                              bridge.read_json(run / "project.json")["checkFiles"])
-            bridge.write_json(run / "scan/summary.json", {"repositories": [{"sharedRun": {"success": True},
-                              "runs": [{"ruleName": rule, "success": True} for rule in bridge.RULES]}]})
-            bridge.write_json(run / "scan/runs/Example/issuesReport.json", records)
+            self.assertEqual(str(self.root) + os.sep, bridge.read_json(run / "project.json")["projectPath"])
+            self.assertEqual({"checkPath": [{"filePath": str(self.source), "fixKey": []}]}, bridge.read_json(run / "check-paths.json"))
+            bridge.write_json(run / "scan/summary.json", {"runner": "direct-homecheck", "success": True,
+                              "requestedRules": list(bridge.RULES), "loadedRules": list(bridge.RULES)})
+            bridge.write_json(run / "scan/issuesReport.json", records)
+            (run / "scan/HomeCheck.log").write_text("[INFO] [HomeCheck] - [CheckEntry] File count: 1\n"
+                                                   "[INFO] [HomeCheck] - [Main] Checking completed.\n", encoding="utf-8")
+            if change_evidence:
+                change_evidence(run)
             return 0
         with patch.object(bridge, "run_tool", side_effect=successful_scan):
             return bridge.scan({"scopePath": str(self.source)}, config, self.root, run)
@@ -225,6 +233,90 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual([], result["issues"])
         self.assertEqual(1, result["fileCount"])
         self.assertEqual(str(self.source), result["scopePath"])
+
+    def test_swallowed_checker_exception_is_not_a_successful_empty_scan(self):
+        def errors(run):
+            with (run / "scan/HomeCheck.log").open("a", encoding="utf-8") as stream:
+                stream.write("[ERROR] [HomeCheck] - [CheckEntry] Error running file check: fixture failure\n")
+        with self.assertRaises(bridge.BridgeError) as failure:
+            self.scan_fixture([], errors)
+        self.assertIn("fixture failure", str(failure.exception))
+        self.assertIn("HomeCheck.log", failure.exception.details["logPath"])
+        self.assertIn("fixture failure", failure.exception.details["diagnostic"])
+
+    def test_unloaded_selected_rule_cannot_pass_with_zero_findings(self):
+        def missing_rule(run):
+            summary = bridge.read_json(run / "scan/summary.json")
+            summary["loadedRules"].pop()
+            bridge.write_json(run / "scan/summary.json", summary)
+        with self.assertRaisesRegex(bridge.BridgeError, "没有加载全部选中规则"):
+            self.scan_fixture([], missing_rule)
+
+    def test_partial_file_filter_cannot_pass_as_a_complete_scan(self):
+        def filtered(run):
+            (run / "scan/HomeCheck.log").write_text("[INFO] [HomeCheck] - [CheckEntry] File count: 0\n"
+                                                   "[INFO] [HomeCheck] - [Main] Checking completed.\n", encoding="utf-8")
+        with self.assertRaisesRegex(bridge.BridgeError, "实际文件数与请求不一致"):
+            self.scan_fixture([], filtered)
+
+    def test_missing_completion_marker_is_not_a_successful_scan(self):
+        def unfinished(run):
+            (run / "scan/HomeCheck.log").write_text("[INFO] [HomeCheck] - [CheckEntry] File count: 1\n", encoding="utf-8")
+        with self.assertRaisesRegex(bridge.BridgeError, "未完成检测"):
+            self.scan_fixture([], unfinished)
+
+    def test_ignore_patterns_are_scoped_to_source_even_under_build_parent(self):
+        root = self.root / "build/Project"
+        absolute = (self.root / "excluded/**").as_posix()
+        config = {"ignore": ["**/build/**/*", absolute], "overrides": [{"excluded": ["**/test/**/*"]}]}
+        scoped = bridge.scope_rule_ignores(config, root)
+        self.assertEqual(root.as_posix() + "/**/build/**/*", scoped["ignore"][0])
+        self.assertEqual(absolute, scoped["ignore"][1])
+        self.assertEqual(root.as_posix() + "/**/test/**/*", scoped["overrides"][0]["excluded"][0])
+        self.assertEqual("**/build/**/*", config["ignore"][0])
+
+    def test_direct_runner_checks_success_and_registration_without_benchmark_tools(self):
+        node = Path("D:/tool/NodeJs/node.exe")
+        if not node.is_file():
+            self.skipTest("development Node not installed")
+        config = self.backend_config()
+        homecheck = Path(config["homecheck"])
+        lib = homecheck / "node_modules/homecheck/lib"
+        registry = lib / "utils/common/CheckerIndex.js"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("exports.file2CheckRuleMap=new Map([['@extrulesproject/long-method-check',{}]]);"
+                            "exports.project2CheckRuleMap=new Map();", encoding="utf-8")
+        main = lib / "Main.js"
+        main.write_text("exports.main=async()=>true;", encoding="utf-8")
+        rules = homecheck / "rules.json"
+        bridge.write_json(rules, {"extRuleSet": [{"extRules": {"@extrulesproject/long-method-check": 2}}]})
+        summary = homecheck / "summary.json"
+        command = [str(node), str(ADAPTER_PATH.with_name("homecheck_scan.cjs").resolve()),
+                   str(homecheck), str(homecheck / "project.json"), str(rules), str(summary)]
+        result = subprocess.run(command, cwd=homecheck, capture_output=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(bridge.read_json(summary)["success"])
+        registry.write_text("exports.file2CheckRuleMap=new Map();exports.project2CheckRuleMap=new Map();", encoding="utf-8")
+        result = subprocess.run(command, cwd=homecheck, capture_output=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(bridge.read_json(summary)["success"])
+        self.assertIn("did not load selected rules", bridge.read_json(summary)["error"])
+        main.write_text("exports.main=async()=>false;", encoding="utf-8")
+        result = subprocess.run(command, cwd=homecheck, capture_output=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("did not complete successfully", bridge.read_json(summary)["error"])
+
+    def test_tool_streams_stdout_and_detector_file_log(self):
+        log = Path(self.directory.name) / "HomeCheck.log"
+        script = Path(self.directory.name) / "log_fixture.py"
+        script.write_text("from pathlib import Path\nimport sys\nprint('stdout event',flush=True)\n"
+                          "Path(sys.argv[1]).write_text('检测日志：正在分析\\n',encoding='utf-8')\n", encoding="utf-8")
+        exit_code = bridge.run_tool([sys.executable, "-X", "utf8", str(script), str(log)],
+                                    self.root, Path(self.directory.name) / "scan.log", follow_log=log)
+        self.assertEqual(0, exit_code)
+        events = "".join(call.args[1]["text"] for call in bridge.emit.call_args_list if call.args[0] == "log.appended")
+        self.assertIn("stdout event", events)
+        self.assertIn("检测日志：正在分析", events)
 
     def test_real_backend_orchestrates_controlled_tools_in_candidate_only(self):
         config = self.backend_config(); original = self.source.read_bytes(); prepared = self.prepare(config)
