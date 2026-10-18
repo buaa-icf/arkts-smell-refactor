@@ -44,6 +44,10 @@ public final class ProjectSessionService implements Disposable {
         public String runDirectory = "";
         public String status = "请选择检测范围，或导入异味 JSON。";
         public String log = "";
+        public String activeMethod = "";
+        public long operationStartedNanos;
+        public String scanTarget = "";
+        public String scanMessage = "尚未检测；请选择范围后点击“开始检测”。";
         public boolean busy;
         public boolean applied;
         public boolean stale;
@@ -119,9 +123,16 @@ public final class ProjectSessionService implements Disposable {
     }
 
     public void scan(JsonObject params) {
+        if (state.busy || disposed) return;
+        state.scanTarget = params.has("scopePath") ? PythonBridgeClient.string(params, "scopePath") : Objects.toString(project.getBasePath(), "");
+        state.scanMessage = "正在检测，请稍候…";
         run("scan.start", params, "正在检测…", result -> {
             replaceIssues(result.getAsJsonArray("issues"));
-            state.status = "检测成功：" + state.issues.size() + " 条异味。";
+            state.scanTarget = PythonBridgeClient.string(result, "scopePath");
+            int files = result.get("fileCount").getAsInt();
+            int rules = result.getAsJsonArray("rules").size();
+            state.scanMessage = "检测完成：" + files + " 个文件，" + rules + " 条规则，" + state.issues.size() + " 条异味。";
+            state.status = state.scanMessage;
         });
     }
 
@@ -130,6 +141,7 @@ public final class ProjectSessionService implements Disposable {
         run("issues.import", params, "正在导入…", result -> {
             replaceIssues(result.getAsJsonArray("issues"));
             state.status = "导入成功：" + state.issues.size() + " 条异味。";
+            state.scanMessage = state.status; state.scanTarget = "";
         });
     }
 
@@ -138,6 +150,7 @@ public final class ProjectSessionService implements Disposable {
         run("issues.import", params, "正在导入…", result -> {
             replaceIssues(result.getAsJsonArray("issues"));
             state.status = "导入成功：" + state.issues.size() + " 条异味。";
+            state.scanMessage = state.status; state.scanTarget = "";
         });
     }
 
@@ -242,7 +255,9 @@ public final class ProjectSessionService implements Disposable {
         String root = project.getBasePath();
         if (root == null) { state.status = "当前工程没有本地根目录。"; changed(); return; }
         bridge.beginOperation();
-        state.busy = true; state.status = status; state.steps.clear(); state.log = "";
+        state.busy = true; state.activeMethod = method; state.operationStartedNanos = System.nanoTime();
+        state.status = status; state.steps.clear(); state.log = "";
+        state.runDirectory = "";
         changed();
         worker.submit(() -> {
             AtomicReference<String> run = new AtomicReference<>("");
@@ -258,7 +273,10 @@ public final class ProjectSessionService implements Disposable {
                             throw new IllegalStateException("应用前工具设置发生变化，请重新分析。");
                         completion.run();
                     }
-                    catch (Exception e) { state.status = "操作未完成：" + e.getMessage(); }
+                    catch (Exception e) {
+                        state.status = "操作未完成：" + e.getMessage();
+                        if (method.equals("scan.start")) state.scanMessage = "检测失败：" + e.getMessage();
+                    }
                     finally { state.busy = false; changed(); }
                 });
             } catch (Exception error) {
@@ -275,7 +293,14 @@ public final class ProjectSessionService implements Disposable {
                         }
                     } catch (Exception ignored) { /* Existing RUNNING records recover as INTERRUPTED. */ }
                 }
-                ui(() -> { state.busy = false; state.status = error instanceof CancellationException ? "已取消。" + (state.applied ? "已应用的代码保留。" : "当前工程未应用候选修改。") : "操作未完成：" + error.getMessage(); changed(); });
+                ui(() -> {
+                    state.busy = false;
+                    state.status = error instanceof CancellationException ? "已取消。" + (state.applied ? "已应用的代码保留。" : "当前工程未应用候选修改。") : "操作未完成：" + error.getMessage();
+                    if (method.equals("scan.start")) state.scanMessage = error instanceof CancellationException
+                            ? "检测已取消；本轮没有返回检测结果。" : "检测失败：" + error.getMessage() + "；请查看运行日志。";
+                    state.log += "\n" + state.status + "\n";
+                    changed();
+                });
             }
         });
     }
@@ -285,6 +310,12 @@ public final class ProjectSessionService implements Disposable {
             JsonObject data = event.has("data") ? event.getAsJsonObject("data") : new JsonObject();
             switch (PythonBridgeClient.string(event, "event")) {
                 case "run.started" -> state.runDirectory = PythonBridgeClient.string(data, "runDirectory");
+                case "scan.started" -> {
+                    if (state.activeMethod.equals("scan.start")) {
+                        state.scanTarget = PythonBridgeClient.string(data, "scopePath");
+                        state.scanMessage = "正在检测：" + data.get("fileCount").getAsInt() + " 个文件，" + data.getAsJsonArray("rules").size() + " 条规则…";
+                    }
+                }
                 case "workflow.changed" -> state.status = PythonBridgeClient.string(data, "status");
                 case "step.updated" -> state.steps.put(PythonBridgeClient.string(data, "stepId"), PythonBridgeClient.string(data, "status"));
                 case "log.appended" -> {

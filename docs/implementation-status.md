@@ -1,6 +1,6 @@
 # 插件主体实现与使用
 
-更新：2026-10-15。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
+更新：2026-10-18，插件版本 0.1.1。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
 
 ## 已实现流程
 
@@ -15,6 +15,16 @@
 
 任务执行互斥范围为一个 IDE Project。关闭面板不终止任务；取消结束本次进程树，关闭 Project 释放服务并停止 worker。
 
+## 检测目标与运行状态
+
+“当前文件”读取点击开始检测时编辑器选中的 `.ets/.ts` 文件。开始后，工具栏下方显示本次请求的完整路径；后台会再返回实际扫描文件数、文件列表和规则。切换编辑器不改变已经提交的任务。
+
+后台工作期间，工具栏下方显示带“正在检测中”和累计耗时的滚动进度条，取消按钮可用。HomeCheck 没有可靠的总体完成百分比，因此显示持续活动状态；运行日志保留扫描器输出，底部状态显示启动、报告读取等阶段。
+
+检测结果区域始终显示本轮状态。成功时显示文件数、规则数、异味数；失败、取消与正常完成但零异味分别提示。原有结果被筛选条件全部隐藏时，提示“当前筛选无匹配结果”。
+
+0.1.0 在 Windows 的 GBK 环境下可能无法解码配置中的中文路径，Python 尚未解析请求便返回空 requestId，界面继而显示“后端响应不属于当前请求”。0.1.1 在 Java 启动参数、子进程环境和 Python 标准流三处固定 UTF-8，并在无法读取请求时保留实际错误原因。此错误意味着本次操作失败，不能用空表判断没有异味。
+
 ## 构建与测试
 
 ```powershell
@@ -28,11 +38,17 @@ python -m unittest discover -s tests -v
 
 Java 事务测试覆盖：多文件应用与 Undo/Redo、BOM/CRLF 保持、资源二进制恢复、基线变化、新文件冲突、第二次写入失败回滚、用户后续编辑保护和越界/测试文件拒绝。
 
-当前回归集为 7 项 Java 事务测试与 17 项 Python 桥接测试。完整工程哈希在后台核对；应用临界区再次检查受影响文件、未保存编辑和设置变化。日志刷新合并到 UI 更新队列，避免每个日志块重新布局整个面板。
+当前回归集为 7 项 Java 事务测试与 20 项 Python 桥接测试。完整工程哈希在后台核对；应用临界区再次检查受影响文件、未保存编辑和设置变化。日志刷新合并到 UI 更新队列，避免每个日志块重新布局整个面板。
 
 Python 测试覆盖：输入展开、克隆无符号、目标/关联片段过期、测试代码只读、路径边界、JSONL 响应、协议版本、候选冻结与原工程不被回写、删除拒绝、实际 runner 的受控工具编排，以及应用后验证不再次执行 Agent。
 
+新增回归使用包含中文路径、中文消息的原始 UTF-8 字节，在 `PYTHONIOENCODING=gbk`、`PYTHONUTF8=0` 环境中启动真实 worker，校验请求关联与返回内容；同时验证单文件扫描配置及结果过滤、成功零结果的范围元信息和 `scan.started` 事件。
+
 本机真实 HomeCheck 烟测入口为 `tools/smoke_detect.py`，在 `build/smoke-detection` 中检测 160 条语句的方法。已实际检出 1 条过长方法；原样例源码保持不变。本次扫描执行摘要与问题报告均保存在独立 run 中。
+
+该脚本现在通过真实 JSONL 子进程调用插件适配器。可指定 `--project <工程根目录> --file <绝对文件路径>` 只读检测现有文件，默认执行全部四条规则；检查实际目标范围、请求关联、进度事件与检测前后目标文件 SHA-256，JSONL 原始事件和响应保存在 `build/smoke-detection/worker-<requestId>.jsonl`。
+
+2026-10-18 实际检测 `D:\arktsProgram\agc-template-market-harmonyos-demos\BooksAndReferenceTemplate\BookRead\feature\book_person\src\main\ets\comp\MyBalanceCard.ets`：HomeCheck 日志确认文件数为 1，四条规则均成功完成，结果为 0 条异味，目标内容哈希保持不变。该结果仅表示当前规则未检出问题。运行证据为 `build/smoke-detection/runs/a06288aa-a4aa-4ffa-a171-d53851100567/scan/summary.json` 和同轮 `runs/BookRead/issuesReport.json`。
 
 ## 与设计方案的实现差异
 

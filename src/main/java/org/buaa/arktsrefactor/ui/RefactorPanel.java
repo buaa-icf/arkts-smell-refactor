@@ -13,6 +13,8 @@ import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.FileEditorManager;
+import com.intellij.openapi.fileEditor.FileEditorManagerListener;
+import com.intellij.openapi.fileEditor.FileEditorManagerEvent;
 import com.intellij.openapi.options.ShowSettingsUtil;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
@@ -53,6 +55,9 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final JBTextArea logs = textArea();
     private final JBLabel status = new JBLabel();
     private final JProgressBar progress = new JProgressBar();
+    private final JBTextArea scanTarget = textArea();
+    private final JBTextArea scanMessage = textArea();
+    private final Timer progressTimer = new Timer(1000, e -> updateProgress());
     private final JComboBox<String> scope = new JComboBox<>(new String[]{"当前文件", "选中目录", "当前工程"});
     private final Map<String, JCheckBoxMenuItem> rules = new LinkedHashMap<>();
     private final JTabbedPane tabs = new JTabbedPane();
@@ -90,7 +95,20 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         settings.addActionListener(e -> ShowSettingsUtil.getInstance().showSettingsDialog(project, SettingsConfigurable.class));
         tools.add(settings);
         cancel.addActionListener(e -> service.cancel()); tools.add(cancel);
-        top.add(tools, BorderLayout.CENTER); add(top, BorderLayout.NORTH);
+        top.add(tools, BorderLayout.CENTER);
+        JPanel activity = new JPanel(new BorderLayout(4, 4));
+        scanTarget.setRows(3); scanTarget.setOpaque(false);
+        scanTarget.getAccessibleContext().setAccessibleName("实际检测目标");
+        activity.add(scanTarget, BorderLayout.NORTH);
+        progress.setStringPainted(true);
+        progress.setPreferredSize(new Dimension(80, 22));
+        progress.getAccessibleContext().setAccessibleName("后台任务进度与耗时");
+        activity.add(progress, BorderLayout.SOUTH);
+        top.add(activity, BorderLayout.SOUTH); add(top, BorderLayout.NORTH);
+        scope.addActionListener(e -> updateTarget());
+        project.getMessageBus().connect(this).subscribe(FileEditorManagerListener.FILE_EDITOR_MANAGER, new FileEditorManagerListener() {
+            @Override public void selectionChanged(FileEditorManagerEvent event) { updateTarget(); }
+        });
         rules.put("@extrulesproject/feature-envy-check", new JCheckBoxMenuItem("特性依恋", true));
         rules.put("@extrulesproject/long-method-check", new JCheckBoxMenuItem("过长方法", true));
         rules.put("@extrulesproject/switch-statement-check", new JCheckBoxMenuItem("复杂分支", true));
@@ -99,7 +117,11 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         JPanel results = new JPanel(new BorderLayout(4, 4));
         search.getEmptyText().setText("筛选文件、规则、方法或检测消息");
         search.getAccessibleContext().setAccessibleName("筛选检测结果");
-        results.add(search, BorderLayout.NORTH);
+        JPanel resultHeader = new JPanel(new BorderLayout(4, 4));
+        scanMessage.setOpaque(false); scanMessage.setRows(2);
+        resultHeader.add(scanMessage, BorderLayout.NORTH);
+        resultHeader.add(search, BorderLayout.SOUTH);
+        results.add(resultHeader, BorderLayout.NORTH);
         table.setRowSorter(sorter); table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         table.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
         table.getEmptyText().setText("选择检测范围，或导入异味 JSON");
@@ -157,7 +179,6 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         logPanel.add(followLog, BorderLayout.SOUTH); tabs.addTab("运行日志", logPanel);
         add(tabs, BorderLayout.CENTER);
         JPanel footer = new JPanel(new BorderLayout(4, 4));
-        progress.setPreferredSize(new Dimension(80, 5)); footer.add(progress, BorderLayout.NORTH);
         footer.add(status, BorderLayout.CENTER); add(footer, BorderLayout.SOUTH);
         search.getDocument().addDocumentListener(new DocumentListener() {
             private void filter() {
@@ -169,6 +190,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
                         return text.toLowerCase(java.util.Locale.ROOT).contains(needle);
                     }
                 });
+                updateEmptyText();
             }
             @Override public void insertUpdate(DocumentEvent e) { filter(); }
             @Override public void removeUpdate(DocumentEvent e) { filter(); }
@@ -379,14 +401,17 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private void render() {
         var state = service.state();
         status.setText(state.status); status.setToolTipText(state.status);
-        progress.setIndeterminate(state.busy); progress.setVisible(state.busy);
+        updateTarget(); updateProgress();
+        if (state.busy && !progressTimer.isRunning()) progressTimer.start();
+        else if (!state.busy) progressTimer.stop();
+        scanMessage.setText(state.scanMessage);
         idleButtons.forEach(button -> button.setEnabled(!state.busy)); cancel.setEnabled(state.busy);
         scope.setEnabled(!state.busy);
         if (renderedIssues != state.issues) {
             renderedIssues = state.issues; model.rows = state.issues; model.fireTableDataChanged();
-            table.getEmptyText().setText(state.issues.isEmpty() ? state.status : "");
             if (!state.issues.isEmpty() && table.getRowCount() > 0) table.setRowSelectionInterval(0, 0);
         }
+        updateEmptyText();
         if (state.environment != null) {
             StringBuilder text = new StringBuilder();
             for (JsonElement element : state.environment.getAsJsonArray("tools")) {
@@ -435,6 +460,44 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         controls();
     }
 
+    private void updateTarget() {
+        var state = service.state();
+        String target = state.scanTarget;
+        String label = "本次检测：";
+        if (target.isBlank()) {
+            if (scope.getSelectedIndex() == 0) {
+                var files = FileEditorManager.getInstance(project).getSelectedFiles();
+                target = files.length == 0 ? "请打开一个 .ets 或 .ts 文件" : files[0].getPath();
+                label = "当前文件：";
+            } else {
+                target = scope.getSelectedIndex() == 1 ? "点击开始检测后选择目录" : project.getBasePath();
+                label = "检测范围：";
+            }
+        }
+        scanTarget.setText(label + target);
+        scanTarget.setToolTipText(target);
+    }
+
+    private void updateProgress() {
+        var state = service.state();
+        progress.setVisible(state.busy);
+        if (!state.busy) { progress.setIndeterminate(false); return; }
+        progress.setIndeterminate(true);
+        long seconds = Math.max(0, (System.nanoTime() - state.operationStartedNanos) / 1_000_000_000L);
+        String text = state.activeMethod.equals("scan.start") ? "正在检测中" : "正在处理";
+        progress.setString(text + " · 已用 " + String.format("%02d:%02d", seconds / 60, seconds % 60));
+        progress.setToolTipText(state.status);
+    }
+
+    private void updateEmptyText() {
+        var state = service.state();
+        String text = state.busy && state.activeMethod.equals("scan.start") ? "正在检测中，请稍候…"
+                : !state.issues.isEmpty() ? "当前筛选无匹配结果（本轮共 " + state.issues.size() + " 条）"
+                : state.scanMessage.startsWith("检测失败") ? "检测失败；请查看上方错误和运行日志"
+                : state.scanMessage;
+        table.getEmptyText().setText(text);
+    }
+
     private static String riskText(JsonObject report) {
         StringBuilder text = new StringBuilder("静态风险：").append(PythonBridgeClient.string(report, "riskLevel"));
         if (report.has("callers")) text.append("\n生产调用点：").append(PythonBridgeClient.string(report.getAsJsonObject("callers"), "production"));
@@ -448,7 +511,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         return text.toString();
     }
 
-    @Override public void dispose() { panelDisposed = true; service.unsubscribe(listener); }
+    @Override public void dispose() { panelDisposed = true; progressTimer.stop(); service.unsubscribe(listener); }
 
     private static final class IssueTableModel extends AbstractTableModel {
         private List<Issue> rows = List.of();
