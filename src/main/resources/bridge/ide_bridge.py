@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -369,7 +370,7 @@ def scan(params: dict, config: dict, root: Path, run: Path):
 
 def dispatch(method: str, params: dict, config: dict, root: Path, run: Path | None):
     if method == "session.hello":
-        return {"protocolVersion": 1, "adapterVersion": "0.1.2", "transport": "one-request-per-process", "supportedRules": list(RULES)}
+        return {"protocolVersion": 1, "adapterVersion": "0.1.3", "transport": "one-request-per-process", "supportedRules": list(RULES)}
     if method == "environment.inspect":
         return inspect_environment(config)
     if method == "issues.import":
@@ -599,6 +600,68 @@ def pipeline_progress(name, status):
     emit("workflow.changed", {"status": f"{name}: {status}"})
 
 
+def summarize_failure(task_dir: Path, result: dict):
+    """Attach bounded, readable diagnostics; full logs remain in the controlled task directory."""
+    for step in result.get("steps", []):
+        if step.get("status") not in {"FAIL", "BLOCKED", "INCOMPLETE"}:
+            continue
+        reason = step.get("reason") or ""
+        output_file = step.get("output_file")
+        if output_file:
+            try:
+                output = contained(task_dir, Path(output_file))
+                text = log_tail(output, 12000)
+                if "File attachment path is outside the allowed roots:" in text:
+                    reason = "Agent 无法读取工作区允许范围之外的提示词附件。"
+                elif not reason:
+                    for line in text.splitlines():
+                        match = re.match(r"\s*(?:error:|Error:)\s*(.+)", line)
+                        if match and not re.match(r"\d+\s*\|", match.group(1)):
+                            reason = match.group(1)[:500]
+                            break
+                if not reason:
+                    reason = f"进程退出码 {step.get('exit_code')}；请查看 {output.name}。"
+                step["logPath"] = str(output)
+            except (BridgeError, OSError):
+                pass
+        if reason:
+            step["reason"] = reason
+            if result.get("verdict") != "PASS":
+                result["failureReason"] = f"{step.get('name', '任务')}：{reason}"
+
+
+def refactor_agent_gate(task_dir: Path, source: Path, deveco: Path, prompt_file: Path | None = None):
+    """Keep CLI attachments inside its production mirror; reuse the backend's copy/sync policy."""
+    import arkts_smell_refactor.gate as gate
+    task = read_json(task_dir / "task.json")
+    contained(source, Path(task["workspace_root"]) / task["target"]["file_path"])
+    workspace = task_dir / ("refactor-workspace" if prompt_file is None else f"refactor-workspace-{prompt_file.stem}")
+    gate._fresh_copy(source, workspace, exclude_tests=True)
+    prompt = (prompt_file or (task_dir / "refactor-prompt.md")).read_text(encoding="utf-8")
+    prompt = gate._normalize_agent_prompt_paths(prompt, task, source)
+    (task_dir / "refactor-agent-prompt.md").write_text(prompt, encoding="utf-8")
+    # The CLI validates -f against --dir, even when its execution permissions are skipped.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix=".arkts-refactor-", suffix=".md",
+                                     dir=workspace, delete=False) as stream:
+        stream.write(prompt)
+        attachment = Path(stream.name)
+    command = [str(deveco), "run", "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。",
+               "-f", str(attachment.resolve()), "--dir", str(workspace), "--format", "json",
+               "--title", str(task.get("task_id", task.get("taskId", "refactor"))), "--dangerously-skip-permissions"]
+    try:
+        completed = subprocess.run(command, cwd=workspace)
+    finally:
+        attachment.unlink(missing_ok=True)
+    if completed.returncode != 0:
+        return completed.returncode
+    before, after = snapshot(source), snapshot(workspace)
+    deleted = [name for name in before if allowed_production(name) and name not in after]
+    if deleted:
+        print("Refactor Agent 删除了生产文件，拒绝同步：" + ", ".join(deleted), file=sys.stderr)
+        return 4
+    return gate._sync_production_changes(workspace, source)
+
+
 def execute_candidate(params: dict, config: dict, root: Path, run: Path):
     import arkts_smell_refactor.runner as runner
     prepared_run, prepared = load_run(params["taskHandle"], config, root, "prepared.json")
@@ -631,6 +694,7 @@ def execute_candidate(params: dict, config: dict, root: Path, run: Path):
             result = runner.execute_pipeline(task_dir, pipeline_config(task_dir, config), progress=pipeline_progress)
     finally:
         runner.write_text = original_writer
+    summarize_failure(task_dir, result)
     before, after = prepared["baselineFiles"], snapshot(stage)
     deleted = set(before) - set(after)
     changed = [name for name, digest in after.items() if before.get(name) != digest]
@@ -653,6 +717,8 @@ def execute_candidate(params: dict, config: dict, root: Path, run: Path):
     if not entries and result["verdict"] == "PASS":
         result["verdict"] = "FAIL"
         result["reason"] = "候选没有最终生产修改"
+        result["failureReason"] = result["reason"]
+    write_json(task_dir / "result.json", result)
     manifest = {"candidateId": run.name, "taskHandle": prepared_run.name, "taskId": prepared["taskId"],
                 "originalRoot": str(original), "baselineFiles": before, "afterFiles": after,
                 "configDigest": prepared["configDigest"], "changes": entries,
@@ -723,16 +789,7 @@ def gate_main():
             return value
         gate.read_json = reader
         return gate.smell_gate(args.task_dir, Path(config["homecheck"]), source)
-    original_sync = gate._sync_production_changes
-    def checked_sync(mirror, target):
-        before, after = snapshot(target), snapshot(mirror)
-        deleted = [name for name in before if allowed_production(name) and name not in after]
-        if deleted:
-            print("Refactor Agent 删除了生产文件，拒绝同步：" + ", ".join(deleted), file=sys.stderr)
-            return 4
-        return original_sync(mirror, target)
-    gate._sync_production_changes = checked_sync
-    return gate.refactor_gate(args.task_dir, source, Path(discover_tools(config)["deveco"]), args.prompt_file)
+    return refactor_agent_gate(args.task_dir, source, Path(discover_tools(config)["deveco"]), args.prompt_file)
 
 
 def main():

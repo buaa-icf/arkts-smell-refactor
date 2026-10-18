@@ -318,6 +318,93 @@ class BridgeTests(unittest.TestCase):
         self.assertIn("stdout event", events)
         self.assertIn("检测日志：正在分析", events)
 
+    def agent_gate_fixture(self):
+        config = self.backend_config()
+        prepared = self.prepare(config)
+        task_dir = Path(prepared["runDirectory"]) / "backend"
+        stage = Path(bridge.read_json(task_dir / "task.json")["project_root"])
+        return task_dir, stage, self.source.relative_to(self.root)
+
+    def test_refactor_and_repair_attachments_stay_inside_agent_workspace(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        original = self.source.read_bytes()
+        test_file = stage / "entry/src/test/Hidden.test.ets"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("private test", encoding="utf-8")
+        repair = task_dir / "repair-prompt-1.md"
+        repair.write_text("修复上一轮的生产代码", encoding="utf-8")
+        for prompt_file in (None, repair):
+            with self.subTest(repair=prompt_file is not None):
+                def fake_cli(command, cwd):
+                    workspace = Path(command[command.index("--dir") + 1]).resolve()
+                    attachment = Path(command[command.index("-f") + 1]).resolve()
+                    self.assertEqual(workspace, Path(cwd).resolve())
+                    self.assertTrue(attachment.is_relative_to(workspace))
+                    self.assertTrue(attachment.is_file())
+                    self.assertFalse((workspace / test_file.relative_to(stage)).exists())
+                    if prompt_file:
+                        self.assertIn("修复上一轮", attachment.read_text(encoding="utf-8"))
+                    (workspace / relative).write_text("class Page { update() { return 2; } }\n", encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 0)
+                with patch.object(bridge.subprocess, "run", side_effect=fake_cli):
+                    code = bridge.refactor_agent_gate(task_dir, stage, Path(sys.executable), prompt_file)
+                # A repair must make a new change rather than reusing the first result.
+                if prompt_file is None:
+                    self.assertEqual(0, code)
+                    (stage / relative).write_text("class Page { update() { return 1; } }\n", encoding="utf-8")
+                else:
+                    self.assertEqual(0, code)
+                self.assertEqual(original, self.source.read_bytes())
+                self.assertEqual([], list(task_dir.glob("refactor-workspace*/.arkts-refactor-*.md")))
+        self.assertTrue((task_dir / "refactor-agent-prompt.md").is_file())
+
+    def test_failed_or_unstartable_agent_cleans_attachment_without_syncing(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        for raises in (False, True):
+            with self.subTest(raises=raises):
+                before = (stage / relative).read_bytes()
+                def fake_cli(command, cwd):
+                    (Path(cwd) / relative).write_text("unsuccessful agent edit", encoding="utf-8")
+                    if raises:
+                        raise OSError("fixture CLI launch failure")
+                    return subprocess.CompletedProcess(command, 7)
+                with patch.object(bridge.subprocess, "run", side_effect=fake_cli):
+                    if raises:
+                        with self.assertRaises(OSError):
+                            bridge.refactor_agent_gate(task_dir, stage, Path(sys.executable))
+                    else:
+                        self.assertEqual(7, bridge.refactor_agent_gate(task_dir, stage, Path(sys.executable)))
+                self.assertEqual(before, (stage / relative).read_bytes())
+                self.assertEqual([], list(task_dir.glob("refactor-workspace*/.arkts-refactor-*.md")))
+
+    def test_agent_production_deletion_remains_rejected(self):
+        task_dir, stage, relative = self.agent_gate_fixture()
+        before = (stage / relative).read_bytes()
+        def fake_cli(command, cwd):
+            (Path(cwd) / relative).unlink()
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(bridge.subprocess, "run", side_effect=fake_cli):
+            self.assertEqual(4, bridge.refactor_agent_gate(task_dir, stage, Path(sys.executable)))
+        self.assertEqual(before, (stage / relative).read_bytes())
+
+    def test_failed_agent_has_readable_reason_and_controlled_log_path(self):
+        task_dir = Path(self.directory.name) / "backend"
+        task_dir.mkdir()
+        log = task_dir / "refactor-agent.log"
+        log.write_text("error: File attachment path is outside the allowed roots: C:/run/backend/prompt.md\n", encoding="utf-8")
+        result = {"steps": [{"name": "refactor-agent", "status": "FAIL", "reason": None,
+                             "exit_code": 1, "output_file": str(log)}]}
+        bridge.summarize_failure(task_dir, result)
+        self.assertIn("提示词附件", result["failureReason"])
+        self.assertEqual(str(log), result["steps"][0]["logPath"])
+        result["verdict"] = "PASS"
+        result.pop("failureReason")
+        bridge.summarize_failure(task_dir, result)
+        self.assertNotIn("failureReason", result)
+        result = {"steps": [{"name": "refactor-agent", "status": "FAIL", "output_file": str(self.source)}]}
+        bridge.summarize_failure(task_dir, result)
+        self.assertNotIn("logPath", result["steps"][0])
+
     def test_real_backend_orchestrates_controlled_tools_in_candidate_only(self):
         config = self.backend_config(); original = self.source.read_bytes(); prepared = self.prepare(config)
         script = Path(self.directory.name) / "fixture_tool.py"
