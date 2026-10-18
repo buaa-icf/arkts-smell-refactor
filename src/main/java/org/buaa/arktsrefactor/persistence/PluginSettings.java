@@ -6,6 +6,7 @@ import com.intellij.openapi.components.PersistentStateComponent;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.components.State;
 import com.intellij.openapi.components.Storage;
+import com.intellij.util.messages.Topic;
 import org.jetbrains.annotations.NotNull;
 
 import java.nio.file.Files;
@@ -14,6 +15,7 @@ import java.nio.file.Path;
 @Service(Service.Level.APP)
 @State(name = "ArktsRefactorSettings", storages = @Storage("arkts-refactor.xml"))
 public final class PluginSettings implements PersistentStateComponent<PluginSettings.Config> {
+    public static final Topic<Runnable> SETTINGS_CHANGED = Topic.create("ArkTS Refactor settings changed", Runnable.class);
     public static final class Config {
         public String python = defaultPath("D:/tool/python3.13/python.exe", "python");
         public String backend = Path.of(System.getProperty("user.home"), "Desktop", "group_project", "arkts-smell-refactor").toString();
@@ -47,5 +49,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     }
 
     @Override public @NotNull Config getState() { return config; }
-    @Override public void loadState(@NotNull Config state) { config = state; }
+    @Override public void loadState(@NotNull Config state) {
+        config = state;
+        ApplicationManager.getApplication().getMessageBus().syncPublisher(SETTINGS_CHANGED).run();
+    }
 }

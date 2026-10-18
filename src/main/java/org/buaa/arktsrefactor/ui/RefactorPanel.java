@@ -52,6 +52,8 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final JBTextField search = new JBTextField();
     private final JBTextArea details = textArea();
     private final JBTextArea environment = textArea();
+    private final JBTextArea environmentStatus = textArea();
+    private final JProgressBar environmentProgress = new JProgressBar();
     private final JBTextArea logs = textArea();
     private final JBTextArea status = textArea();
     private final JProgressBar progress = new JProgressBar();
@@ -74,7 +76,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final DefaultListModel<JsonObject> changes = new DefaultListModel<>();
     private final JBList<JsonObject> changeList = new JBList<>(changes);
     private JButton analyzeButton, generateButton, diffButton, applyButton, validateButton, undoButton, discardButton;
-    private JButton openRunLogButton, restoreCandidateButton;
+    private JButton openRunLogButton, restoreCandidateButton, inspectEnvironmentButton;
     private JsonObject renderedPrepared, renderedCandidate;
     private boolean panelDisposed;
 
@@ -91,9 +93,9 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         tools.add(button("开始检测", this::detect));
         tools.add(button("导入…", this::importFile));
         tools.add(button("粘贴 JSON", this::pasteJson));
-        tools.add(button("环境检查", service::inspect));
+        tools.add(button("环境检查", this::inspectEnvironment));
         JButton settings = new JButton("设置…");
-        settings.addActionListener(e -> ShowSettingsUtil.getInstance().showSettingsDialog(project, SettingsConfigurable.class));
+        settings.addActionListener(e -> openSettings());
         tools.add(settings);
         cancel.addActionListener(e -> service.cancel()); tools.add(cancel);
         JButton viewLogs = new JButton("查看运行日志");
@@ -185,7 +187,23 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         }); recordActions.add(restoreCandidateButton);
         historyList.addListSelectionListener(e -> controls());
         records.add(recordActions, BorderLayout.SOUTH); tabs.addTab("运行记录", records);
-        tabs.addTab("环境", new JBScrollPane(environment));
+        JPanel environmentPanel = new JPanel(new BorderLayout(4, 4));
+        JPanel environmentHeader = new JPanel(new BorderLayout(4, 4));
+        environmentHeader.add(new JBLabel("<html>检查检测与重构所需工具的路径和可用状态。</html>"), BorderLayout.NORTH);
+        environmentStatus.setRows(3); environmentStatus.setOpaque(false); environmentStatus.setWrapStyleWord(false);
+        environmentHeader.add(environmentStatus, BorderLayout.CENTER);
+        environmentProgress.setIndeterminate(true); environmentProgress.setPreferredSize(new Dimension(80, 10));
+        environmentHeader.add(environmentProgress, BorderLayout.SOUTH);
+        environmentPanel.add(environmentHeader, BorderLayout.NORTH);
+        environmentPanel.add(new JBScrollPane(environment), BorderLayout.CENTER);
+        JPanel environmentActions = new JPanel(new GridLayout(1, 2, 4, 4));
+        inspectEnvironmentButton = new JButton("重新检查"); inspectEnvironmentButton.addActionListener(e -> safe(service::inspect));
+        environmentActions.add(inspectEnvironmentButton);
+        JButton environmentSettings = new JButton("打开设置…"); environmentSettings.addActionListener(e -> openSettings());
+        environmentActions.add(environmentSettings);
+        environmentPanel.add(environmentActions, BorderLayout.SOUTH);
+        tabs.addTab("环境", environmentPanel);
+        tabs.addChangeListener(e -> { if (tabs.getSelectedComponent() == environmentPanel) safe(service::ensureEnvironment); });
         JPanel logPanel = new JPanel(new BorderLayout()); logPanel.add(new JBScrollPane(logs), BorderLayout.CENTER);
         JPanel logActions = new JPanel(new GridLayout(1, 2, 4, 4)); logActions.add(followLog);
         openRunLogButton = button("打开本轮日志…", this::openRunLog); logActions.add(openRunLogButton);
@@ -234,6 +252,15 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
 
     private void chooseRules() {
         JPopupMenu menu = new JPopupMenu(); rules.values().forEach(menu::add); menu.show(this, 20, 60);
+    }
+
+    private void inspectEnvironment() {
+        tabs.setSelectedIndex(tabs.indexOfTab("环境"));
+        service.inspect();
+    }
+
+    private void openSettings() {
+        ShowSettingsUtil.getInstance().showSettingsDialog(project, SettingsConfigurable.class);
     }
 
     private void detect() {
@@ -461,15 +488,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             if (!state.issues.isEmpty() && table.getRowCount() > 0) table.setRowSelectionInterval(0, 0);
         }
         updateEmptyText();
-        if (state.environment != null) {
-            StringBuilder text = new StringBuilder();
-            for (JsonElement element : state.environment.getAsJsonArray("tools")) {
-                JsonObject tool = element.getAsJsonObject(); text.append(tool.get("available").getAsBoolean() ? "✓ " : "✕ ")
-                        .append(tool.get("name").getAsString()).append("\n  ").append(tool.get("path").getAsString()).append("\n\n");
-            }
-            text.append("检测可用：").append(state.environment.get("canDetect")).append("\n重构可用：").append(state.environment.get("canRefactor"));
-            environment.setText(text.toString());
-        }
+        renderEnvironment();
         if (!logs.getText().equals(state.log)) {
             int caret = logs.getCaretPosition(); logs.setText(state.log);
             logs.setCaretPosition(followLog.isSelected() ? logs.getDocument().getLength() : Math.min(caret, logs.getDocument().getLength()));
@@ -514,6 +533,41 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             if (!historyModel.isEmpty()) historyList.setSelectedIndex(0);
         }
         controls();
+    }
+
+    private void renderEnvironment() {
+        if (tabs.getSelectedIndex() == tabs.indexOfTab("环境")) service.ensureEnvironment();
+        var state = service.state();
+        environmentStatus.setText(state.environmentMessage + (state.environmentCheckedAt.isBlank() ? "" : "\n上次检查：" + state.environmentCheckedAt));
+        environmentProgress.setVisible(state.environmentChecking);
+        inspectEnvironmentButton.setEnabled(!state.environmentChecking);
+        StringBuilder text = new StringBuilder();
+        if (state.environment == null) {
+            text.append("检查项目：Python、Node、HomeCheck、ArkTS SDK、重构后端、Agent CLI、Hvigor、ohpm 和 Linter。\n\n")
+                    .append(state.environmentMessage).append("\n\n检查失败时可打开设置修正路径，再点击“重新检查”。");
+        } else {
+            text.append("异味检测：").append(state.environment.get("canDetect").getAsBoolean() ? "所需工具已找到" : "缺少所需工具")
+                    .append("\n候选重构：").append(state.environment.get("canRefactor").getAsBoolean() ? "所需工具已找到" : "缺少所需工具").append("\n\n");
+            for (JsonElement element : state.environment.getAsJsonArray("tools")) {
+                JsonObject tool = element.getAsJsonObject();
+                String name = switch (PythonBridgeClient.string(tool, "name")) {
+                    case "deveco" -> "DevEco Code / Agent CLI";
+                    case "hvigorw" -> "Hvigor";
+                    case "ohpm" -> "ohpm";
+                    case "codelinter" -> "Linter";
+                    default -> PythonBridgeClient.string(tool, "name");
+                };
+                boolean required = !tool.has("required") || tool.get("required").getAsBoolean();
+                text.append(tool.get("available").getAsBoolean() ? "✓ 已找到  " : "✕ 未找到  ").append(name)
+                        .append(required ? "" : "（当前策略可跳过）").append('\n');
+                String path = PythonBridgeClient.string(tool, "path");
+                text.append("  ").append(path.isBlank() ? "未配置，自动发现也未找到" : path).append("\n\n");
+            }
+            text.append("此检查确认工具路径；Agent 登录、实际构建和设备测试状态由具体任务验证。");
+        }
+        if (!environment.getText().equals(text.toString())) {
+            environment.setText(text.toString()); environment.setCaretPosition(0);
+        }
     }
 
     private void updateTarget() {

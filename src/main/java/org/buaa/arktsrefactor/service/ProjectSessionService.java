@@ -34,6 +34,9 @@ public final class ProjectSessionService implements Disposable {
     public static final class ViewState {
         public List<Issue> issues = List.of();
         public JsonObject environment;
+        public boolean environmentChecking;
+        public String environmentMessage = "尚未检查；进入此页将自动检查工具路径。";
+        public String environmentCheckedAt = "";
         public JsonObject risk;
         public JsonObject candidate;
         public JsonObject prepared;
@@ -58,6 +61,8 @@ public final class ProjectSessionService implements Disposable {
     private final ViewState state = new ViewState();
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
     private final PythonBridgeClient bridge = new PythonBridgeClient();
+    private final PythonBridgeClient environmentBridge = new PythonBridgeClient();
+    private String environmentAttemptKey = "";
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "arkts-refactor-worker"); thread.setDaemon(true); return thread;
     });
@@ -76,6 +81,11 @@ public final class ProjectSessionService implements Disposable {
         project.getMessageBus().connect(this).subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
             @Override public void after(List<? extends VFileEvent> events) { events.forEach(event -> markStale(event.getPath())); }
         });
+        ApplicationManager.getApplication().getMessageBus().connect(this).subscribe(PluginSettings.SETTINGS_CHANGED, () -> ui(() -> {
+            environmentAttemptKey = ""; state.environment = null; state.environmentCheckedAt = "";
+            state.environmentMessage = "工具设置已变化，进入环境页后重新检查。";
+            changed();
+        }));
     }
 
     private void markStale(String path) {
@@ -115,10 +125,47 @@ public final class ProjectSessionService implements Disposable {
     public void subscribe(Runnable listener) { listeners.add(listener); }
     public void unsubscribe(Runnable listener) { listeners.remove(listener); }
 
+    public void ensureEnvironment() {
+        String key = new Gson().toJson(PluginSettings.getInstance().getState());
+        if (!key.equals(environmentAttemptKey)) inspect();
+    }
+
     public void inspect() {
-        run("environment.inspect", new JsonObject(), "正在检查环境…", result -> {
-            state.environment = result;
-            state.status = result.get("canRefactor").getAsBoolean() ? "检测与重构工具已找到。" : "环境检查完成；请查看缺失项。";
+        if (disposed || state.environmentChecking) return;
+        var config = PluginSettings.getInstance().getState().copy();
+        String key = new Gson().toJson(config);
+        environmentAttemptKey = key;
+        String root = project.getBasePath();
+        if (root == null) {
+            state.environmentMessage = "环境检查未完成：当前工程没有本地根目录。"; changed(); return;
+        }
+        state.environmentChecking = true;
+        state.environmentMessage = state.busy ? "等待当前任务结束后检查环境…" : "正在检查工具路径…";
+        environmentBridge.beginOperation();
+        changed();
+        worker.submit(() -> {
+            try {
+                ui(() -> { state.environmentMessage = "正在检查工具路径…"; changed(); });
+                JsonObject result = environmentBridge.call("environment.inspect", new JsonObject(), root, config, event -> { });
+                ui(() -> {
+                    state.environmentChecking = false;
+                    if (!key.equals(new Gson().toJson(PluginSettings.getInstance().getState()))) {
+                        environmentAttemptKey = ""; state.environmentMessage = "检查期间工具设置发生变化，将按新设置重新检查。";
+                    } else {
+                        environmentAttemptKey = key;
+                        state.environment = result;
+                        state.environmentCheckedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                        state.environmentMessage = "工具路径检查完成；缺失项可通过“打开设置”修正。";
+                    }
+                    changed();
+                });
+            } catch (Exception error) {
+                ui(() -> {
+                    state.environmentChecking = false; state.environment = null; state.environmentCheckedAt = "";
+                    state.environmentMessage = "环境检查失败：" + error.getMessage() + "\n请检查 Python 和工具设置后重试。";
+                    changed();
+                });
+            }
         });
     }
 
@@ -372,6 +419,6 @@ public final class ProjectSessionService implements Disposable {
     }
 
     @Override public void dispose() {
-        disposed = true; bridge.cancel(); worker.shutdownNow(); listeners.clear();
+        disposed = true; bridge.cancel(); environmentBridge.cancel(); worker.shutdownNow(); listeners.clear();
     }
 }

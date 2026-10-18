@@ -15,7 +15,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 Gradle Wrapper 使用 9.8.0，IntelliJ Platform Gradle Plugin 使用 2.19.0。
 SDK 仅用于编译，不打入发布 ZIP。未使用 GUI Designer 表单，关闭代码 instrumentation；构建不启动 IDE 生成 searchable options。
 
-产物为 `build/distributions/deveco_plugin-0.1.4.zip`。
+产物为 `build/distributions/deveco_plugin-0.1.5.zip`。
 在 DevEco Studio 设置的插件页选择“从磁盘安装”，选择 ZIP，并按宿主提示重启。
 通过 Tools → ArkTS Refactor 或右侧工具窗口打开面板；设置页为 ArkTS Refactor。
 
@@ -24,6 +24,7 @@ SDK 仅用于编译，不打入发布 ZIP。未使用 GUI Designer 表单，关�
 Python ≥ 3.10；本机 `arkts-smell-refactor` 源码；HomeCheck 扩展规则项目及已打包的规则；Node；DevEco ArkTS SDK。
 执行完整重构还需要 DevEco Code、Hvigor、ohpm 和 Linter；设备测试需要对应签名及连接设备。
 工具路径可以在插件设置中选择，默认值为当前开发机配置，其他机器需调整。
+首次进入“环境”页会自动检查工具路径，显示进度、各项结果和检查时间；失败时显示原因，可直接打开设置或重新检查。
 
 ## 实施进度
 
