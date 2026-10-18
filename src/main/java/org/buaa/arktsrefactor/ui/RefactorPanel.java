@@ -53,7 +53,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final JBTextArea details = textArea();
     private final JBTextArea environment = textArea();
     private final JBTextArea logs = textArea();
-    private final JBLabel status = new JBLabel();
+    private final JBTextArea status = textArea();
     private final JProgressBar progress = new JProgressBar();
     private final JBTextArea scanTarget = textArea();
     private final JBTextArea scanMessage = textArea();
@@ -74,6 +74,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private final DefaultListModel<JsonObject> changes = new DefaultListModel<>();
     private final JBList<JsonObject> changeList = new JBList<>(changes);
     private JButton analyzeButton, generateButton, diffButton, applyButton, validateButton, undoButton, discardButton;
+    private JButton openRunLogButton;
     private JsonObject renderedPrepared, renderedCandidate;
     private boolean panelDisposed;
 
@@ -95,9 +96,12 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         settings.addActionListener(e -> ShowSettingsUtil.getInstance().showSettingsDialog(project, SettingsConfigurable.class));
         tools.add(settings);
         cancel.addActionListener(e -> service.cancel()); tools.add(cancel);
+        JButton viewLogs = new JButton("查看运行日志");
+        viewLogs.addActionListener(e -> tabs.setSelectedIndex(tabs.indexOfTab("运行日志")));
+        tools.add(viewLogs);
         top.add(tools, BorderLayout.CENTER);
         JPanel activity = new JPanel(new BorderLayout(4, 4));
-        scanTarget.setRows(3); scanTarget.setOpaque(false);
+        scanTarget.setRows(3); scanTarget.setOpaque(false); scanTarget.setWrapStyleWord(false);
         scanTarget.getAccessibleContext().setAccessibleName("实际检测目标");
         activity.add(scanTarget, BorderLayout.NORTH);
         progress.setStringPainted(true);
@@ -118,7 +122,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         search.getEmptyText().setText("筛选文件、规则、方法或检测消息");
         search.getAccessibleContext().setAccessibleName("筛选检测结果");
         JPanel resultHeader = new JPanel(new BorderLayout(4, 4));
-        scanMessage.setOpaque(false); scanMessage.setRows(2);
+        scanMessage.setOpaque(false); scanMessage.setRows(2); scanMessage.setWrapStyleWord(false);
         resultHeader.add(scanMessage, BorderLayout.NORTH);
         resultHeader.add(search, BorderLayout.SOUTH);
         results.add(resultHeader, BorderLayout.NORTH);
@@ -176,9 +180,12 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         records.add(recordActions, BorderLayout.SOUTH); tabs.addTab("运行记录", records);
         tabs.addTab("环境", new JBScrollPane(environment));
         JPanel logPanel = new JPanel(new BorderLayout()); logPanel.add(new JBScrollPane(logs), BorderLayout.CENTER);
-        logPanel.add(followLog, BorderLayout.SOUTH); tabs.addTab("运行日志", logPanel);
+        JPanel logActions = new JPanel(new GridLayout(1, 2, 4, 4)); logActions.add(followLog);
+        openRunLogButton = button("打开本轮日志…", this::openRunLog); logActions.add(openRunLogButton);
+        logPanel.add(logActions, BorderLayout.SOUTH); tabs.addTab("运行日志", logPanel);
         add(tabs, BorderLayout.CENTER);
         JPanel footer = new JPanel(new BorderLayout(4, 4));
+        status.setRows(2); status.setOpaque(false); status.setWrapStyleWord(false);
         footer.add(status, BorderLayout.CENTER); add(footer, BorderLayout.SOUTH);
         search.getDocument().addDocumentListener(new DocumentListener() {
             private void filter() {
@@ -350,6 +357,25 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         if (file != null) FileEditorManager.getInstance(project).openFile(file, true);
     }
 
+    private void openRunLog() {
+        String directory = service.state().runDirectory;
+        if (directory.isBlank()) return;
+        try {
+            Path root = Path.of(PluginSettings.getInstance().getState().runs).toRealPath();
+            Path run = Path.of(directory).toRealPath();
+            if (!run.startsWith(root)) throw new IllegalArgumentException("日志目录越界");
+            boolean opened = false;
+            for (String name : new String[]{"scan/HomeCheck.log", "scan.log"}) {
+                Path path = run.resolve(name);
+                if (!Files.isRegularFile(path)) continue;
+                if (!path.toRealPath().startsWith(run)) throw new IllegalArgumentException("日志文件通过链接离开本轮目录");
+                var file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(path);
+                if (file != null) { FileEditorManager.getInstance(project).openFile(file, true); opened = true; }
+            }
+            if (!opened) throw new IllegalArgumentException("本轮尚未生成检测日志，请查看面板中的运行日志。");
+        } catch (java.io.IOException e) { throw new IllegalArgumentException("无法读取本轮日志：" + e.getMessage(), e); }
+    }
+
     private void exportHistory() {
         JsonObject selected = historyList.getSelectedValue();
         if (selected == null) throw new IllegalArgumentException("请先刷新并选择运行记录");
@@ -406,6 +432,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         else if (!state.busy) progressTimer.stop();
         scanMessage.setText(state.scanMessage);
         idleButtons.forEach(button -> button.setEnabled(!state.busy)); cancel.setEnabled(state.busy);
+        openRunLogButton.setEnabled(!state.busy && !state.runDirectory.isBlank());
         scope.setEnabled(!state.busy);
         if (renderedIssues != state.issues) {
             renderedIssues = state.issues; model.rows = state.issues; model.fireTableDataChanged();

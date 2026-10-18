@@ -15,7 +15,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 Gradle Wrapper 使用 9.8.0，IntelliJ Platform Gradle Plugin 使用 2.19.0。
 SDK 仅用于编译，不打入发布 ZIP。未使用 GUI Designer 表单，关闭代码 instrumentation；构建不启动 IDE 生成 searchable options。
 
-产物为 `build/distributions/deveco_plugin-0.1.1.zip`。
+产物为 `build/distributions/deveco_plugin-0.1.2.zip`。
 在 DevEco Studio 设置的插件页选择“从磁盘安装”，选择 ZIP，并按宿主提示重启。
 通过 Tools → ArkTS Refactor 或右侧工具窗口打开面板；设置页为 ArkTS Refactor。
 

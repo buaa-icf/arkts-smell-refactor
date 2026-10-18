@@ -1,6 +1,6 @@
 # 插件主体实现与使用
 
-更新：2026-10-18，插件版本 0.1.1。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
+更新：2026-10-18，插件版本 0.1.2。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
 
 ## 已实现流程
 
@@ -25,6 +25,12 @@
 
 0.1.0 在 Windows 的 GBK 环境下可能无法解码配置中的中文路径，Python 尚未解析请求便返回空 requestId，界面继而显示“后端响应不属于当前请求”。0.1.1 在 Java 启动参数、子进程环境和 Python 标准流三处固定 UTF-8，并在无法读取请求时保留实际错误原因。此错误意味着本次操作失败，不能用空表判断没有异味。
 
+0.1.2 修复了交互扫描对性能统计脚本的依赖。实际 IDE 失败日志位于 `e1968edc-9764-4649-b80a-564ce6fedf34/scan.log`：`cloc-2.10.exe` 在创建 `par-.../cache-...` 临时缓存时失败，扫描尚未进入 HomeCheck 检测阶段。新的插件侧 `homecheck_scan.cjs` 直接调用 HomeCheck 入口，不启动 CLOC、Git 或性能面板；性能评测脚本仍留在外部工具中，插件不修改其源码。
+
+检测为每轮生成绝对路径的 `check-paths.json`、项目配置、规则配置和扫描报告。相对 ignore/excluded 模式锚定到业务工程，避免任务目录的 `build` 等父目录导致目标被全部过滤。成功必须同时满足 Node 正常退出、HomeCheck 返回成功、全部选中规则已注册、日志具有完成标记及对应文件数，且无 HomeCheck 错误；单凭空报告或 exit 0 不显示成功。
+
+“查看运行日志”在检测期间也可使用；HomeCheck 文件日志与控制台日志均实时推送。失败后可点“打开本轮日志…”在编辑器中查看本轮 `scan/HomeCheck.log` 和 `scan.log`。错误返回保留日志路径、退出码和有长度限制的诊断内容；顶部错误及底部状态按窗口宽度换行。
+
 ## 构建与测试
 
 ```powershell
@@ -38,17 +44,21 @@ python -m unittest discover -s tests -v
 
 Java 事务测试覆盖：多文件应用与 Undo/Redo、BOM/CRLF 保持、资源二进制恢复、基线变化、新文件冲突、第二次写入失败回滚、用户后续编辑保护和越界/测试文件拒绝。
 
-当前回归集为 7 项 Java 事务测试与 20 项 Python 桥接测试。完整工程哈希在后台核对；应用临界区再次检查受影响文件、未保存编辑和设置变化。日志刷新合并到 UI 更新队列，避免每个日志块重新布局整个面板。
+当前回归集为 7 项 Java 事务测试与 27 项 Python 桥接测试。完整工程哈希在后台核对；应用临界区再次检查受影响文件、未保存编辑和设置变化。日志刷新合并到 UI 更新队列，避免每个日志块重新布局整个面板。
 
 Python 测试覆盖：输入展开、克隆无符号、目标/关联片段过期、测试代码只读、路径边界、JSONL 响应、协议版本、候选冻结与原工程不被回写、删除拒绝、实际 runner 的受控工具编排，以及应用后验证不再次执行 Agent。
 
 新增回归使用包含中文路径、中文消息的原始 UTF-8 字节，在 `PYTHONIOENCODING=gbk`、`PYTHONUTF8=0` 环境中启动真实 worker，校验请求关联与返回内容；同时验证单文件扫描配置及结果过滤、成功零结果的范围元信息和 `scan.started` 事件。
+
+直接检测新增回归覆盖：Node 入口成功/失败/缺失规则注册、规则内部异常被吞后的失败判定、实际扫描文件数和完成标记校验、工程内忽略模式以及控制台/文件日志推送。
 
 本机真实 HomeCheck 烟测入口为 `tools/smoke_detect.py`，在 `build/smoke-detection` 中检测 160 条语句的方法。已实际检出 1 条过长方法；原样例源码保持不变。本次扫描执行摘要与问题报告均保存在独立 run 中。
 
 该脚本现在通过真实 JSONL 子进程调用插件适配器。可指定 `--project <工程根目录> --file <绝对文件路径>` 只读检测现有文件，默认执行全部四条规则；检查实际目标范围、请求关联、进度事件与检测前后目标文件 SHA-256，JSONL 原始事件和响应保存在 `build/smoke-detection/worker-<requestId>.jsonl`。
 
 2026-10-18 实际检测 `D:\arktsProgram\agc-template-market-harmonyos-demos\BooksAndReferenceTemplate\BookRead\feature\book_person\src\main\ets\comp\MyBalanceCard.ets`：HomeCheck 日志确认文件数为 1，四条规则均成功完成，结果为 0 条异味，目标内容哈希保持不变。该结果仅表示当前规则未检出问题。运行证据为 `build/smoke-detection/runs/a06288aa-a4aa-4ffa-a171-d53851100567/scan/summary.json` 和同轮 `runs/BookRead/issuesReport.json`。
+
+0.1.2 安装包内的适配器已提取后实测 `feature/book_home/src/main/ets/views/SearchPage.ets`，使用原 IDE 任务根目录 `C:\Users\RoyCai\AppData\Local\Huawei\DevEcoStudio6.1\arkts-refactor\runs`。四条选中规则均加载完成，扫描 1 个文件，检出 `build` 过长方法（108 行，阈值 80）和 `labelBaseStyle` 特性依恋两条异味。源码哈希未变，报告为该任务根目录下的 `be550f9e-2280-4535-bbdf-561317830cf3/scan/issuesReport.json`；JSONL 证据为 `build/smoke-detection/worker-584974eb-757e-4ce9-b6f4-77d8d6ef2568.jsonl`。这验证了后端链路及打包资源，实际 DevEco 面板仍需安装新版后使用。
 
 ## 与设计方案的实现差异
 
@@ -57,7 +67,7 @@ Python 测试覆盖：输入展开、克隆无符号、目标/关联片段过期
 | 后端改动 | 适配器随插件打包；后端源码不修改。直接调用现有 Python API，并将门禁子进程的 SDK 配置与同步边界适配在插件侧 |
 | 传输 | 每项操作一个 Python worker，stdin 一个请求、stdout JSONL 事件/响应；当前不是长连接多请求服务 |
 | 执行 | 当前按单个问题操作，未实现批量勾选队列和跨 Project 调度锁 |
-| 初次扫描 | 复用实际扫描脚本。该版本需保持性能采集开启才能执行检测，关闭 F1 与实时 HTTP 面板 |
+| 初次扫描 | 插件侧 Node 入口直接调用 HomeCheck；不依赖性能评测脚本、CLOC、F1 或实时 HTTP 面板 |
 | 日志 | 检测日志实时推送；后端 Agent/门禁日志在该阶段落盘后显示，阶段进度持续可见 |
 | 评审复用 | 应用后源码、测试、配置和工具指纹完全一致时引用候选 PASS 评审，重新运行实际门禁及扫描；变化时拒绝旧证据 |
 | Undo | 支持当前 IDE 会话的应用与撤销，持久化写入日志；重启后有历史证据，但尚无自动恢复半完成事务或历史应用撤销按钮 |
