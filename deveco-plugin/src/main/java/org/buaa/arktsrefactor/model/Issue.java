@@ -1,7 +1,7 @@
 package org.buaa.arktsrefactor.model;
 
 import com.google.gson.JsonObject;
-import org.buaa.arktsrefactor.bridge.PythonBridgeClient;
+import org.buaa.arktsrefactor.bridge.NodeBridgeClient;
 
 public record Issue(JsonObject data) {
     public String id() { return text("issueId"); }
@@ -12,7 +12,7 @@ public record Issue(JsonObject data) {
     public String message() { return text("message"); }
     public int line() { return data.get("startLine").getAsInt(); }
     public boolean supported() { return data.has("supported") && data.get("supported").getAsBoolean(); }
-    public String text(String key) { return PythonBridgeClient.string(data, key); }
+    public String text(String key) { return NodeBridgeClient.string(data, key); }
     public String label() {
         return switch (text("smellType")) {
             case "feature-envy" -> "特性依恋";

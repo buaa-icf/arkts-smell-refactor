@@ -17,7 +17,6 @@ import java.nio.file.Path;
 public final class PluginSettings implements PersistentStateComponent<PluginSettings.Config> {
     public static final Topic<Runnable> SETTINGS_CHANGED = Topic.create("ArkTS Refactor settings changed", Runnable.class);
     public static final class Config {
-        public String python = defaultPath("D:/tool/python3.13/python.exe", "python");
         public String backend = Path.of(System.getProperty("user.home"), "Desktop", "group_project", "arkts-smell-refactor").toString();
         public String homecheck = Path.of(System.getProperty("user.home"), "Desktop", "group_project", "arkts异味检查工具", "homecheck-extrule").toString();
         public String studio = defaultPath("D:/tool/DevEco/DevEco Studio", "");
@@ -35,7 +34,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public Config copy() {
             Config c = new Config();
-            c.python = python; c.backend = backend; c.homecheck = homecheck; c.studio = studio;
+            c.backend = backend; c.homecheck = homecheck; c.studio = studio;
             c.node = node; c.deveco = deveco; c.hvigor = hvigor; c.ohpm = ohpm;
             c.linter = linter; c.runs = runs; c.linterMode = linterMode;
             return c;

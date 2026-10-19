@@ -1,49 +1,66 @@
 # ArkTS Refactor for DevEco Studio
 
-在 DevEco Studio 中检测 ArkTS 代码异味、分析重构风险、验证候选修改并预览应用。
+在 DevEco Studio 中检测代码异味、分析风险，在隔离工程中重构并验证，最后预览 Diff、整项应用或 Undo。插件界面和文件事务仍使用 Java，只将连接层从 Python 改为 Node.js / TypeScript。
 
-适配目标：DevEco Studio 6.1.1.300（DS-243），Java 21。技术设计见 [docs](docs/README.md)。
+适配目标：DevEco Studio DS-243、Java 21。版本 0.2.0。
 
-## 仓库布局
+## 安装后端
 
-本项目位于 `arkts-smell-refactor/deveco-plugin`，该目录就是独立 Gradle 工程根目录。
-在 IDE 中打开或导入此目录，后端 Python 源码位于其父目录的 `src/arkts_smell_refactor`。
-迁移与合仓说明见 [仓库集成说明](docs/repository-integration.md)。
+在本仓库根目录执行：
 
-## 编译
-
-以下命令在 `deveco-plugin` 目录执行；从仓库根目录先运行 `cd deveco-plugin`。
-
-```powershell
-$env:JAVA_HOME = 'D:\tool\java21'
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-.\gradlew.bat '-PdevecoStudioPath=D:/tool/DevEco/DevEco Studio' test buildPlugin verifyPluginStructure
+```sh
+npm install
+npm run build
+npm test
 ```
 
-Gradle Wrapper 使用 9.8.0，IntelliJ Platform Gradle Plugin 使用 2.19.0。
-SDK 仅用于编译，不打入发布 ZIP。未使用 GUI Designer 表单，关闭代码 instrumentation；构建不启动 IDE 生成 searchable options。
+需要 Node.js >= 20.19。插件设置中的“后端目录”选择本仓库根目录，而不是 `src` 或 `dist`；Node 选择真实的 Node 可执行文件。修改后端源码后重新执行 `npm run build`。不需要 Python、pip 或配置 Python PATH。
 
-产物为 `build/distributions/deveco_plugin-0.1.5.zip`。
-在 DevEco Studio 设置的插件页选择“从磁盘安装”，选择 ZIP，并按宿主提示重启。
-通过 Tools → ArkTS Refactor 或右侧工具窗口打开面板；设置页为 ArkTS Refactor。
+## 插件设置与使用
 
-## 环境
+配置 Node、后端目录、HomeCheck 项目、DevEco Studio、任务目录及 DevEco Code / Hvigor / ohpm / Linter 工具路径。任务目录必须在业务工程之外；可留空的工具项从 Node 进程的 PATH 中发现。IDE 的 PATH 可能与终端不同，发现失败时选择绝对路径。
 
-Python ≥ 3.10；本机 `arkts-smell-refactor` 源码；HomeCheck 扩展规则项目及已打包的规则；Node；DevEco ArkTS SDK。
-执行完整重构还需要 DevEco Code、Hvigor、ohpm 和 Linter；设备测试需要对应签名及连接设备。
-工具路径可以在插件设置中选择，默认值为当前开发机配置，其他机器需调整。
-首次进入“环境”页会自动检查工具路径，显示进度、各项结果和检查时间；失败时显示原因，可直接打开设置或重新检查。
+Linter 默认 `required`，必须执行并通过；已有的显式 `skip` 选项保留，只有用户主动选择才跳过，不计入验收，也不触发返修。设备测试仍需要真实连接设备和有效签名。
 
-## 实施进度
+通过 Tools → ArkTS Refactor 或右侧工具窗口打开面板：
 
-- 阶段一：Java 21、插件描述符、原生 Tool Window、Tools 菜单、持久化设置及 ZIP 构建。
-- 阶段二：本地 Python 适配器、环境检查、四规则检测、JSON 文件/粘贴导入、结果筛选、源码/关联片段定位、进程树取消和日志。
-- 阶段三：风险分析、候选工程、现有后端流水线、Diff、整项应用、冲突检查、回滚、Undo、应用后验证与复检、历史证据及摘要导出。
+1. 环境检查，确认检测/重构所需工具齐全。
+2. 扫描当前文件、目录或工程，或导入原有 `filePath + messages[]` JSON。
+3. 选择异味，分析风险，生成候选。原业务工程此时不回写。
+4. 候选工程执行 Agent、门禁与 Review；日志和结果保存在任务目录。
+5. 预览 Diff，通过校验后整项应用；Java 文件事务负责冲突检查、回滚和 Undo。
+6. 可重新验证冻结候选，或验证已应用内容；两者不再次调用重构/修复 Agent。
 
-适配器作为插件资源发布，每次操作启动独立 Python worker；协议使用版本 1 JSONL，不要求修改后端仓库或安装新 Python 包。
+## 构建插件
 
-桥接测试：`python -m unittest discover -s tests -v`。真实 HomeCheck 开发机烟测：`python tools/smoke_detect.py`。
+在 `deveco-plugin` 目录执行，替换本机 JDK 和 Studio 路径：
 
-操作流程和当前实现边界见 [主体实现与使用](docs/implementation-status.md)。Java 事务测试在独立的 `verification/` 项目中执行，由根项目 `test` 任务调用。
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-21'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+.\gradlew.bat '-PdevecoStudioPath=E:/DevEco Studio' test buildPlugin verifyPluginStructure
+```
 
-插件的真实加载和 Harmony 工程执行需在目标 DevEco 中验收；构建/结构检查不代替宿主交互验收。
+macOS 使用 `./gradlew -PdevecoStudioPath=<Studio路径> test buildPlugin verifyPluginStructure`，并使用本机 JDK 21。首次构建需下载 Gradle/Maven 依赖。
+
+产物为 `build/distributions/deveco_plugin-0.2.0.zip`。在 DevEco Studio 插件页选择“从磁盘安装”，选择 ZIP 并按提示重启。插件只包含 Java 界面与 Node 启动适配器；TypeScript 后端、依赖和 SDK 不打入 ZIP，仍从插件设置中指定的本地目录读取。
+
+## 测试与只读烟测
+
+仓库根目录的 `npm test` 同时运行后端与 Node 桥接测试；插件目录的 Gradle `test` 运行独立 Java 文件事务测试。受控 Agent/HomeCheck/Hvigor 用于校验编排，不能当作真实模型、设备或 IDE 交互已验收。
+
+将插件设置字段另存为 JSON（`backend`、`node`、`homecheck`、`studio`、`runs` 等），检测真实项目文件：
+
+```sh
+node tools/smoke_detect.cjs --config <设置JSON路径> --project <业务工程根目录> --file <源文件绝对路径>
+```
+
+只重新运行已有冻结候选的异味门禁、不运行 Agent：
+
+```sh
+node tools/smoke_candidate_gate.mjs --candidate-run <候选任务绝对目录>
+```
+
+两种烟测只在任务目录写证据，执行前后校验业务工程未变化。旧 Python 桥接和烟测已删除，相关测试迁入根 `tests/ide_bridge.test.ts`。历史设计文档保留，但其中 Python 命令不再适用。
+
+详见 [Node 连接适配](docs/node-backend-adaptation.md)、[协议](docs/backend-bridge-protocol.md)。

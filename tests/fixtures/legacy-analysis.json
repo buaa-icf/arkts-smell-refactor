@@ -1,0 +1,1376 @@
+[
+  {
+    "kind": "switch",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "switch-statement-0001-format",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "switch-statement",
+      "rule": "@extrulesproject/switch-statement-check",
+      "severity": "SUGGESTION",
+      "message": "Switch statement with 5 cases detected in method 'format'. Case line counts: 1 (1 line); 2 (1 line); default (1 line); 2 (1 line); default (1 line).",
+      "target": {
+        "file_path": "demo/Foo.ets",
+        "symbol": "format",
+        "related_targets": [],
+        "range": {
+          "start_line": 2,
+          "end_line": 2,
+          "column": 4
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nclass Formatter {\n  format(value: number, kind: number): string {\n    if (kind === 1) {\n      switch (value) {\n        case 1: return 'one';\n        case 2: return 'two';\n        default: return 'other';\n      }\n    }\n    switch (kind) {\n      case 2: return 'kind-two';\n      default: return 'kind-other';\n    }\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "conditionalType": "switch",
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "startLine": 5,
+      "endLine": 14,
+      "switchCount": 2,
+      "switches": [
+        {
+          "startLine": 5,
+          "endLine": 9,
+          "discriminant": "value",
+          "branchCount": 3,
+          "recommendedPattern": "value-map"
+        },
+        {
+          "startLine": 11,
+          "endLine": 14,
+          "discriminant": "kind",
+          "branchCount": 2,
+          "recommendedPattern": "value-map"
+        }
+      ],
+      "discriminant": null,
+      "discriminants": [
+        "value",
+        "kind"
+      ],
+      "reportedBranchCount": 5,
+      "messageCaseCount": 5,
+      "branchCount": 5,
+      "branchCountMismatch": false,
+      "caseLabels": [
+        "1",
+        "2",
+        "default",
+        "2",
+        "default"
+      ],
+      "caseLineCounts": [
+        {
+          "label": "1",
+          "lines": 1
+        },
+        {
+          "label": "2",
+          "lines": 1
+        },
+        {
+          "label": "default",
+          "lines": 1
+        },
+        {
+          "label": "2",
+          "lines": 1
+        },
+        {
+          "label": "default",
+          "lines": 1
+        }
+      ],
+      "hasDefault": true,
+      "defaultCount": 2,
+      "switchesWithoutDefault": 0,
+      "defaultBehavior": [
+        "return 'other';",
+        "return 'kind-other';"
+      ],
+      "groupedCaseLabels": [],
+      "executableFallthrough": [],
+      "controlFlow": [
+        "return"
+      ],
+      "stateWrites": [],
+      "hasAsyncWork": false,
+      "hasNestedConditional": false,
+      "recommendedPattern": "value-map",
+      "recommendationReason": "各分支直接返回一个值，适合 Map<K, V> 并显式保留 fallback",
+      "limitations": [
+        "分析为词法级近似；重构前仍需核对类型、重载、闭包捕获和 ArkUI 生命周期"
+      ]
+    }
+  },
+  {
+    "kind": "switch",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "switch-statement-0001-format",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "switch-statement",
+      "rule": "@extrulesproject/switch-statement-check",
+      "severity": "SUGGESTION",
+      "message": "Long if-else chain with 3 branches detected in method 'format'.",
+      "target": {
+        "file_path": "demo/Foo.ets",
+        "symbol": "format",
+        "related_targets": [],
+        "range": {
+          "start_line": 2,
+          "end_line": 2,
+          "column": 4
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nclass Formatter {\n  format(value: string): string {\n    if (value === 'a') { return 'A'; }\n    else if (value === 'b') { return 'B'; }\n    else if (value === 'c') { return 'C'; }\n    else { return 'unknown'; }\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "conditionalType": "if-else-chain",
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "startLine": 4,
+      "reportedBranchCount": 3,
+      "branchCount": 3,
+      "selector": "value",
+      "hasFinalElse": true,
+      "controlFlow": [
+        "return"
+      ],
+      "stateWrites": [],
+      "hasAsyncWork": false,
+      "recommendedPattern": "value-map",
+      "recommendationReason": "各条件比较同一选择值并直接返回，适合 Map<K, V>",
+      "limitations": [
+        "if/else 链分析为词法级近似；必须保留条件求值、短路和最终 else 行为"
+      ]
+    }
+  },
+  {
+    "kind": "switch",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "switch-statement-0001-format",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "switch-statement",
+      "rule": "@extrulesproject/switch-statement-check",
+      "severity": "SUGGESTION",
+      "message": "Switch statement with 5 cases detected in method 'format'.",
+      "target": {
+        "file_path": "demo/Foo.ets",
+        "symbol": "format",
+        "related_targets": [],
+        "range": {
+          "start_line": 2,
+          "end_line": 2,
+          "column": 4
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nclass Controller {\n  format(value: number): void {\n    switch (value) {\n      case 1:\n      case 2:\n        this.mode = value;\n        break;\n      case 3:\n        this.prepare();\n      case 4:\n        this.commit();\n        break;\n      default:\n        break;\n    }\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "conditionalType": "switch",
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "startLine": 4,
+      "endLine": 16,
+      "switchCount": 1,
+      "switches": [
+        {
+          "startLine": 4,
+          "endLine": 16,
+          "discriminant": "value",
+          "branchCount": 5,
+          "recommendedPattern": "extract-method-or-strategy"
+        }
+      ],
+      "discriminant": "value",
+      "discriminants": [
+        "value"
+      ],
+      "reportedBranchCount": 5,
+      "messageCaseCount": null,
+      "branchCount": 5,
+      "branchCountMismatch": false,
+      "caseLabels": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "default"
+      ],
+      "caseLineCounts": [
+        {
+          "label": "1",
+          "lines": 1
+        },
+        {
+          "label": "2",
+          "lines": 3
+        },
+        {
+          "label": "3",
+          "lines": 2
+        },
+        {
+          "label": "4",
+          "lines": 3
+        },
+        {
+          "label": "default",
+          "lines": 2
+        }
+      ],
+      "hasDefault": true,
+      "defaultCount": 1,
+      "switchesWithoutDefault": 0,
+      "defaultBehavior": [
+        "break;"
+      ],
+      "groupedCaseLabels": [
+        [
+          "1",
+          "2"
+        ]
+      ],
+      "executableFallthrough": [
+        "3"
+      ],
+      "controlFlow": [
+        "break"
+      ],
+      "stateWrites": [
+        "mode"
+      ],
+      "hasAsyncWork": false,
+      "hasNestedConditional": false,
+      "recommendedPattern": "extract-method-or-strategy",
+      "recommendationReason": "存在执行语句后继续落入下一 case 的 fall-through，直接查表会改变执行序列",
+      "limitations": [
+        "分析为词法级近似；重构前仍需核对类型、重载、闭包捕获和 ArkUI 生命周期"
+      ]
+    }
+  },
+  {
+    "kind": "switch",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "switch-statement-0001-format",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "switch-statement",
+      "rule": "@extrulesproject/switch-statement-check",
+      "severity": "SUGGESTION",
+      "message": "Switch statement with 2 cases detected in method 'format'.",
+      "target": {
+        "file_path": "demo/Foo.ets",
+        "symbol": "format",
+        "related_targets": [],
+        "range": {
+          "start_line": 2,
+          "end_line": 2,
+          "column": 4
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nexport const format = (value: number): string => {\n  switch (value) {\n    case 1: return 'one';\n    default: return 'other';\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "conditionalType": "switch",
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "startLine": 3,
+      "endLine": 6,
+      "switchCount": 1,
+      "switches": [
+        {
+          "startLine": 3,
+          "endLine": 6,
+          "discriminant": "value",
+          "branchCount": 2,
+          "recommendedPattern": "value-map"
+        }
+      ],
+      "discriminant": "value",
+      "discriminants": [
+        "value"
+      ],
+      "reportedBranchCount": 2,
+      "messageCaseCount": null,
+      "branchCount": 2,
+      "branchCountMismatch": false,
+      "caseLabels": [
+        "1",
+        "default"
+      ],
+      "caseLineCounts": [
+        {
+          "label": "1",
+          "lines": 2
+        },
+        {
+          "label": "default",
+          "lines": 2
+        }
+      ],
+      "hasDefault": true,
+      "defaultCount": 1,
+      "switchesWithoutDefault": 0,
+      "defaultBehavior": [
+        "return 'other';"
+      ],
+      "groupedCaseLabels": [],
+      "executableFallthrough": [],
+      "controlFlow": [
+        "return"
+      ],
+      "stateWrites": [],
+      "hasAsyncWork": false,
+      "hasNestedConditional": false,
+      "recommendedPattern": "value-map",
+      "recommendationReason": "各分支直接返回一个值，适合 Map<K, V> 并显式保留 fallback",
+      "limitations": [
+        "分析为词法级近似；重构前仍需核对类型、重载、闭包捕获和 ArkUI 生命周期"
+      ]
+    }
+  },
+  {
+    "kind": "switch",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "switch-statement-0001-format",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "switch-statement",
+      "rule": "@extrulesproject/switch-statement-check",
+      "severity": "SUGGESTION",
+      "message": "Switch statement with 6 cases detected in method 'format'. Consider using strategy. Case line counts: 0 (1 line); 1 (1 line); 2 (1 line); 3 (1 line); 4 (1 line); default (1 line).",
+      "target": {
+        "file_path": "demo/Foo.ets",
+        "symbol": "format",
+        "related_targets": [],
+        "range": {
+          "start_line": 2,
+          "end_line": 2,
+          "column": 4
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nexport class Formatter {\n  other(value: number): string {\n    switch (value) { case 0: return 'unused'; default: return 'other'; }\n  }\n\n  public format(value: number): string {\n    switch (value) {\n      case 0: return 'zero';\n      case 1: return 'one';\n      case 2: return 'two';\n      case 3: return 'three';\n      case 4: return 'four';\n      default: return 'unknown';\n    }\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "conditionalType": "switch",
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "startLine": 8,
+      "endLine": 15,
+      "switchCount": 1,
+      "switches": [
+        {
+          "startLine": 8,
+          "endLine": 15,
+          "discriminant": "value",
+          "branchCount": 6,
+          "recommendedPattern": "value-map"
+        }
+      ],
+      "discriminant": "value",
+      "discriminants": [
+        "value"
+      ],
+      "reportedBranchCount": 6,
+      "messageCaseCount": 6,
+      "branchCount": 6,
+      "branchCountMismatch": false,
+      "caseLabels": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "default"
+      ],
+      "caseLineCounts": [
+        {
+          "label": "0",
+          "lines": 1
+        },
+        {
+          "label": "1",
+          "lines": 1
+        },
+        {
+          "label": "2",
+          "lines": 1
+        },
+        {
+          "label": "3",
+          "lines": 1
+        },
+        {
+          "label": "4",
+          "lines": 1
+        },
+        {
+          "label": "default",
+          "lines": 1
+        }
+      ],
+      "hasDefault": true,
+      "defaultCount": 1,
+      "switchesWithoutDefault": 0,
+      "defaultBehavior": [
+        "return 'unknown';"
+      ],
+      "groupedCaseLabels": [],
+      "executableFallthrough": [],
+      "controlFlow": [
+        "return"
+      ],
+      "stateWrites": [],
+      "hasAsyncWork": false,
+      "hasNestedConditional": false,
+      "recommendedPattern": "value-map",
+      "recommendationReason": "各分支直接返回一个值，适合 Map<K, V> 并显式保留 fallback",
+      "limitations": [
+        "分析为词法级近似；重构前仍需核对类型、重载、闭包捕获和 ArkUI 生命周期"
+      ]
+    }
+  },
+  {
+    "kind": "switch",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "switch-statement-0001-format",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "switch-statement",
+      "rule": "@extrulesproject/switch-statement-check",
+      "severity": "SUGGESTION",
+      "message": "Switch statement with 3 cases detected in method 'format'.",
+      "target": {
+        "file_path": "demo/Foo.ets",
+        "symbol": "format",
+        "related_targets": [],
+        "range": {
+          "start_line": 2,
+          "end_line": 2,
+          "column": 4
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nclass Formatter {\n  format(value: number): string {\n    switch (value) {\n      case 1:\n        return this.currentValue;\n      case 2: {\n        this.track();\n        break;\n      }\n      default:\n        return this.fallback();\n    }\n    return 'done';\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "conditionalType": "switch",
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "startLine": 4,
+      "endLine": 13,
+      "switchCount": 1,
+      "switches": [
+        {
+          "startLine": 4,
+          "endLine": 13,
+          "discriminant": "value",
+          "branchCount": 3,
+          "recommendedPattern": "handler-map"
+        }
+      ],
+      "discriminant": "value",
+      "discriminants": [
+        "value"
+      ],
+      "reportedBranchCount": 3,
+      "messageCaseCount": null,
+      "branchCount": 3,
+      "branchCountMismatch": false,
+      "caseLabels": [
+        "1",
+        "2",
+        "default"
+      ],
+      "caseLineCounts": [
+        {
+          "label": "1",
+          "lines": 2
+        },
+        {
+          "label": "2",
+          "lines": 5
+        },
+        {
+          "label": "default",
+          "lines": 2
+        }
+      ],
+      "hasDefault": true,
+      "defaultCount": 1,
+      "switchesWithoutDefault": 0,
+      "defaultBehavior": [
+        "return this.fallback();"
+      ],
+      "groupedCaseLabels": [],
+      "executableFallthrough": [],
+      "controlFlow": [
+        "break",
+        "return"
+      ],
+      "stateWrites": [],
+      "hasAsyncWork": false,
+      "hasNestedConditional": false,
+      "recommendedPattern": "handler-map",
+      "recommendationReason": "各分支是独立动作，适合具名函数类型的 Map<K, Handler>",
+      "limitations": [
+        "分析为词法级近似；重构前仍需核对类型、重载、闭包捕获和 ArkUI 生命周期"
+      ]
+    }
+  },
+  {
+    "kind": "envy",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "feature-envy-0001-buildTimeline",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "feature-envy",
+      "rule": "@extrulesproject/feature-envy-check",
+      "severity": "SUGGESTION",
+      "message": "Method 'buildTimeline' is feature-envious toward 'ITransactionInfo|undefined' (ATFD=5, LDA=0.20, CPFD=1).",
+      "target": {
+        "file_path": "demo/TimelineVM.ets",
+        "symbol": "buildTimeline",
+        "related_targets": [],
+        "range": {
+          "start_line": 1,
+          "end_line": 20,
+          "column": 1
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nexport class TimelineVM {\n  transactionInfo: ITransactionInfo | undefined\n  timeLineList: Item[] = []\n\n  public buildTimeline(): void {\n    if (this.transactionInfo && this.transactionInfo.status) {\n      this.transactionInfo.status.forEach((item) => {\n        this.timeLineList.push({ value: item.status })\n      })\n    }\n  }\n}\n",
+    "declaration": {
+      "visibility": "public",
+      "exported": true
+    },
+    "callers": [
+      {
+        "filePath": "demo/Home.ets"
+      }
+    ],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "reportedTarget": "ITransactionInfo|undefined",
+      "receiver": "this.transactionInfo",
+      "targetType": "ITransactionInfo | undefined\n  timeLineList: Item[]",
+      "ownershipKind": "business-data",
+      "classification": "COLLECTION_PROCESSING",
+      "metrics": {
+        "ATFD": 5,
+        "LDA": 0.2,
+        "CPFD": 1
+      },
+      "readCount": 2,
+      "writeCount": 0,
+      "accessedMembers": [
+        {
+          "name": "status",
+          "count": 2,
+          "writes": 0
+        }
+      ],
+      "receiverCandidates": [
+        {
+          "receiver": "this.transactionInfo",
+          "accessCount": 2,
+          "type": "ITransactionInfo | undefined\n  timeLineList: Item[]"
+        },
+        {
+          "receiver": "this.timeLineList",
+          "accessCount": 1,
+          "type": null
+        },
+        {
+          "receiver": "item",
+          "accessCount": 1,
+          "type": null
+        }
+      ],
+      "moveFeasibility": "uncertain",
+      "moveReasons": [
+        "被依恋类型是联合类型或接口，需要确认真实实现和依赖方向"
+      ],
+      "recommendedPattern": "EXTRACT_MAPPER_OR_BUILDER",
+      "recommendedDestination": "owning-model-or-dedicated-builder",
+      "recommendationReason": "逻辑主要读取外部数据并构造结果，适合 Mapper/Builder",
+      "extractionRegion": {
+        "startLine": 7,
+        "endLine": 8
+      },
+      "mustPreserve": [
+        "数组 push 的累加语义和对象身份",
+        "条件不满足时不执行的边界"
+      ],
+      "limitations": [
+        "成员访问和写入采用词法级近似，别名、解构、泛型和跨文件类型关系可能无法完整识别",
+        "职责归属建议必须由 Refactor Agent 结合实际依赖方向确认"
+      ]
+    }
+  },
+  {
+    "kind": "envy",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "feature-envy-0001-buildTimeline",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": ".",
+      "project_root": ".",
+      "smell_type": "feature-envy",
+      "rule": "@extrulesproject/feature-envy-check",
+      "severity": "SUGGESTION",
+      "message": "Method 'draw' is feature-envious toward 'CanvasPath' (ATFD=3, LDA=0.00, CPFD=1).",
+      "target": {
+        "file_path": "demo/TimelineVM.ets",
+        "symbol": "draw",
+        "related_targets": [],
+        "range": {
+          "start_line": 1,
+          "end_line": 20,
+          "column": 1
+        }
+      },
+      "raw": {}
+    },
+    "source": "\nclass Painter {\n  private draw(path: CanvasPath): void {\n    path.moveTo(0, 0)\n    path.lineTo(10, 10)\n    path.close()\n  }\n}\n",
+    "declaration": {
+      "visibility": "private",
+      "exported": false
+    },
+    "callers": [],
+    "reactive": [],
+    "files": {},
+    "expected": {
+      "located": true,
+      "evidenceSource": "target-symbol",
+      "reportedTarget": "CanvasPath",
+      "receiver": "path",
+      "targetType": "CanvasPath",
+      "ownershipKind": "sdk-object",
+      "classification": "SDK_ORCHESTRATION",
+      "metrics": {
+        "ATFD": 3,
+        "LDA": 0,
+        "CPFD": 1
+      },
+      "readCount": 3,
+      "writeCount": 0,
+      "accessedMembers": [
+        {
+          "name": "moveTo",
+          "count": 1,
+          "writes": 0
+        },
+        {
+          "name": "lineTo",
+          "count": 1,
+          "writes": 0
+        },
+        {
+          "name": "close",
+          "count": 1,
+          "writes": 0
+        }
+      ],
+      "receiverCandidates": [
+        {
+          "receiver": "path",
+          "accessCount": 3,
+          "type": "CanvasPath"
+        }
+      ],
+      "moveFeasibility": "unsafe",
+      "moveReasons": [
+        "被依恋对象属于 SDK/框架类型，不能直接加入业务方法"
+      ],
+      "recommendedPattern": "INTRODUCE_ADAPTER_OR_HELPER",
+      "recommendedDestination": "dedicated-production-helper",
+      "recommendationReason": "SDK 类型不可修改，适合由专用生产 Helper 封装调用序列",
+      "extractionRegion": {
+        "startLine": 3,
+        "endLine": 6
+      },
+      "mustPreserve": [],
+      "limitations": [
+        "成员访问和写入采用词法级近似，别名、解构、泛型和跨文件类型关系可能无法完整识别",
+        "职责归属建议必须由 Refactor Agent 结合实际依赖方向确认"
+      ]
+    }
+  },
+  {
+    "kind": "clone",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "code-clone-0001-First",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": "$ROOT",
+      "project_root": "$ROOT\\demo",
+      "smell_type": "code-clone",
+      "rule": "@extrulesproject/code-clone-fragment-check",
+      "severity": "SUGGESTION",
+      "message": "Code Clone Type-2 (different classes): First.ets:2-8 is similar to demo/src/main/ets/Second.ets:2-8.",
+      "target": {
+        "file_path": "demo/src/main/ets/First.ets",
+        "symbol": null,
+        "related_targets": [
+          {
+            "filePath": "demo/src/main/ets/Second.ets",
+            "range": {
+              "startLine": 2,
+              "endLine": 8
+            }
+          }
+        ],
+        "range": {
+          "start_line": 2,
+          "end_line": 8,
+          "column": 1
+        }
+      },
+      "raw": {
+        "recordIndex": 0,
+        "messageIndex": 0,
+        "line": 2,
+        "column": 1,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): First.ets:2-8 is similar to demo/src/main/ets/Second.ets:2-8.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 2,
+        "rangeEnd": 8
+      }
+    },
+    "source": "export class FirstVM {\n  modify(): void {\n    // export class CommentOnly {}\n    const note = 'export class StringOnly {}';\n    /* static get fakeInstance(): FirstVM {} */\n    console.info(note);\n  }\n\n  static get instance(): FirstVM { return new FirstVM(); }\n}\nexport { FirstVM as OriginalVM };\nexport default FirstVM;",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {
+      "demo/src/main/ets/First.ets": "export class FirstVM {\n  modify(): void {\n    // export class CommentOnly {}\n    const note = 'export class StringOnly {}';\n    /* static get fakeInstance(): FirstVM {} */\n    console.info(note);\n  }\n\n  static get instance(): FirstVM { return new FirstVM(); }\n}\nexport { FirstVM as OriginalVM };\nexport default FirstVM;"
+    },
+    "expected": {
+      "groupId": "clone-23b0615a22f0",
+      "detectorCloneKind": "TYPE-2",
+      "detectorContext": "different classes",
+      "instanceCount": 2,
+      "resolvedInstanceCount": 1,
+      "instances": [
+        {
+          "role": "target",
+          "filePath": "demo/src/main/ets/First.ets",
+          "startLine": 2,
+          "endLine": 8,
+          "resolved": true,
+          "lineCount": 6,
+          "rawFingerprint": "c96db64d257bbf7b",
+          "shapeFingerprint": "1d6504f135217d6d",
+          "uiIds": [],
+          "thisReferences": [],
+          "stateWrites": [],
+          "callbacks": [],
+          "hasAsyncWork": false,
+          "hasNavigation": false,
+          "stringLiterals": [
+            "export class StringOnly {}"
+          ],
+          "entryPointHints": [
+            {
+              "line": 1,
+              "declaration": "export class FirstVM {"
+            },
+            {
+              "line": 9,
+              "declaration": "static get instance(): FirstVM { return new FirstVM(); }"
+            },
+            {
+              "line": 11,
+              "declaration": "export { FirstVM as OriginalVM };"
+            },
+            {
+              "line": 12,
+              "declaration": "export default FirstVM;"
+            }
+          ]
+        },
+        {
+          "role": "related",
+          "filePath": "demo/src/main/ets/Second.ets",
+          "startLine": 2,
+          "endLine": 8,
+          "resolved": false,
+          "lineCount": 0,
+          "rawFingerprint": "e3b0c44298fc1c14",
+          "shapeFingerprint": "e3b0c44298fc1c14",
+          "uiIds": [],
+          "thisReferences": [],
+          "stateWrites": [],
+          "callbacks": [],
+          "hasAsyncWork": false,
+          "hasNavigation": false,
+          "stringLiterals": [],
+          "entryPointHints": []
+        }
+      ],
+      "classification": "COUNTERPART_UNRESOLVED",
+      "similarity": null,
+      "variationDimensions": [],
+      "recommendedPattern": "CONFIRM_COUNTERPART_BEFORE_EXTRACTION",
+      "recommendationReason": "对照片段不完整；先补齐证据，不能把局部修改误判为完整克隆消除。",
+      "refactoringPolicy": {
+        "preferredApproach": "跨文件优先保留各原类/组件及其入口，用组合或委托共用内部 Helper；仅在类型、状态所有权和生命周期均可保持时考虑共享基类或组件。",
+        "constraints": [
+          "以重构前生产代码为准，保留原文件路径下的具名/默认导出、类名、组件/Builder 名、构造方式及公共成员签名、可见性和读写能力；直接文件导入同样属于契约，不限于 Index.ets。测试不可见或已修改可见生产调用方，都不是删除旧入口的依据。",
+          "保留原有 ClassName.instance 等静态方法/字段/getter/setter 的调用形式；不得仅以新导出常量或共享类替换原类。保持每个实例的独立状态、对象身份、原有惰性初始化和清理时机，不把多个单例合并或提前初始化。",
+          "UI 抽取保留原 @Entry 页面、路由、组件/Builder 调用入口、宿主根节点和各实例 UI ID；不以整页/整组件替换代替局部提取。保持响应式状态所属组件、this 绑定及生命周期；依赖宿主的 Builder 调用与 CustomDialogController 构造优先留在原组件中，未经上下文等价性确认不得移入普通顶层工厂。",
+          "原入口可以变为薄委托；若兼容外壳仍被判克隆，继续抽取内部共同逻辑并保留实例差异，不删除入口、不只改名/换行，也不放宽检测规则。无法同时满足兼容和克隆消除时，明确报告具体冲突，不能以破坏调用契约换取 smell 通过。"
+        ]
+      },
+      "modificationBoundary": {
+        "requiredFiles": [
+          "demo/src/main/ets/First.ets",
+          "demo/src/main/ets/Second.ets"
+        ],
+        "rule": "必须在同一轮处理所有已解析片段；不得只改报告片段后把等价克隆留在同一 HomeCheck 范围内。",
+        "crossFile": true
+      },
+      "mustPreserve": [
+        "原文件导出与类/组件/Builder 入口、构造方式、公共签名及 ClassName.instance 等静态访问方式",
+        "各实例独立状态、对象身份及原有初始化/清理时机",
+        "所有实例的调用位置、条件边界和片段执行次数",
+        "缺失对照片段定位完成前不得声称完整克隆组已消除"
+      ],
+      "postConditions": [
+        "逐项对照原文件的导出、类/组件/Builder 入口、构造方式和静态访问方式；旧调用形式必须继续有效。",
+        "逐个核对所有实例仍保留各自的 UI ID、文案、资源、回调、状态读写和副作用顺序。",
+        "重构后由 HomeCheck 在完整 Harmony 工程中复检；若仍报告该克隆组，按剩余实例定向修复，而不是只改名、换行或移动原样代码。"
+      ],
+      "limitations": [
+        "这是词法级画像：不能证明跨文件类型、ArkUI 生命周期、闭包或资源引用的行为等价。",
+        "检测消息只提供直接对照片段；若 HomeCheck 报出额外实例，必须把它们纳入下一轮处理。",
+        "入口线索来自各实例所在生产文件的词法扫描，不是完整 API 清单；未列出或未发现调用方不代表入口可删除。"
+      ]
+    }
+  },
+  {
+    "kind": "clone",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "code-clone-0001-First",
+      "source_project": "demo",
+      "commit_hash": "",
+      "workspace_root": "$ROOT",
+      "project_root": "$ROOT\\demo",
+      "smell_type": "code-clone",
+      "rule": "@extrulesproject/code-clone-fragment-check",
+      "severity": "SUGGESTION",
+      "message": "Code Clone Type-2 (different classes): First.ets:2-8 is similar to demo/src/main/ets/Second.ets:2-8.",
+      "target": {
+        "file_path": "demo/src/main/ets/First.ets",
+        "symbol": null,
+        "related_targets": [
+          {
+            "filePath": "demo/src/main/ets/Second.ets",
+            "range": {
+              "startLine": 2,
+              "endLine": 8
+            }
+          }
+        ],
+        "range": {
+          "start_line": 2,
+          "end_line": 8,
+          "column": 1
+        }
+      },
+      "raw": {
+        "recordIndex": 0,
+        "messageIndex": 0,
+        "line": 2,
+        "column": 1,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): First.ets:2-8 is similar to demo/src/main/ets/Second.ets:2-8.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 2,
+        "rangeEnd": 8
+      }
+    },
+    "source": "\n@Builder function firstCard() {\n  Column() {\n    Text('first').id('first-card')\n      .onClick(() => { this.firstCount += 1 })\n  }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {
+      "demo/src/main/ets/First.ets": "\n@Builder function firstCard() {\n  Column() {\n    Text('first').id('first-card')\n      .onClick(() => { this.firstCount += 1 })\n  }\n}\n",
+      "demo/src/main/ets/Second.ets": "\n@Builder function secondCard() {\n  Column() {\n    Text('second').id('second-card')\n      .onChange(() => { this.secondCount += 1 })\n  }\n}\n"
+    },
+    "expected": {
+      "groupId": "clone-23b0615a22f0",
+      "detectorCloneKind": "TYPE-2",
+      "detectorContext": "different classes",
+      "instanceCount": 2,
+      "resolvedInstanceCount": 2,
+      "instances": [
+        {
+          "role": "target",
+          "filePath": "demo/src/main/ets/First.ets",
+          "startLine": 2,
+          "endLine": 8,
+          "resolved": true,
+          "lineCount": 6,
+          "rawFingerprint": "40b59ab3d3aa6e54",
+          "shapeFingerprint": "7c84e518f1a5dcff",
+          "uiIds": [
+            "first-card"
+          ],
+          "thisReferences": [
+            "firstCount"
+          ],
+          "stateWrites": [
+            "firstCount"
+          ],
+          "callbacks": [
+            "onClick"
+          ],
+          "hasAsyncWork": false,
+          "hasNavigation": false,
+          "stringLiterals": [
+            "first",
+            "first-card"
+          ],
+          "entryPointHints": [
+            {
+              "line": 2,
+              "declaration": "@Builder function firstCard() {"
+            }
+          ]
+        },
+        {
+          "role": "related",
+          "filePath": "demo/src/main/ets/Second.ets",
+          "startLine": 2,
+          "endLine": 8,
+          "resolved": true,
+          "lineCount": 6,
+          "rawFingerprint": "544963783e960b10",
+          "shapeFingerprint": "7c84e518f1a5dcff",
+          "uiIds": [
+            "second-card"
+          ],
+          "thisReferences": [
+            "secondCount"
+          ],
+          "stateWrites": [
+            "secondCount"
+          ],
+          "callbacks": [
+            "onChange"
+          ],
+          "hasAsyncWork": false,
+          "hasNavigation": false,
+          "stringLiterals": [
+            "second",
+            "second-card"
+          ],
+          "entryPointHints": [
+            {
+              "line": 2,
+              "declaration": "@Builder function secondCard() {"
+            }
+          ]
+        }
+      ],
+      "classification": "TYPE_2_PARAMETERIZABLE",
+      "similarity": 1.0,
+      "variationDimensions": [
+        {
+          "kind": "ui-id",
+          "instances": [
+            {
+              "filePath": "demo/src/main/ets/First.ets",
+              "range": "2-8",
+              "value": [
+                "first-card"
+              ]
+            },
+            {
+              "filePath": "demo/src/main/ets/Second.ets",
+              "range": "2-8",
+              "value": [
+                "second-card"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "callback",
+          "instances": [
+            {
+              "filePath": "demo/src/main/ets/First.ets",
+              "range": "2-8",
+              "value": [
+                "onClick"
+              ]
+            },
+            {
+              "filePath": "demo/src/main/ets/Second.ets",
+              "range": "2-8",
+              "value": [
+                "onChange"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "this-reference",
+          "instances": [
+            {
+              "filePath": "demo/src/main/ets/First.ets",
+              "range": "2-8",
+              "value": [
+                "firstCount"
+              ]
+            },
+            {
+              "filePath": "demo/src/main/ets/Second.ets",
+              "range": "2-8",
+              "value": [
+                "secondCount"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "state-write",
+          "instances": [
+            {
+              "filePath": "demo/src/main/ets/First.ets",
+              "range": "2-8",
+              "value": [
+                "firstCount"
+              ]
+            },
+            {
+              "filePath": "demo/src/main/ets/Second.ets",
+              "range": "2-8",
+              "value": [
+                "secondCount"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "string-literal",
+          "instances": [
+            {
+              "filePath": "demo/src/main/ets/First.ets",
+              "range": "2-8",
+              "value": [
+                "first",
+                "first-card"
+              ]
+            },
+            {
+              "filePath": "demo/src/main/ets/Second.ets",
+              "range": "2-8",
+              "value": [
+                "second",
+                "second-card"
+              ]
+            }
+          ]
+        }
+      ],
+      "recommendedPattern": "PARAMETERIZED_BUILDER_OR_HELPER",
+      "recommendationReason": "控制结构相同而标识符、字面量或回调存在差异；应把差异显式参数化。",
+      "refactoringPolicy": {
+        "preferredApproach": "跨文件优先保留各原类/组件及其入口，用组合或委托共用内部 Helper；仅在类型、状态所有权和生命周期均可保持时考虑共享基类或组件。",
+        "constraints": [
+          "以重构前生产代码为准，保留原文件路径下的具名/默认导出、类名、组件/Builder 名、构造方式及公共成员签名、可见性和读写能力；直接文件导入同样属于契约，不限于 Index.ets。测试不可见或已修改可见生产调用方，都不是删除旧入口的依据。",
+          "保留原有 ClassName.instance 等静态方法/字段/getter/setter 的调用形式；不得仅以新导出常量或共享类替换原类。保持每个实例的独立状态、对象身份、原有惰性初始化和清理时机，不把多个单例合并或提前初始化。",
+          "UI 抽取保留原 @Entry 页面、路由、组件/Builder 调用入口、宿主根节点和各实例 UI ID；不以整页/整组件替换代替局部提取。保持响应式状态所属组件、this 绑定及生命周期；依赖宿主的 Builder 调用与 CustomDialogController 构造优先留在原组件中，未经上下文等价性确认不得移入普通顶层工厂。",
+          "原入口可以变为薄委托；若兼容外壳仍被判克隆，继续抽取内部共同逻辑并保留实例差异，不删除入口、不只改名/换行，也不放宽检测规则。无法同时满足兼容和克隆消除时，明确报告具体冲突，不能以破坏调用契约换取 smell 通过。"
+        ]
+      },
+      "modificationBoundary": {
+        "requiredFiles": [
+          "demo/src/main/ets/First.ets",
+          "demo/src/main/ets/Second.ets"
+        ],
+        "rule": "必须在同一轮处理所有已解析片段；不得只改报告片段后把等价克隆留在同一 HomeCheck 范围内。",
+        "crossFile": true
+      },
+      "mustPreserve": [
+        "原文件导出与类/组件/Builder 入口、构造方式、公共签名及 ClassName.instance 等静态访问方式",
+        "各实例独立状态、对象身份及原有初始化/清理时机",
+        "所有实例的调用位置、条件边界和片段执行次数",
+        "每个实例各自的 .id(...) 字面值和生成时机",
+        "每个实例的事件回调、闭包捕获和 this 绑定",
+        "每个实例 this 状态写入的字段、次数和顺序",
+        "静态画像列出的每一项实例差异"
+      ],
+      "postConditions": [
+        "逐项对照原文件的导出、类/组件/Builder 入口、构造方式和静态访问方式；旧调用形式必须继续有效。",
+        "逐个核对所有实例仍保留各自的 UI ID、文案、资源、回调、状态读写和副作用顺序。",
+        "重构后由 HomeCheck 在完整 Harmony 工程中复检；若仍报告该克隆组，按剩余实例定向修复，而不是只改名、换行或移动原样代码。"
+      ],
+      "limitations": [
+        "这是词法级画像：不能证明跨文件类型、ArkUI 生命周期、闭包或资源引用的行为等价。",
+        "检测消息只提供直接对照片段；若 HomeCheck 报出额外实例，必须把它们纳入下一轮处理。",
+        "入口线索来自各实例所在生产文件的词法扫描，不是完整 API 清单；未列出或未发现调用方不代表入口可删除。"
+      ]
+    }
+  },
+  {
+    "kind": "cycle",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "T",
+      "source_project": "Demo",
+      "commit_hash": "",
+      "workspace_root": "$ROOT",
+      "project_root": "$ROOT",
+      "smell_type": "cyclic-dependency",
+      "rule": "formal/directory-cycle",
+      "severity": "WARNING",
+      "message": "smell",
+      "target": {
+        "file_path": "common/src/main/ets/apis/Api.ets",
+        "symbol": null,
+        "related_targets": [],
+        "range": {
+          "start_line": null,
+          "end_line": null,
+          "column": null
+        }
+      },
+      "raw": {
+        "analysisContext": {
+          "module": "common",
+          "modulePath": "common",
+          "baselineCycles": [
+            [
+              "apis",
+              "models",
+              "apis"
+            ]
+          ]
+        }
+      }
+    },
+    "source": "",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {
+      "common/src/main/ets/apis/Api.ets": "import { Model } from '../models/Model'",
+      "common/src/main/ets/models/Model.ets": "import { Api } from '../apis/Api'"
+    },
+    "expected": {
+      "module": "common",
+      "modulePath": "common",
+      "baselineCycles": [
+        [
+          "apis",
+          "models",
+          "apis"
+        ]
+      ],
+      "cycleEdges": [
+        {
+          "from": "apis",
+          "to": "models",
+          "evidence": [
+            {
+              "filePath": "common/src/main/ets/apis/Api.ets",
+              "line": 1,
+              "importPath": "../models/Model"
+            }
+          ]
+        },
+        {
+          "from": "models",
+          "to": "apis",
+          "evidence": [
+            {
+              "filePath": "common/src/main/ets/models/Model.ets",
+              "line": 1,
+              "importPath": "../apis/Api"
+            }
+          ]
+        }
+      ],
+      "publicEntryFiles": [],
+      "candidateHint": "For each cycle, consider the smallest ownership-correct cut: move a shared type to a neutral layer, move a symbol to its real owner, or invert one dependency. Preserve public exports with re-exports or delegates. These are candidates, not a fixed plan.",
+      "analysisLimitations": [
+        "The graph uses directory-level lexical analysis of relative imports",
+        "Package aliases, dynamic loading and re-export chains require additional validation"
+      ]
+    }
+  },
+  {
+    "kind": "god",
+    "task": {
+      "schema_version": "1.0",
+      "task_id": "T",
+      "source_project": "Demo",
+      "commit_hash": "",
+      "workspace_root": "$ROOT",
+      "project_root": "$ROOT",
+      "smell_type": "god-class",
+      "rule": "formal/god-class",
+      "severity": "WARNING",
+      "message": "smell",
+      "target": {
+        "file_path": "common/src/main/ets/Service.ets",
+        "symbol": "Service",
+        "related_targets": [],
+        "range": {
+          "start_line": null,
+          "end_line": null,
+          "column": null
+        }
+      },
+      "raw": {
+        "analysisContext": {}
+      }
+    },
+    "source": "export class Service {\n  public static items: string[] = []\n  constructor() { getContext().resourceManager; }\n  public getTotalCount(): number { return Service.items.length; }\n}\n",
+    "declaration": {},
+    "callers": [],
+    "reactive": [],
+    "files": {
+      "common/src/main/ets/Service.ets": "export class Service {\n  public static items: string[] = []\n  constructor() { getContext().resourceManager; }\n  public getTotalCount(): number { return Service.items.length; }\n}\n"
+    },
+    "expected": {
+      "targetClass": "Service",
+      "classLocated": true,
+      "lineCount": 5,
+      "fieldCount": 1,
+      "methodCount": 2,
+      "fields": [
+        {
+          "name": "items",
+          "type": "string[]",
+          "visibility": "public",
+          "static": true,
+          "readonly": false,
+          "decorators": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "constructor",
+          "parameterCount": 0,
+          "requiredParameterCount": 0,
+          "returnType": "unknown",
+          "visibility": "public",
+          "static": false,
+          "async": false,
+          "readsFields": [],
+          "writesFields": [],
+          "riskSignals": [
+            "runtime-context"
+          ]
+        },
+        {
+          "name": "getTotalCount",
+          "parameterCount": 0,
+          "requiredParameterCount": 0,
+          "returnType": "number",
+          "visibility": "public",
+          "static": false,
+          "async": false,
+          "readsFields": [
+            "items"
+          ],
+          "writesFields": [],
+          "riskSignals": []
+        }
+      ],
+      "mutableStaticFields": [
+        "items"
+      ],
+      "externalCallers": [],
+      "responsibilityCandidates": [
+        {
+          "sharedFields": [
+            "items"
+          ],
+          "methods": [
+            "getTotalCount"
+          ]
+        }
+      ],
+      "highRiskMethods": [
+        {
+          "name": "constructor",
+          "signals": [
+            "runtime-context"
+          ]
+        }
+      ],
+      "candidateHint": "Use field reads/writes and business actions as responsibility evidence; assign one owner to each mutable state group and preserve the original public class as a facade when compatibility is uncertain. This is evidence, not a fixed plan.",
+      "analysisLimitations": [
+        "Method/field relations use lexical analysis; dynamic and cross-language calls may be missed",
+        "Responsibility candidates do not decide final class boundaries"
+      ]
+    }
+  }
+]
