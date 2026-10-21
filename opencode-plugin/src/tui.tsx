@@ -44,6 +44,12 @@ const tui: TuiPlugin = async (api, options) => {
     api.ui.dialog.replace(() => <api.ui.DialogConfirm title={title} message={message}
       onConfirm={() => { api.ui.dialog.clear(); run(task); }} onCancel={() => api.ui.dialog.clear()} />);
   };
+  const confirmRecovery = (candidateId: string) => run(async () => {
+    const candidate = await controller.recoveryTarget(candidateId);
+    if (!candidate) return;
+    confirm("恢复应用前内容", `候选 ${candidate.candidateId}\n工程 ${candidate.originalRoot}\n文件：\n${candidate.changes.map((change) => change.relativePath).join("\n")}\n\n恢复冻结基线；已手动恢复的文件会跳过，后续修改会保留并报告冲突。`,
+      () => controller.recover(candidate.candidateId));
+  });
   const actions: Actions = {
     scan: () => prompt("异味检测范围", config.projectRoot, (value) => {
       setTab("logs"); run(() => controller.scan(resolve(config.projectRoot, value)));
@@ -76,7 +82,19 @@ const tui: TuiPlugin = async (api, options) => {
     revalidate: () => { setTab("result"); run(() => controller.validateCandidate()); },
     history: () => { setTab("history"); run(() => controller.history()); },
     environment: () => { setTab("environment"); run(() => controller.inspect()); },
-    recover: () => confirm("恢复应用前内容", "将按冻结基线恢复当前候选写入的内容。后续用户修改会保留并报告冲突。", () => controller.recover()),
+    recover: () => run(async () => {
+      const targets = await controller.recoveryTargets();
+      if (!targets) return;
+      if (!targets.length) {
+        api.ui.toast({ variant: "info", message: "没有可回滚的应用记录。请确认当前工程及 runs 设置；生成候选还未应用时无需回滚。" });
+        return;
+      }
+      if (targets.length === 1) { confirmRecovery(targets[0]!.candidateId!); return; }
+      api.ui.dialog.replace(() => <api.ui.DialogSelect title="选择要回滚的应用记录"
+        options={targets.map((record) => ({ title: `${record.startedAt} · ${record.applyState}`, value: record.candidateId!,
+          description: record.candidateId }))}
+        onSelect={(option) => { api.ui.dialog.clear(); confirmRecovery(option.value); }} />);
+    }),
     cancel: () => { if (!api.ui.dialog.open) controller.cancel(); },
     back: () => {
       if (api.ui.dialog.open) { api.ui.dialog.clear(); return; }

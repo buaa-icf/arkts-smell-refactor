@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { applyCandidate, candidateDiff, readTransaction, recoverApplication, sha256 } from "../src/apply.ts";
 import { fixture } from "./helpers.ts";
@@ -22,7 +22,36 @@ test("a later user edit is preserved during recovery", async (t) => {
   const result = await recoverApplication(f.config, f.candidate);
   assert.equal(result.state, "CONFLICT");
   assert.deepEqual(result.conflicts, [f.name]);
+  assert.equal(result.recoveryIssues?.[0]?.kind, "CONTENT_CHANGED");
   assert.equal(await readFile(resolve(f.projectRoot, f.name), "utf8"), "user edit");
+});
+
+test("recovery accepts an IDE rollback without rewriting the restored file", async (t) => {
+  const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
+  await applyCandidate(f.config, f.candidate);
+  const path = resolve(f.projectRoot, f.name);
+  await writeFile(path, f.before);
+  await utimes(path, new Date("2000-01-01"), new Date("2000-01-01"));
+  const restoredTime = (await stat(path)).mtimeMs;
+  const result = await recoverApplication(f.config, f.candidate);
+  assert.equal(result.state, "ROLLED_BACK");
+  assert.deepEqual(result.recoveryIssues, []);
+  assert.equal((await recoverApplication(f.config, f.candidate)).state, "ROLLED_BACK");
+  assert.deepEqual(await readFile(resolve(f.projectRoot, f.name)), f.before);
+  assert.equal((await stat(path)).mtimeMs, restoredTime);
+});
+
+test("recovery distinguishes filesystem errors from later user edits", async (t) => {
+  const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
+  await applyCandidate(f.config, f.candidate);
+  const path = resolve(f.projectRoot, f.name);
+  await rm(path);
+  await mkdir(path);
+  const result = await recoverApplication(f.config, f.candidate);
+  assert.equal(result.state, "CONFLICT");
+  assert.equal(result.recoveryIssues?.[0]?.kind, "IO_ERROR");
+  assert.match(result.recoveryIssues?.[0]?.reason ?? "", /不是普通文件/);
+  assert.deepEqual((await readTransaction(f.config, f.candidate))?.recoveryIssues, result.recoveryIssues);
 });
 test("changed baseline and tampered frozen content are rejected before writes", async (t) => {
   const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));

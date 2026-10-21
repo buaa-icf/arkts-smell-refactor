@@ -1,4 +1,7 @@
 import { BridgeClient, BridgeError } from "./bridge.ts";
+import { appendFile, mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { applyCandidate, candidateDiff, readTransaction, recoverApplication } from "./apply.ts";
 import type { Transaction } from "./apply.ts";
 import type { PluginConfig } from "./config.ts";
@@ -65,7 +68,8 @@ export class Workbench {
     await this.pending;
   }
 
-  private async operation(label: string, work: (signal: AbortSignal) => Promise<void>, cancellable = true): Promise<void> {
+  private async operation(label: string, work: (signal: AbortSignal) => Promise<void>, cancellable = true,
+    candidateId?: string): Promise<void> {
     if (this.disposed) throw new Error("工作台已关闭");
     if (this.state.busy) throw new Error("请等待当前操作完成");
     const abort = new AbortController();
@@ -74,12 +78,30 @@ export class Workbench {
     this.pending = pending;
     this.abort = cancellable ? abort : undefined;
     this.update({ busy: true, stopping: false, status: label, error: undefined });
+    const operationId = randomUUID();
+    const record = async (phase: string, message?: string) => {
+      const targetId = candidateId ?? this.state.candidate?.candidateId;
+      const entry = { timestamp: new Date().toISOString(), operationId, operation: label, phase, candidateId: targetId,
+        runDirectory: targetId ? resolve(this.config.runs, targetId) : this.state.runDirectory, message };
+      this.update({ logs: (this.state.logs + `\n[${entry.timestamp}] ${label} ${phase}${message ? `：${message}` : ""}`).slice(-80_000) });
+      try {
+        await mkdir(this.config.runs, { recursive: true });
+        await appendFile(resolve(this.config.runs, "tui-operations.jsonl"), JSON.stringify(entry) + "\n", "utf8");
+      } catch (error) {
+        this.update({ logs: (this.state.logs + `\n操作日志写入失败：${error instanceof Error ? error.message : error}`).slice(-80_000) });
+      }
+    };
+    const started = record("START");
     try {
       await work(abort.signal);
       if (!this.state.stopping) this.update({ status: `${label}：完成` });
+      await started;
+      await record("DONE");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.update({ status: error instanceof BridgeError && error.code === "CANCELLED" ? "已中止" : `${label}：失败`, error: message });
+      await started;
+      await record("ERROR", message);
     } finally {
       this.abort = undefined;
       this.update({ busy: false, stopping: false });
@@ -200,12 +222,36 @@ export class Workbench {
       }
     });
   }
-  recover(): Promise<void> {
+  async recoveryTargets(): Promise<HistoryRecord[] | undefined> {
+    let targets: HistoryRecord[] | undefined;
+    await this.operation("查找可回滚记录", async (signal) => {
+      const { records } = await this.backend.request("history.list", {}, signal);
+      this.update({ history: records });
+      targets = records.filter((record) => record.hasCandidate && record.candidateId &&
+        ["APPLIED", "APPLYING", "CONFLICT"].includes(record.applyState ?? ""));
+    });
+    return targets;
+  }
+  async recoveryTarget(candidateId: string): Promise<Candidate | undefined> {
+    let target: Candidate | undefined;
+    await this.operation("读取回滚目标", async (signal) => {
+      const candidate = await this.backend.request("candidate.describe", { candidateId }, signal);
+      if (!(await readTransaction(this.config, candidate))) throw new Error("此候选没有应用事务");
+      target = candidate;
+    }, true, candidateId);
+    return target;
+  }
+  recover(candidateId: string): Promise<void> {
     return this.operation("恢复应用前内容", async () => {
-      if (!this.state.candidate) throw new Error("请先从历史选择候选");
-      const transaction = await recoverApplication(this.config, this.state.candidate);
-      this.update({ applyState: transaction.state, appliedResult: undefined });
-      if (transaction.conflicts.length) throw new Error(`保留用户修改，以下文件需处理：${transaction.conflicts.join("、")}`);
-    }, false);
+      const candidate = await this.backend.request("candidate.describe", { candidateId });
+      const transaction = await recoverApplication(this.config, candidate);
+      this.update({ ...(this.state.candidate?.candidateId === candidateId ? {
+        applyState: transaction.state, appliedResult: undefined,
+      } : {}), history: this.state.history.map((record) => record.candidateId === candidateId ? {
+        ...record, applyState: transaction.state,
+      } : record) });
+      if (transaction.conflicts.length) throw new Error(`恢复未完成：${transaction.recoveryIssues?.map((issue) =>
+        `${issue.path} · ${issue.reason}`).join("；") ?? transaction.conflicts.join("、")}。详情见 apply-transaction.json`);
+    }, false, candidateId);
   }
 }

@@ -9,9 +9,10 @@ import type { JSX } from "@opentui/solid";
 import { RGBA } from "@opentui/core";
 import type { Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import type { TuiDialogAlertProps, TuiDialogPromptProps, TuiPluginApi, TuiPluginMeta, TuiRouteDefinition, TuiToast } from "@opencode-ai/plugin/tui";
+import type { TuiDialogAlertProps, TuiDialogConfirmProps, TuiDialogPromptProps, TuiPluginApi, TuiPluginMeta, TuiRouteDefinition, TuiToast } from "@opencode-ai/plugin/tui";
 import plugin from "../src/tui.tsx";
 import { Workbench } from "../src/controller.ts";
+import { applyCandidate, readTransaction } from "../src/apply.ts";
 import { WorkbenchView } from "../src/ui/workbench.tsx";
 import type { Actions, Tab } from "../src/ui/workbench.tsx";
 import type { Backend, Issue } from "../src/types.ts";
@@ -24,6 +25,7 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
     const [dialog, setDialog] = createSignal<(() => JSX.Element) | undefined>();
     const definitions = new Map<string, TuiRouteDefinition>();
     let prompt: TuiDialogPromptProps | undefined;
+    let confirmation: TuiDialogConfirmProps | undefined;
     let activeMode = "base";
     const disposers: (() => void | Promise<void>)[] = [];
     const screen = await testRender(() => <box width="100%" height="100%" flexDirection="column">
@@ -52,7 +54,7 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       theme: { current: Object.fromEntries(tokens.map((token) => [token, token === "background" ? RGBA.fromHex("#111111") : color])) },
       ui: {
         DialogPrompt: (props: TuiDialogPromptProps) => { prompt = props; return <text>{props.title}</text>; },
-        DialogConfirm: () => <text>confirm</text>,
+        DialogConfirm: (props: TuiDialogConfirmProps) => { confirmation = props; return <text>{props.title}</text>; },
         dialog: {
           get open() { return !!dialog(); },
           replace: (render: () => JSX.Element) => { setDialog(() => render); },
@@ -97,11 +99,29 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       await mkdir(resolve(".artifacts"), { recursive: true });
       await writeFile(resolve(`.artifacts/workbench-${width}x${height}.txt`), frame);
       screen.mockInput.pressKey("4"); await screen.flush();
-      assert.match(screen.captureCharFrame(), /80,000/);
+      assert.match(screen.captureCharFrame(), /导入报告 DONE/);
       screen.mockInput.pressKey("j"); await screen.flush();
       assert.match(screen.captureCharFrame(), /方法：labelBaseStyle/);
       assert.match(screen.captureCharFrame(), /Feature Envy/);
       assert.match(screen.captureCharFrame(), /下一步：分析风险/);
+      // The selected method has no candidate. r must discover the durable application independently.
+      await writeFile(resolve(f.candidate.runDirectory, "candidate.json"), JSON.stringify(f.candidate));
+      await writeFile(resolve(f.candidate.runDirectory, "session.json"), JSON.stringify({ runId: f.candidate.candidateId,
+        projectRoot: f.projectRoot, method: "task.execute", state: "SUCCEEDED", startedAt: "2026-10-21T17:11:48+0800" }));
+      await applyCandidate(f.config, f.candidate);
+      screen.mockInput.pressKey("r");
+      for (let attempt = 0; attempt < 150 && !confirmation; attempt++) {
+        await new Promise((done) => setTimeout(done, 20)); await screen.flush();
+      }
+      assert.equal(confirmation?.title, "恢复应用前内容");
+      assert.ok(confirmation?.message?.includes(f.candidate.candidateId));
+      assert.ok(confirmation?.message?.includes(f.name));
+      confirmation?.onConfirm?.();
+      for (let attempt = 0; attempt < 150; attempt++) {
+        await new Promise((done) => setTimeout(done, 20)); await screen.flush();
+        if (screen.captureCharFrame().includes("恢复应用前内容：完成")) break;
+      }
+      assert.equal((await readTransaction(f.config, f.candidate))?.state, "ROLLED_BACK");
       screen.mockInput.pressEscape();
       await new Promise((done) => setTimeout(done, 50));
       await screen.flush();
@@ -193,7 +213,7 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       assert.match(screen.captureCharFrame(), /下一步：应用后复检/);
       await controller.validateApplied(); await screen.flush();
       assert.match(screen.captureCharFrame(), /复检通过/);
-      await controller.recover(); await screen.flush();
+      await controller.recover(f.candidate.candidateId); await screen.flush();
       assert.match(screen.captureCharFrame(), /已恢复应用前内容/);
     } finally {
       await controller.dispose();

@@ -14,6 +14,7 @@ export interface Transaction {
   state: "APPLYING" | "APPLIED" | "ROLLED_BACK" | "CONFLICT";
   attempted: string[];
   conflicts: string[];
+  recoveryIssues?: { path: string; kind: "CONTENT_CHANGED" | "IO_ERROR"; reason: string; code?: string }[];
   updatedAt: string;
 }
 interface Payload { change: Change; target: string; before: Buffer | null; after: Buffer }
@@ -92,16 +93,27 @@ async function withLock<T>(config: PluginConfig, work: () => Promise<T>): Promis
 
 async function rollback(candidate: Candidate, run: string, files: Payload[], transaction: Transaction): Promise<Transaction> {
   transaction.conflicts = [];
+  transaction.recoveryIssues = [];
   for (const file of [...files].reverse()) {
     if (!transaction.attempted.includes(file.change.relativePath)) continue;
     try {
       await safePath(candidate.originalRoot, file.change.relativePath);
       const current = digest(await contents(file.target));
       if (current === file.change.beforeSha256) continue;
-      if (current !== file.change.afterSha256) { transaction.conflicts.push(file.change.relativePath); continue; }
+      if (current !== file.change.afterSha256) {
+        transaction.conflicts.push(file.change.relativePath);
+        transaction.recoveryIssues.push({ path: file.change.relativePath, kind: "CONTENT_CHANGED",
+          reason: "当前内容与候选及原始基线均不同，已保留后续修改" });
+        continue;
+      }
       if (file.before === null) await unlink(file.target);
       else await atomicWrite(file.target, file.before);
-    } catch { transaction.conflicts.push(file.change.relativePath); }
+    } catch (error) {
+      transaction.conflicts.push(file.change.relativePath);
+      const code = (error as NodeJS.ErrnoException).code;
+      transaction.recoveryIssues.push({ path: file.change.relativePath, kind: "IO_ERROR",
+        reason: error instanceof Error ? error.message : String(error), ...(code ? { code } : {}) });
+    }
   }
   transaction.state = transaction.conflicts.length ? "CONFLICT" : "ROLLED_BACK";
   await save(run, transaction);
