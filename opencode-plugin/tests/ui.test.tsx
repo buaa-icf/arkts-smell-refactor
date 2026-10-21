@@ -14,7 +14,7 @@ import plugin from "../src/tui.tsx";
 import { Workbench } from "../src/controller.ts";
 import { WorkbenchView } from "../src/ui/workbench.tsx";
 import type { Actions, Tab } from "../src/ui/workbench.tsx";
-import type { Issue } from "../src/types.ts";
+import type { Backend, Issue } from "../src/types.ts";
 import { fixture } from "./helpers.ts";
 
 for (const [width, height] of [[120, 36], [80, 24]] as const) {
@@ -72,6 +72,7 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       let frame = screen.captureCharFrame();
       assert.match(frame, /异味重构工作台/);
       assert.match(frame, /检测工程或导入/);
+      assert.match(frame, /开始：检测或导入/);
       screen.mockInput.pressKey("i");
       await screen.flush();
       assert.ok(prompt);
@@ -100,6 +101,7 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       screen.mockInput.pressKey("j"); await screen.flush();
       assert.match(screen.captureCharFrame(), /方法：labelBaseStyle/);
       assert.match(screen.captureCharFrame(), /Feature Envy/);
+      assert.match(screen.captureCharFrame(), /下一步：分析风险/);
       screen.mockInput.pressEscape();
       await new Promise((done) => setTimeout(done, 50));
       await screen.flush();
@@ -116,7 +118,17 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
 for (const [width, height] of [[120, 36], [80, 24]] as const) {
   test(`navigation ${width}x${height} stays fixed above long logs and explains detected methods`, async () => {
     const f = await fixture();
-    const controller = new Workbench(f.config);
+    const backend: Backend = { request: async (method) => {
+      if (method === "task.prepare") return { taskHandle: "test", taskId: "test", originalRoot: f.projectRoot,
+        baselineFiles: f.candidate.baselineFiles, risk: { riskLevel: "medium" }, issue: controller.issue,
+        instructions: "", runDirectory: f.candidate.runDirectory } as never;
+      if (method === "task.execute") return { candidate: f.candidate, result: f.candidate.result,
+        runDirectory: f.candidate.runDirectory } as never;
+      if (method === "task.validateApplied") return { result: { verdict: "PASS" }, runDirectory: f.candidate.runDirectory } as never;
+      if (method === "candidate.check" || method === "candidate.describe") return f.candidate as never;
+      throw new Error(`Unexpected request ${method}`);
+    } };
+    const controller = new Workbench(f.config, backend);
     const [tab, setTab] = createSignal<Tab>("logs");
     const noop = () => {};
     const methods = [
@@ -153,6 +165,9 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       assert.match(beforeScroll, /6 环境/);
       assert.match(screen.captureCharFrame(), /检测到的异味方法/);
       assert.match(screen.captureCharFrame(), /长方法/);
+      const hint = screen.renderer.root.findDescendantById("arkts-guidance") as Renderable;
+      assert.ok(hint.y + hint.height <= content.y + content.height, "guidance must fit within the main panels");
+      assert.match(screen.captureCharFrame(), /下一步：分析风险/);
       content.scrollTo(content.scrollHeight);
       await screen.flush();
       assert.ok(content.scrollTop > 0);
@@ -170,6 +185,16 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
         assert.match(screen.captureCharFrame(), /Feature Envy/);
         await writeFile(resolve(".artifacts/method-details-120x36.txt"), screen.captureCharFrame());
       }
+      await controller.prepare(); await screen.flush();
+      assert.match(screen.captureCharFrame(), /下一步：生成候选/);
+      await controller.execute(); await screen.flush();
+      assert.match(screen.captureCharFrame(), /下一步：审阅并应用/);
+      await controller.apply(); await screen.flush();
+      assert.match(screen.captureCharFrame(), /下一步：应用后复检/);
+      await controller.validateApplied(); await screen.flush();
+      assert.match(screen.captureCharFrame(), /复检通过/);
+      await controller.recover(); await screen.flush();
+      assert.match(screen.captureCharFrame(), /已恢复应用前内容/);
     } finally {
       await controller.dispose();
       screen.renderer.destroy();

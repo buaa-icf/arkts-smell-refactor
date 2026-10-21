@@ -3,6 +3,7 @@ import { For, Show, Switch, Match, createSignal, onCleanup } from "solid-js";
 import { useTerminalDimensions } from "@opentui/solid";
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { Workbench } from "../controller.ts";
+import { guidance } from "./guidance.ts";
 
 const smellNames: Record<string, string> = {
   "long-method": "长方法",
@@ -51,8 +52,9 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
   const wide = () => size().width >= 110;
   const theme = () => props.api.theme.current;
   const issue = () => state().issues[state().selected];
+  const hint = () => guidance(state());
   const visibleIssues = () => {
-    const count = wide() ? Math.max(1, Math.floor((size().height - 17) / 3)) : 1;
+    const count = wide() ? Math.max(1, Math.floor((size().height - 22) / 3)) : 1;
     const start = Math.max(0, state().selected - Math.floor(count / 2));
     return state().issues.slice(start, start + count).map((item, offset) => ({ item, index: start + offset }));
   };
@@ -92,7 +94,7 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
         </text>}</For>
       </box>
       <box flexDirection={wide() ? "row" : "column"} flexGrow={1} flexBasis={0} minHeight={0} marginTop={wide() ? 1 : 0} gap={wide() ? 1 : 0}>
-        <box width={wide() ? "32%" : "100%"} height={wide() ? "100%" : 6} flexShrink={0}
+        <box width={wide() ? "32%" : "100%"} height={wide() ? "100%" : 8} flexShrink={0}
           border borderColor={theme().border} flexDirection="column" paddingLeft={1} paddingRight={1} overflow="hidden">
           <text fg={theme().primary} height={1} flexShrink={0} wrapMode="none">检测到的异味方法（{state().issues.length}）</text>
           <text fg={theme().textMuted} height={1} flexShrink={0} wrapMode="none">j/k 或点击，查看问题详情</text>
@@ -110,6 +112,11 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
               </box>
             )}</For>
           </Show>
+          <box flexGrow={1} minHeight={0} />
+          <box id="arkts-guidance" flexDirection="column" height={wide() ? 5 : 2} flexShrink={0}>
+            <text fg={theme().textMuted} height={wide() ? 2 : 1} flexShrink={0} wrapMode="word">{hint().title}</text>
+            <text fg={theme().textMuted} height={wide() ? 3 : 1} flexShrink={0} wrapMode="word">{hint().detail}</text>
+          </box>
         </box>
         <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column" border borderColor={theme().border} overflow="hidden">
           <scrollbox id="arkts-content" flexGrow={1} flexBasis={0} minHeight={0} paddingLeft={1} paddingRight={1}
