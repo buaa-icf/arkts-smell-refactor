@@ -7,9 +7,14 @@ import { Show, createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
 import type { JSX } from "@opentui/solid";
 import { RGBA } from "@opentui/core";
+import type { Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import type { TuiDialogAlertProps, TuiDialogPromptProps, TuiPluginApi, TuiPluginMeta, TuiRouteDefinition, TuiToast } from "@opencode-ai/plugin/tui";
 import plugin from "../src/tui.tsx";
+import { Workbench } from "../src/controller.ts";
+import { WorkbenchView } from "../src/ui/workbench.tsx";
+import type { Actions, Tab } from "../src/ui/workbench.tsx";
+import type { Issue } from "../src/types.ts";
 import { fixture } from "./helpers.ts";
 
 for (const [width, height] of [[120, 36], [80, 24]] as const) {
@@ -75,7 +80,9 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       await screen.flush();
       assert.doesNotMatch(screen.captureCharFrame(), /点击候选记录恢复/);
       const report = resolve(f.directory, "report.json");
-      await writeFile(report, JSON.stringify(f.record));
+      const second = { ...f.record, messages: [{ ...f.record.messages[0]!, rule: "@extrulesproject/feature-envy-check",
+        message: "Method 'labelBaseStyle' is feature-envious toward 'CommonMethod'" }] };
+      await writeFile(report, JSON.stringify([f.record, second]));
       prompt!.onConfirm?.(report);
       // waitForFrame exits when the renderer is idle, even if backend I/O is pending.
       for (let attempt = 0; attempt < 150; attempt++) {
@@ -90,6 +97,9 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       await writeFile(resolve(`.artifacts/workbench-${width}x${height}.txt`), frame);
       screen.mockInput.pressKey("4"); await screen.flush();
       assert.match(screen.captureCharFrame(), /80,000/);
+      screen.mockInput.pressKey("j"); await screen.flush();
+      assert.match(screen.captureCharFrame(), /方法：labelBaseStyle/);
+      assert.match(screen.captureCharFrame(), /Feature Envy/);
       screen.mockInput.pressEscape();
       await new Promise((done) => setTimeout(done, 50));
       await screen.flush();
@@ -97,6 +107,71 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       assert.equal(activeMode, "base");
     } finally {
       for (const dispose of disposers.reverse()) await dispose();
+      screen.renderer.destroy();
+      await rm(f.directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [width, height] of [[120, 36], [80, 24]] as const) {
+  test(`navigation ${width}x${height} stays fixed above long logs and explains detected methods`, async () => {
+    const f = await fixture();
+    const controller = new Workbench(f.config);
+    const [tab, setTab] = createSignal<Tab>("logs");
+    const noop = () => {};
+    const methods = [
+      { symbol: "build", smellType: "long-method", line: 90 },
+      { symbol: "labelBaseStyle", smellType: "feature-envy", line: 333 },
+    ];
+    controller.state = { ...controller.state, status: "异味检测：完成", issues: methods.map((method, index): Issue => ({
+      issueId: String(index), filePath: "feature/book_home/src/main/ets/views/SearchPage.ets", absolutePath: f.projectRoot,
+      rule: method.smellType, smellType: method.smellType, symbol: method.symbol, message: "detected smell",
+      startLine: method.line, endLine: method.line, supported: true, sourceSha256: "test", rawMessage: {}, relatedTargets: [], commitHash: "",
+    })), logs: "up to date in 24s\n" + Array.from({ length: 160 }, (_, index) => `LOG_${index} ${"streamed content ".repeat(5)}`).join("\n") };
+    const color = RGBA.fromHex("#dddddd");
+    const tokens = ["primary", "accent", "error", "warning", "success", "text", "textMuted", "background", "border"];
+    const api = { mode: { push: () => noop }, theme: {
+      current: Object.fromEntries(tokens.map((token) => [token, token === "background" ? RGBA.fromHex("#111111") : color])),
+    } } as unknown as TuiPluginApi;
+    const actions: Actions = {
+      scan: noop, importFile: noop, paste: noop, instructions: noop, prepare: noop, execute: noop, diff: noop,
+      apply: noop, validate: noop, revalidate: noop, history: noop, environment: noop, recover: noop, cancel: noop, back: noop, restore: noop,
+      selectIssue: (index) => { controller.select(index); setTab("risk"); },
+    };
+    const screen = await testRender(() => <WorkbenchView api={api} controller={controller} tab={tab} setTab={setTab} actions={actions} />,
+      { width, height });
+    try {
+      await screen.flush();
+      const navigation = screen.renderer.root.findDescendantById("arkts-navigation") as Renderable;
+      const content = screen.renderer.root.findDescendantById("arkts-content") as ScrollBoxRenderable;
+      assert.ok(navigation && content);
+      assert.ok(navigation.height >= 1);
+      assert.ok(content.y >= navigation.y + navigation.height, "content must start below the fixed navigation");
+      const navigationFrame = () => screen.captureCharFrame().split("\n").slice(navigation.y, navigation.y + navigation.height).join("\n");
+      const beforeScroll = navigationFrame();
+      assert.match(beforeScroll, /1 问题\/风险/);
+      assert.match(beforeScroll, /6 环境/);
+      assert.match(screen.captureCharFrame(), /检测到的异味方法/);
+      assert.match(screen.captureCharFrame(), /长方法/);
+      content.scrollTo(content.scrollHeight);
+      await screen.flush();
+      assert.ok(content.scrollTop > 0);
+      assert.equal(navigationFrame(), beforeScroll, "scrolling logs must not paint over navigation");
+      assert.match(screen.captureCharFrame(), /LOG_159/);
+      await mkdir(resolve(".artifacts"), { recursive: true });
+      await writeFile(resolve(`.artifacts/navigation-${width}x${height}.txt`), screen.captureCharFrame());
+      if (width >= 110) {
+        const method = screen.renderer.root.findDescendantById("arkts-issue-1") as Renderable;
+        await screen.mockMouse.click(method.x + 3, method.y);
+        await screen.flush();
+        assert.equal(controller.state.selected, 1);
+        assert.equal(tab(), "risk");
+        assert.match(screen.captureCharFrame(), /方法：labelBaseStyle/);
+        assert.match(screen.captureCharFrame(), /Feature Envy/);
+        await writeFile(resolve(".artifacts/method-details-120x36.txt"), screen.captureCharFrame());
+      }
+    } finally {
+      await controller.dispose();
       screen.renderer.destroy();
       await rm(f.directory, { recursive: true, force: true });
     }

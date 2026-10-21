@@ -83,6 +83,11 @@ const tui: TuiPlugin = async (api, options) => {
       api.route.navigate(previous.name, "params" in previous ? previous.params : undefined);
     },
     restore: (id) => run(() => controller.restore(id)),
+    selectIssue: (index) => {
+      if (controller.state.busy || !controller.state.issues[index]) return;
+      controller.select(index);
+      setTab("risk");
+    },
   };
   const open = () => {
     if (api.route.current.name !== ROUTE) previous = api.route.current;
@@ -97,8 +102,8 @@ const tui: TuiPlugin = async (api, options) => {
       t: actions.revalidate, h: actions.history, e: actions.environment, c: actions.cancel, r: actions.recover })
       .map(([key, action]) => ({ key, cmd: () => { if (!api.ui.dialog.open) action(); }, desc: key })),
     ...tabs.map((value, index) => ({ key: String(index + 1), cmd: () => { if (!api.ui.dialog.open) setTab(value.id); }, desc: value.label })),
-    { key: "j", cmd: () => { if (!api.ui.dialog.open) controller.select(controller.state.selected + 1); }, desc: "下一个问题" },
-    { key: "k", cmd: () => { if (!api.ui.dialog.open) controller.select(controller.state.selected - 1); }, desc: "上一个问题" },
+    { key: "j", cmd: () => { if (!api.ui.dialog.open) actions.selectIssue(controller.state.selected + 1); }, desc: "下一个问题" },
+    { key: "k", cmd: () => { if (!api.ui.dialog.open) actions.selectIssue(controller.state.selected - 1); }, desc: "上一个问题" },
   ];
   api.keymap.registerLayer({ mode: ROUTE, bindings });
   const unregister = api.route.register([{ name: ROUTE,

@@ -4,6 +4,15 @@ import { useTerminalDimensions } from "@opentui/solid";
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { Workbench } from "../controller.ts";
 
+const smellNames: Record<string, string> = {
+  "long-method": "长方法",
+  "feature-envy": "Feature Envy",
+  "switch-statement": "复杂分支",
+  "code-clone": "重复代码",
+};
+const smellName = (type: string) => smellNames[type] ?? type;
+const filename = (path: string) => path.replaceAll("\\", "/").split("/").at(-1) ?? path;
+
 export type Tab = "risk" | "result" | "diff" | "logs" | "history" | "environment";
 export const tabs: { id: Tab; label: string }[] = [
   { id: "risk", label: "1 问题/风险" }, { id: "result", label: "2 阶段/结论" },
@@ -28,6 +37,7 @@ export interface Actions {
   cancel: () => void;
   back: () => void;
   restore: (id: string) => void;
+  selectIssue: (index: number) => void;
 }
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 
@@ -42,7 +52,7 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
   const theme = () => props.api.theme.current;
   const issue = () => state().issues[state().selected];
   const visibleIssues = () => {
-    const count = wide() ? Math.max(4, size().height - 16) : 2;
+    const count = wide() ? Math.max(1, Math.floor((size().height - 17) / 3)) : 1;
     const start = Math.max(0, state().selected - Math.floor(count / 2));
     return state().issues.slice(start, start + count).map((item, offset) => ({ item, index: start + offset }));
   };
@@ -73,28 +83,41 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
         <text fg={theme().text}>应用 {state().applyState ?? "未应用"}</text>
         <text fg={theme().text}>复检 {state().appliedResult?.verdict ?? "待复检"}</text>
       </box>
-      <box flexDirection={wide() ? "row" : "column"} flexGrow={1} flexBasis={0} minHeight={0} marginTop={1} gap={1}>
-        <box width={wide() ? "32%" : "100%"} height={wide() ? "100%" : 5} flexShrink={0}
-          border borderColor={theme().border} flexDirection="column" paddingLeft={1} paddingRight={1}>
-          <text fg={theme().primary}>问题 {state().issues.length} · j/k 选择</text>
+      <box id="arkts-navigation" width="100%" height={3} flexShrink={0}
+        flexDirection="row" alignItems="center" gap={2} border borderColor={theme().border}
+        paddingLeft={1} marginTop={wide() ? 1 : 0} overflow="hidden">
+        <For each={tabs}>{(tab) => <text fg={props.tab() === tab.id ? theme().accent : theme().textMuted}
+          height={1} flexShrink={0} wrapMode="none" onMouseDown={() => props.setTab(tab.id)}>
+          {props.tab() === tab.id ? `[${tab.label}]` : tab.label}
+        </text>}</For>
+      </box>
+      <box flexDirection={wide() ? "row" : "column"} flexGrow={1} flexBasis={0} minHeight={0} marginTop={wide() ? 1 : 0} gap={wide() ? 1 : 0}>
+        <box width={wide() ? "32%" : "100%"} height={wide() ? "100%" : 6} flexShrink={0}
+          border borderColor={theme().border} flexDirection="column" paddingLeft={1} paddingRight={1} overflow="hidden">
+          <text fg={theme().primary} height={1} flexShrink={0} wrapMode="none">检测到的异味方法（{state().issues.length}）</text>
+          <text fg={theme().textMuted} height={1} flexShrink={0} wrapMode="none">j/k 或点击，查看问题详情</text>
           <Show when={state().issues.length} fallback={<text fg={theme().textMuted}>检测工程或导入 JSON 报告开始。</text>}>
             <For each={visibleIssues()}>{({ item, index }) => (
-              <text fg={index === state().selected ? theme().accent : theme().text}
-                onMouseDown={() => props.controller.select(index)} wrapMode="none">
-                {index === state().selected ? "› " : "  "}{index + 1}. {item.symbol ?? item.smellType}{item.supported ? "" : " [只读]"}
-              </text>
+              <box id={`arkts-issue-${index}`} flexDirection="column" height={wide() ? 3 : 2} flexShrink={0}
+                onMouseDown={() => props.actions.selectIssue(index)}>
+                <text fg={index === state().selected ? theme().accent : theme().text} height={1} wrapMode="none">
+                  {index === state().selected ? "› " : "  "}{index + 1}. {item.symbol ?? "匿名片段"}{item.supported ? "" : " [只读]"}
+                </text>
+                <text fg={theme().textMuted} height={1} wrapMode="none">
+                  {smellName(item.smellType)}{wide() ? "" : ` · ${filename(item.filePath)}:${item.startLine}`}
+                </text>
+                <Show when={wide()}><text fg={theme().textMuted} height={1} wrapMode="none">{filename(item.filePath)}:{item.startLine}</text></Show>
+              </box>
             )}</For>
           </Show>
         </box>
-        <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column" border borderColor={theme().border}>
-          <box flexDirection="row" flexWrap="wrap" gap={2} paddingLeft={1}>
-            <For each={tabs}>{(tab) => <text fg={props.tab() === tab.id ? theme().accent : theme().textMuted}
-              onMouseDown={() => props.setTab(tab.id)}>{tab.label}</text>}</For>
-          </box>
-          <scrollbox flexGrow={1} minHeight={0} paddingLeft={1} paddingRight={1} focused>
+        <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column" border borderColor={theme().border} overflow="hidden">
+          <scrollbox id="arkts-content" flexGrow={1} flexBasis={0} minHeight={0} paddingLeft={1} paddingRight={1}
+            viewportOptions={{ overflow: "hidden" }} scrollX={false} focused>
             <Switch>
               <Match when={props.tab() === "risk"}>
                 <Show when={issue()} fallback={<text fg={theme().textMuted}>尚未选择问题。</text>}>{(selected) => <box flexDirection="column" gap={1}>
+                  <text fg={theme().primary} wrapMode="word">方法：{selected().symbol ?? "匿名片段"} · {smellName(selected().smellType)}</text>
                   <text fg={theme().primary} wrapMode="char">{selected().filePath}:{selected().startLine}-{selected().endLine}</text>
                   <text fg={theme().textMuted}>{selected().rule}</text>
                   <text fg={theme().text} wrapMode="word">{selected().message}</text>
@@ -152,7 +175,7 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
           </scrollbox>
         </box>
       </box>
-      <box flexDirection="row" flexWrap="wrap" gap={2} height={2} flexShrink={0}>
+      <box flexDirection="row" flexWrap="wrap" gap={2} height={wide() ? 2 : 1} flexShrink={0}>
         <text fg={theme().textMuted}>↑↓/PgUp/PgDn 滚动 · t 候选复检 · r 恢复</text>
         <text fg={theme().warning} onMouseDown={props.actions.cancel}>{state().busy ? "c 中止" : ""}</text>
       </box>
