@@ -1,7 +1,6 @@
 {
   "projectRoot": "D:/harmonyos/MyApplication",
   "backend": "C:/path/to/arkts-smell-refactor",
-  "python": "python",
   "homecheck": "D:/harmonyos/homecheck-extrule",
   "studio": "D:/tool/DevEco/DevEco Studio",
   "node": "node",

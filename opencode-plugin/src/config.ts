@@ -8,7 +8,6 @@ export interface PluginConfig {
   projectRoot: string;
   backend: string;
   bridgePath: string;
-  python: string;
   runs: string;
   homecheck: string;
   studio: string;
@@ -54,17 +53,17 @@ export async function loadConfig(options: Record<string, unknown> = {}, director
   const id = createHash("sha256").update(projectRoot).digest("hex").slice(0, 16);
   const config: PluginConfig = {
     projectRoot, backend,
-    bridgePath: path("bridgePath", resolve(backend, "deveco-plugin/src/main/resources/bridge/ide_bridge.py")),
+    bridgePath: path("bridgePath", resolve(backend, "deveco-plugin/src/main/resources/bridge/ide_bridge.cjs")),
     runs: path("runs", resolve(tmpdir(), "arkts-refactor-tui", id, "runs")),
-    python: "python", homecheck: "", studio: "", node: "", deveco: "", hvigor: "", ohpm: "", linter: "",
+    homecheck: "", studio: "", node: "node", deveco: "", hvigor: "", ohpm: "", linter: "",
     linterMode: "required", timeoutMs: 7_200_000,
   };
-  for (const name of ["python", "homecheck", "studio", "node", "deveco", "hvigor", "ohpm", "linter"] as const) {
+  for (const name of ["homecheck", "studio", "node", "deveco", "hvigor", "ohpm", "linter"] as const) {
     const value = input[name] ?? config[name];
     if (typeof value !== "string" || value.includes("\0")) throw new Error(`${name} 必须为有效字符串`);
     config[name] = value;
   }
-  if (!config.python.trim()) throw new Error("python 不能为空");
+  if (!config.node.trim()) throw new Error("node 不能为空");
   if (input.linterMode !== undefined && input.linterMode !== "required" && input.linterMode !== "skip") {
     throw new Error("linterMode 必须为 required 或 skip");
   }

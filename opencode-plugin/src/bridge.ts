@@ -74,9 +74,9 @@ export class BridgeClient implements Backend {
     if (Buffer.byteLength(request) > MAX_LINE) throw new Error("请求超过 8 MiB");
 
     return new Promise((resolve, reject) => {
-      const child = spawn(this.config.python, ["-u", this.config.bridgePath], {
+      const child = spawn(this.config.node, [this.config.bridgePath], {
         cwd: this.config.backend, shell: false, windowsHide: true, detached: process.platform !== "win32",
-        stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+        stdio: ["pipe", "pipe", "pipe"], env: process.env,
       });
       let failure: Error | undefined;
       let response: Record<string, unknown> | undefined;

@@ -120,7 +120,7 @@ async function rollback(candidate: Candidate, run: string, files: Payload[], tra
   return transaction;
 }
 
-/** Call candidate.check immediately before this function; it validates the entire Python baseline. */
+/** Call candidate.check immediately before this function; it validates the entire backend baseline. */
 export async function applyCandidate(config: PluginConfig, candidate: Candidate): Promise<Transaction> {
   if (candidate.verdict !== "PASS") throw new Error("只有 PASS 候选可以应用");
   return withLock(config, async () => {

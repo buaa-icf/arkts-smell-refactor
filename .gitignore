@@ -1,4 +1,12 @@
-# Python caches and test output
+# Node.js dependencies, compilation and test output
+node_modules/
+dist/
+dist-tests/
+.test-tmp/
+.npm-cache/
+*.tsbuildinfo
+
+# Legacy/plugin Python caches
 __pycache__/
 *.py[cod]
 *.pyo
@@ -14,7 +22,6 @@ htmlcov/
 venv/
 env/
 build/
-dist/
 *.egg-info/
 
 # Local machine configuration and secrets

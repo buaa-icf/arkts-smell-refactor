@@ -24,7 +24,7 @@ import org.buaa.arktsrefactor.model.Issue;
 import org.buaa.arktsrefactor.service.ProjectSessionService;
 import org.buaa.arktsrefactor.service.SourceNavigationService;
 import org.buaa.arktsrefactor.service.FileTransaction;
-import org.buaa.arktsrefactor.bridge.PythonBridgeClient;
+import org.buaa.arktsrefactor.bridge.NodeBridgeClient;
 import org.buaa.arktsrefactor.persistence.PluginSettings;
 
 import javax.swing.*;
@@ -157,8 +157,8 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         changeList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         changeList.setCellRenderer((list, value, index, selected, focus) -> {
             var renderer = new DefaultListCellRenderer();
-            return renderer.getListCellRendererComponent(list, PythonBridgeClient.string(value, "changeType") + " · " +
-                    PythonBridgeClient.string(value, "relativePath") + " (" + PythonBridgeClient.string(value, "size") + " B)", index, selected, focus);
+            return renderer.getListCellRendererComponent(list, NodeBridgeClient.string(value, "changeType") + " · " +
+                    NodeBridgeClient.string(value, "relativePath") + " (" + NodeBridgeClient.string(value, "size") + " B)", index, selected, focus);
         });
         changeList.addListSelectionListener(e -> { if (diffButton != null) diffButton.setEnabled(!service.state().busy && changeList.getSelectedValue() != null); });
         JPanel candidate = new JPanel(new BorderLayout(4, 4));
@@ -175,15 +175,15 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         candidate.add(candidateActions, BorderLayout.SOUTH); tabs.addTab("变更预览", candidate);
         historyList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         historyList.setCellRenderer((list, value, index, selected, focus) -> new DefaultListCellRenderer().getListCellRendererComponent(list,
-                PythonBridgeClient.string(value, "startedAt") + " · " + PythonBridgeClient.string(value, "method") + " · " +
-                PythonBridgeClient.string(value, "state") + " " + PythonBridgeClient.string(value, "verdict") + " " + PythonBridgeClient.string(value, "applyState"), index, selected, focus));
+                NodeBridgeClient.string(value, "startedAt") + " · " + NodeBridgeClient.string(value, "method") + " · " +
+                NodeBridgeClient.string(value, "state") + " " + NodeBridgeClient.string(value, "verdict") + " " + NodeBridgeClient.string(value, "applyState"), index, selected, focus));
         JPanel records = new JPanel(new BorderLayout()); records.add(new JBScrollPane(historyList), BorderLayout.CENTER);
         JPanel recordActions = new JPanel(new GridLayout(0, 2, 4, 4));
         recordActions.add(button("刷新记录", service::history)); recordActions.add(button("打开记录证据…", this::evidence));
         recordActions.add(button("导出运行摘要…", this::exportHistory));
         restoreCandidateButton = button("恢复候选", () -> {
             JsonObject record = historyList.getSelectedValue();
-            if (record != null && record.has("candidateId")) service.restoreCandidate(PythonBridgeClient.string(record, "candidateId"));
+            if (record != null && record.has("candidateId")) service.restoreCandidate(NodeBridgeClient.string(record, "candidateId"));
         }); recordActions.add(restoreCandidateButton);
         historyList.addListSelectionListener(e -> controls());
         records.add(recordActions, BorderLayout.SOUTH); tabs.addTab("运行记录", records);
@@ -343,8 +343,8 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         JsonObject selectedChange = changeList.getSelectedValue();
         JsonObject candidate = service.state().candidate;
         if (selectedChange == null || candidate == null) return;
-        String name = PythonBridgeClient.string(selectedChange, "relativePath");
-        Path run = Path.of(PythonBridgeClient.string(candidate, "runDirectory"));
+        String name = NodeBridgeClient.string(selectedChange, "relativePath");
+        Path run = Path.of(NodeBridgeClient.string(candidate, "runDirectory"));
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
                 Path allowedRun = Path.of(PluginSettings.getInstance().getState().runs).toRealPath();
@@ -353,7 +353,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
                 if (!afterPath.startsWith(run.resolve("content/after").toRealPath())) throw new IllegalArgumentException("Diff 文件路径越界");
                 if (Files.size(afterPath) > 8L * 1024 * 1024) throw new IllegalArgumentException("此资源过大，请在证据文件中查看大小和哈希");
                 byte[] after = Files.readAllBytes(afterPath);
-                if (!FileTransaction.sha(after).equals(PythonBridgeClient.string(selectedChange, "afterSha256"))) throw new IllegalArgumentException("候选内容变化，请重新生成");
+                if (!FileTransaction.sha(after).equals(NodeBridgeClient.string(selectedChange, "afterSha256"))) throw new IllegalArgumentException("候选内容变化，请重新生成");
                 byte[] before = null;
                 if (!selectedChange.get("beforeSha256").isJsonNull()) {
                     Path beforePath = run.resolve("content/before").resolve(name).toRealPath();
@@ -379,7 +379,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     }
 
     private void evidence() {
-        String directory = historyList.getSelectedValue() == null ? service.state().runDirectory : PythonBridgeClient.string(historyList.getSelectedValue(), "runDirectory");
+        String directory = historyList.getSelectedValue() == null ? service.state().runDirectory : NodeBridgeClient.string(historyList.getSelectedValue(), "runDirectory");
         if (directory.isBlank()) return;
         Path path = Path.of(directory);
         try { if (!path.toRealPath().startsWith(Path.of(PluginSettings.getInstance().getState().runs).toRealPath())) throw new IllegalArgumentException("证据目录越界"); }
@@ -403,9 +403,9 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             var result = service.state().result;
             if (result != null && result.has("steps")) for (JsonElement value : result.getAsJsonArray("steps")) {
                 JsonObject step = value.getAsJsonObject();
-                if (!List.of("FAIL", "BLOCKED", "INCOMPLETE").contains(PythonBridgeClient.string(step, "status"))) continue;
-                String file = PythonBridgeClient.string(step, "logPath");
-                if (file.isBlank()) file = PythonBridgeClient.string(step, "output_file");
+                if (!List.of("FAIL", "BLOCKED", "INCOMPLETE").contains(NodeBridgeClient.string(step, "status"))) continue;
+                String file = NodeBridgeClient.string(step, "logPath");
+                if (file.isBlank()) file = NodeBridgeClient.string(step, "output_file");
                 if (!file.isBlank()) paths.add(Path.of(file));
             }
             if (paths.isEmpty()) for (String name : new String[]{"backend/refactor-agent.log", "backend/smell.log", "backend/review-agent.log", "scan/HomeCheck.log", "scan.log"}) paths.add(run.resolve(name));
@@ -440,14 +440,14 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     private void controls() {
         if (analyzeButton == null) return;
         var state = service.state(); Issue issue = selected();
-        boolean instructionsMatch = state.prepared != null && instructions.getText().equals(PythonBridgeClient.string(state.prepared, "instructions"));
+        boolean instructionsMatch = state.prepared != null && instructions.getText().equals(NodeBridgeClient.string(state.prepared, "instructions"));
         analyzeButton.setEnabled(!state.busy && issue != null && issue.supported());
         generateButton.setEnabled(!state.busy && !state.applied && !state.stale && state.prepared != null && issue != null &&
                 issue.id().equals(state.activeIssueId) && instructionsMatch);
         diffButton.setEnabled(!state.busy && changeList.getSelectedValue() != null);
-        applyButton.setEnabled(!state.busy && !state.stale && !state.applied && instructionsMatch && state.candidate != null && "PASS".equals(PythonBridgeClient.string(state.candidate, "verdict")));
-        applyButton.setToolTipText(state.candidate != null && !"PASS".equals(PythonBridgeClient.string(state.candidate, "verdict"))
-                ? "候选副本验证尚未通过：" + PythonBridgeClient.string(state.result, "failureReason") : "将已通过验证的冻结候选应用到原工程");
+        applyButton.setEnabled(!state.busy && !state.stale && !state.applied && instructionsMatch && state.candidate != null && "PASS".equals(NodeBridgeClient.string(state.candidate, "verdict")));
+        applyButton.setToolTipText(state.candidate != null && !"PASS".equals(NodeBridgeClient.string(state.candidate, "verdict"))
+                ? "候选副本验证尚未通过：" + NodeBridgeClient.string(state.result, "failureReason") : "将已通过验证的冻结候选应用到原工程");
         validateButton.setText(state.applied ? "重新验证原工程" : "重新验证候选");
         validateButton.setToolTipText(state.applied ? "验证已应用后的原工程" : "重试已有候选的门禁与评审；不重新运行重构 Agent");
         validateButton.setEnabled(!state.busy && !state.stale && state.candidate != null && instructionsMatch);
@@ -495,7 +495,7 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
         }
         if (renderedPrepared != state.prepared) {
             renderedPrepared = state.prepared;
-            if (state.prepared != null && state.prepared.has("restored")) instructions.setText(PythonBridgeClient.string(state.prepared, "instructions"));
+            if (state.prepared != null && state.prepared.has("restored")) instructions.setText(NodeBridgeClient.string(state.prepared, "instructions"));
             if (state.risk != null) {
                 risk.setText(riskText(state.risk)); risk.setCaretPosition(0); tabs.setSelectedIndex(1);
             } else risk.setText("选择问题并分析风险。静态建议会与实际候选变更分别显示。");
@@ -509,18 +509,18 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
             }
         }
         StringBuilder summary = new StringBuilder();
-        if (state.candidate != null) summary.append("候选副本验证：").append(PythonBridgeClient.string(state.candidate, "verdict"))
+        if (state.candidate != null) summary.append("候选副本验证：").append(NodeBridgeClient.string(state.candidate, "verdict"))
                 .append("\n原工程状态：").append(state.applied ? "已应用" : "尚未应用").append(state.stale ? " / 内容已变化" : "").append('\n');
-        if (state.candidate != null && !state.applied && !"PASS".equals(PythonBridgeClient.string(state.candidate, "verdict")))
+        if (state.candidate != null && !state.applied && !"PASS".equals(NodeBridgeClient.string(state.candidate, "verdict")))
             summary.append("应用条件：候选副本的必需门禁与评审通过。可先重新验证候选。\n");
         if (state.result != null) {
-            summary.append("本轮结论：").append(PythonBridgeClient.string(state.result, "verdict")).append('\n');
-            String reason = PythonBridgeClient.string(state.result, "failureReason");
+            summary.append("本轮结论：").append(NodeBridgeClient.string(state.result, "verdict")).append('\n');
+            String reason = NodeBridgeClient.string(state.result, "failureReason");
             if (!reason.isBlank()) summary.append("失败原因：").append(reason).append('\n');
             if (state.result.has("validationPolicy")) summary.append("策略：").append(state.result.get("validationPolicy")).append('\n');
             if (state.result.has("steps")) for (JsonElement element : state.result.getAsJsonArray("steps")) {
-                JsonObject step = element.getAsJsonObject(); summary.append(PythonBridgeClient.string(step, "name")).append("  ")
-                        .append(PythonBridgeClient.string(step, "status")).append("  ").append(PythonBridgeClient.string(step, "reason")).append('\n');
+                JsonObject step = element.getAsJsonObject(); summary.append(NodeBridgeClient.string(step, "name")).append("  ")
+                        .append(NodeBridgeClient.string(step, "status")).append("  ").append(NodeBridgeClient.string(step, "reason")).append('\n');
             }
         }
         state.steps.forEach((name, value) -> summary.append(name).append(": ").append(value).append('\n'));
@@ -550,17 +550,17 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
                     .append("\n候选重构：").append(state.environment.get("canRefactor").getAsBoolean() ? "所需工具已找到" : "缺少所需工具").append("\n\n");
             for (JsonElement element : state.environment.getAsJsonArray("tools")) {
                 JsonObject tool = element.getAsJsonObject();
-                String name = switch (PythonBridgeClient.string(tool, "name")) {
+                String name = switch (NodeBridgeClient.string(tool, "name")) {
                     case "deveco" -> "DevEco Code / Agent CLI";
                     case "hvigorw" -> "Hvigor";
                     case "ohpm" -> "ohpm";
                     case "codelinter" -> "Linter";
-                    default -> PythonBridgeClient.string(tool, "name");
+                    default -> NodeBridgeClient.string(tool, "name");
                 };
                 boolean required = !tool.has("required") || tool.get("required").getAsBoolean();
                 text.append(tool.get("available").getAsBoolean() ? "✓ 已找到  " : "✕ 未找到  ").append(name)
                         .append(required ? "" : "（当前策略可跳过）").append('\n');
-                String path = PythonBridgeClient.string(tool, "path");
+                String path = NodeBridgeClient.string(tool, "path");
                 text.append("  ").append(path.isBlank() ? "未配置，自动发现也未找到" : path).append("\n\n");
             }
             text.append("此检查确认工具路径；Agent 登录、实际构建和设备测试状态由具体任务验证。");
@@ -609,14 +609,14 @@ public final class RefactorPanel extends JBPanel<RefactorPanel> implements Dispo
     }
 
     private static String riskText(JsonObject report) {
-        StringBuilder text = new StringBuilder("静态风险：").append(PythonBridgeClient.string(report, "riskLevel"));
-        if (report.has("callers")) text.append("\n生产调用点：").append(PythonBridgeClient.string(report.getAsJsonObject("callers"), "production"));
+        StringBuilder text = new StringBuilder("静态风险：").append(NodeBridgeClient.string(report, "riskLevel"));
+        if (report.has("callers")) text.append("\n生产调用点：").append(NodeBridgeClient.string(report.getAsJsonObject("callers"), "production"));
         text.append("\n测试信息由独立测试计划和实际结果提供。\n\n风险证据：\n");
         if (report.has("risks")) for (JsonElement item : report.getAsJsonArray("risks")) {
-            var value = item.getAsJsonObject(); text.append("• ").append(PythonBridgeClient.string(value, "level")).append(" ").append(PythonBridgeClient.string(value, "evidence")).append('\n');
+            var value = item.getAsJsonObject(); text.append("• ").append(NodeBridgeClient.string(value, "level")).append(" ").append(NodeBridgeClient.string(value, "evidence")).append('\n');
         }
         text.append("\n必须保持的约束：\n");
-        if (report.has("recommendedConstraints")) for (JsonElement item : report.getAsJsonArray("recommendedConstraints")) text.append("• ").append(PythonBridgeClient.string(item.getAsJsonObject(), "instruction")).append('\n');
+        if (report.has("recommendedConstraints")) for (JsonElement item : report.getAsJsonArray("recommendedConstraints")) text.append("• ").append(NodeBridgeClient.string(item.getAsJsonObject(), "instruction")).append('\n');
         text.append("\n详细静态画像与局限：\n").append(new GsonBuilder().setPrettyPrinting().create().toJson(report));
         return text.toString();
     }

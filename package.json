@@ -1,0 +1,31 @@
+{
+  "name": "arkts-smell-refactor",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Dataset-driven ArkTS refactoring and evidence-based validation",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "bin": {
+    "arkts-refactor": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js start",
+    "cli": "node dist/cli.js",
+    "test": "npm run build && node --test dist-tests/tests/*.test.js",
+    "pretest": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6",
+    "diff": "^8.0.2",
+    "json5": "^2.2.3"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.0.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.0"
+  }
+}

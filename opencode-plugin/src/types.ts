@@ -95,7 +95,7 @@ export interface BridgeEvent {
   data: Record<string, unknown>;
 }
 export interface BridgeMethods {
-  "session.hello": { protocolVersion: number; adapterVersion: string; transport: string; supportedRules: string[] };
+  "session.hello": { protocolVersion: number; adapterVersion: string; transport: string; supportedRules: string[]; backendLanguage?: string; nodeVersion?: string };
   "environment.inspect": Environment;
   "issues.import": { issues: Issue[] };
   "scan.start": { issues: Issue[]; runDirectory: string; scopePath: string; rules?: string[]; scannedFiles?: string[] };

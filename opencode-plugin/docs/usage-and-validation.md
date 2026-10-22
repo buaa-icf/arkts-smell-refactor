@@ -7,6 +7,8 @@
 在本仓库根目录打开 PowerShell：
 
 ```powershell
+npm ci
+npm run build
 cd .\opencode-plugin
 npm ci --registry=https://registry.npmjs.org
 npm run check
@@ -15,7 +17,7 @@ cd ..
 
 `check` 包含严格类型检查、25 项后端／事务／状态测试，以及 6 项真正调用 OpenTUI 原生渲染器的 TSX 测试（含固定导航、方法选择、阶段提示、检测范围、回滚与配置错误诊断）。Windows 沙箱可能拒绝原子替换、junction、进程树终止和 Bun 模块解析，需要在普通终端执行。
 
-插件使用宿主的 Solid 转换器直接加载 TSX，`npm run build` 执行类型检查；不需要把 TSX 转成 React JavaScript。Node.js 22+ 用于依赖和测试，Python 3.10+ 用于后端；Bun 测试运行时已包含在开发依赖中。
+插件使用宿主的 Solid 转换器直接加载 TSX，插件目录的 `npm run build` 执行类型检查；仓库根目录的同名命令构建 TypeScript 后端。推荐 Node.js 22+（后端要求至少 20.19）；不再依赖 Python。Bun 测试运行时已包含在插件开发依赖中。`check` 的 Node 测试前会重新构建后端，单独运行 TUI 测试前也须先完成根目录构建。
 
 ## 2. 配置工程和工具
 
@@ -29,20 +31,19 @@ Copy-Item .\opencode-plugin\examples\settings.example.json .\opencode-plugin\exa
 
 | 字段 | 用途 |
 | --- | --- |
-| `projectRoot` | 要检测和重构的 Harmony 工程／包含工程的工作区，不是 Python 工程 |
+| `projectRoot` | 要检测和重构的 Harmony 工程／包含工程的工作区 |
 | `backend` | 当前 `arkts-smell-refactor` 仓库绝对路径 |
-| `python` | Python 可执行文件路径或 PATH 命令名；macOS/Linux 常用 `python3` |
+| `node` | Node.js 可执行文件路径或 PATH 命令名，默认 `node`；旧 python 字段忽略 |
 | `homecheck` | `homecheck-extrule` 根目录，含 HomeCheck 及自定义规则包 |
 | `studio` | DevEco Studio 安装目录，用于 SDK 和工具发现 |
-| `node` | Node 可执行文件路径或 `node` |
 | `deveco` | 留空使用 PATH 中的 `deveco`；可指定实际可执行文件 |
 | `hvigor` / `ohpm` / `linter` | 工具路径覆盖，留空交由现有后端发现 |
 | `linterMode` | 默认 `required`；`skip` 是明确跳过 linter 的策略，其他门禁仍生效 |
 | `runs` | 可选，证据目录。必须位于 `projectRoot` 之外，建议指定持久化目录 |
 | `timeoutMs` | 单次操作超时，默认 7,200,000 ms |
-| `bridgePath` | 可选，默认使用 backend 下现有 `deveco-plugin/.../ide_bridge.py` |
+| `bridgePath` | 可选，默认使用 backend 下现有 `deveco-plugin/.../ide_bridge.cjs`，加载 dist/ide_bridge.js |
 
-设置文件是严格 JSON。Windows 路径请写成 `D:/path/to/project`，或使用双反斜杠 `D:\\path\\to\\project`；直接粘贴 `D:\path\to\project` 会造成非法转义，部分 `\t`、`\n` 还会被解释成制表符、换行。`python` 等命令字段只填写可执行文件，不附带命令参数。
+设置文件是严格 JSON。Windows 路径请写成 `D:/path/to/project`，或使用双反斜杠 `D:\\path\\to\\project`；直接粘贴 `D:\path\to\project` 会造成非法转义，部分 `\t`、`\n` 还会被解释成制表符、换行。`node` 等命令字段只填写可执行文件，不附带命令参数。
 
 编辑后可先在本仓库根目录验证设置：
 
@@ -120,7 +121,7 @@ DevEco 可能自行提示或执行升级；可在验证固定版本期间设置 
 
 `settings.local.json` 的 projectRoot 是构建、测试和路径解析的工程上下文。异味扫描范围由 s 中输入的文件或目录决定，应用后 v 刷新的异味列表也沿用它；范围随候选保存，恢复历史后有效。导入报告使用报告目标及关联文件，旧候选缺少范围记录时回退到任务目标及关联文件。只有初次明确选择整个工程时，列表才按整个工程刷新；变更文件的异味门禁仍会检查候选改动涉及的源码。
 
-## 5. 测试记录
+## 5. 历史测试记录（Python 后端，迁移前）
 
 2026-10-19 在 Windows、Node 24.18.0、Python 3.13 和 Bun 1.3.14 下运行：
 
@@ -154,7 +155,7 @@ DevEco 可能自行提示或执行升级；可在验证固定版本期间设置 
 
 - 配置文件解析失败：插件仍注册 `/arkts`，启动提示“配置加载失败”；输入命令可以查看设置文件路径、具体错误和 Windows 路径写法。修复后退出并重启 DevEco。
 - `/arkts` 不出现：确认已完成 DevEco 首次引导、TUI 配置入口正确、依赖已经安装；修改配置后重启宿主。旧宿主缺少 API 时会报告所缺接口。
-- 找不到 Python 或 bridge：在设置中填写 python/backend 的绝对路径；backend 必须包含本仓库现有 bridge 和 Python src。
+- 找不到 Node、bridge 或 dist：在设置中填写 node/backend 的路径，并在 backend 根目录运行 npm ci、npm run build；需要共享 CJS 引导文件及 dist/ide_bridge.js。
 - 检测／重构缺少工具：按 `e` 查看实际路径，配置 HomeCheck、Studio 与工具覆盖；缺工具不代表“没有异味”。
 - 基线变化：重新检测／导入并分析风险，不重复套用旧候选。
 - 候选失败：查看阶段结论和失败原因，完整证据位于界面显示的 runDirectory。日志标签只保留最后 80,000 字符。
@@ -187,3 +188,9 @@ DevEco 可能自行提示或执行升级；可在验证固定版本期间设置 
 旧实现丢弃 scan.start 返回的 scopePath，候选没有保存原范围；共享 bridge 的 validate_applied 在门禁通过后固定执行 scan(originalRoot)。因此原本只检测 SearchPage.ets，应用后却展示整个 BookRead 的 25 条问题。修复保存 scanScope 到工作台、prepared.json、candidate.json，候选复检与历史恢复继续沿用；应用后列表按此范围实际扫描，阶段页显示检测范围并说明构建／测试按完整工程执行。
 
 验证命令：`npm run check`（25 项 Node + 6 项 OpenTUI、严格类型检查）；仓库根目录执行 `python -X utf8 -m unittest discover -s deveco-plugin/tests -p test_bridge.py`（45 项共享 bridge 测试）。覆盖文件、目录、明确选择全工程、报告文件集、旧候选回退、范围越界拒绝、准备与冻结持久化及历史恢复。Python 门禁和检测器使用受控替身，未调用模型或修改用户 BookRead 工程；不能将该回归视为真实 HomeCheck／SDK 的完整业务联调。
+
+## 11. 2026-10-22 TypeScript 后端集成
+
+集成 main/a445caf 后，实际链路为 TUI → node → 共享 ide_bridge.cjs → dist/ide_bridge.js。范围修复已移植到 Node 候选与列表刷新流程，旧 Python 文件及其测试随 main 删除；上述第 5–10 节保留迁移前的历史验证记录，当前验证不再执行 Python 命令。
+
+根目录 `npm test` 148 项通过；插件 `npm run check` 25 项 Node、6 项原生 TUI 和严格类型检查通过，总计 179 项。现有 settings.local.json 的只读 hello／环境检查返回 TypeScript 后端、Node 24.18.0、canDetect/canRefactor 均为 true。本次未重新执行真实模型、SDK／设备或 DevEco 宿主界面验收。旧 Python 候选摘要不适用于新后端的直接应用，后续任务应重新分析／生成验证；旧冻结事务仍可用于查看和回滚。见[集成记录](typescript-backend-integration.md)。
