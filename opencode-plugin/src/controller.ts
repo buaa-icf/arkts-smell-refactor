@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { applyCandidate, candidateDiff, readTransaction, recoverApplication } from "./apply.ts";
 import type { Transaction } from "./apply.ts";
 import type { PluginConfig } from "./config.ts";
-import type { Backend, BridgeEvent, Candidate, Environment, HistoryRecord, Issue, PipelineResult, Prepared, Step } from "./types.ts";
+import type { Backend, BridgeEvent, Candidate, Environment, HistoryRecord, Issue, PipelineResult, Prepared, ScanScope, Step } from "./types.ts";
 
 export interface WorkbenchState {
   busy: boolean;
@@ -14,6 +14,7 @@ export interface WorkbenchState {
   error?: string;
   issues: Issue[];
   selected: number;
+  scanScope?: ScanScope;
   prepared?: Prepared;
   candidate?: Candidate;
   result?: PipelineResult;
@@ -132,15 +133,20 @@ export class Workbench {
   importReport(input: { file: string } | { text: string }): Promise<void> {
     return this.operation("导入报告", async (signal) => {
       this.resetEvidence();
+      this.update({ issues: [], selected: 0, scanScope: undefined });
       const result = await this.backend.request("issues.import", input, signal);
-      this.update({ issues: result.issues, selected: 0 });
+      const files = [...new Set(result.issues.flatMap((issue) => [issue.absolutePath,
+        ...issue.relatedTargets.map((target) => String(target.filePath ?? "")).filter(Boolean)]))];
+      this.update({ issues: result.issues, selected: 0, scanScope: files.length ? { scopePath: this.config.projectRoot, files } : undefined });
     });
   }
   scan(scopePath: string): Promise<void> {
     return this.operation("异味检测", async (signal) => {
       this.resetEvidence();
+      this.update({ issues: [], selected: 0, scanScope: undefined });
       const result = await this.backend.request("scan.start", { scopePath }, signal, this.event);
-      this.update({ issues: result.issues, selected: 0, runDirectory: result.runDirectory });
+      this.update({ issues: result.issues, selected: 0, runDirectory: result.runDirectory,
+        scanScope: { scopePath: result.scopePath ?? scopePath, ...(result.rules ? { rules: result.rules } : {}) } });
     });
   }
   prepare(): Promise<void> {
@@ -148,8 +154,9 @@ export class Workbench {
       const issue = this.issue;
       if (!issue?.supported) throw new Error("请选择支持重构的问题");
       this.resetEvidence();
-      const prepared = await this.backend.request("task.prepare", { issue, instructions: this.state.instructions }, signal, this.event);
-      this.update({ prepared, runDirectory: prepared.runDirectory });
+      const prepared = await this.backend.request("task.prepare", { issue, instructions: this.state.instructions,
+        ...(this.state.scanScope ? { scanScope: this.state.scanScope } : {}) }, signal, this.event);
+      this.update({ prepared, runDirectory: prepared.runDirectory, scanScope: prepared.scanScope ?? this.state.scanScope });
     });
   }
   execute(): Promise<void> {
@@ -158,7 +165,7 @@ export class Workbench {
       if (!prepared) throw new Error("请先准备任务并分析风险");
       this.update({ candidate: undefined, result: undefined, appliedResult: undefined, applyState: undefined, diff: "", steps: [], logs: "" });
       const result = await this.backend.request("task.execute", { taskHandle: prepared.taskHandle }, signal, this.event);
-      this.update({ ...result, steps: result.result.steps ?? this.state.steps });
+      this.update({ ...result, steps: result.result.steps ?? this.state.steps, scanScope: result.candidate.scanScope ?? this.state.scanScope });
     });
   }
   validateCandidate(): Promise<void> {
@@ -167,7 +174,7 @@ export class Workbench {
       if (!candidateId || this.state.applyState === "APPLIED") throw new Error("请选择尚未应用的候选");
       this.update({ candidate: undefined, result: undefined, steps: [], logs: "", diff: "" });
       const result = await this.backend.request("task.validateCandidate", { candidateId }, signal, this.event);
-      this.update({ ...result, steps: result.result.steps ?? [] });
+      this.update({ ...result, steps: result.result.steps ?? [], scanScope: result.candidate.scanScope ?? this.state.scanScope });
     });
   }
   showDiff(name: string): Promise<void> {
@@ -197,6 +204,7 @@ export class Workbench {
       this.update({ appliedResult: undefined, logs: "", steps: [] });
       const result = await this.backend.request("task.validateApplied", { candidateId: this.state.candidate.candidateId }, signal, this.event);
       this.update({ appliedResult: result.result, steps: result.result.steps ?? [], runDirectory: result.runDirectory,
+        scanScope: result.scanScope ?? this.state.candidate?.scanScope ?? this.state.scanScope,
         ...(result.issues ? { issues: result.issues, selected: 0 } : {}) });
     });
   }
@@ -213,10 +221,12 @@ export class Workbench {
       this.resetEvidence();
       if (transaction && transaction.state !== "ROLLED_BACK") {
         this.update({ candidate, result: candidate.result, applyState: transaction.state,
+          scanScope: candidate.scanScope,
           runDirectory: candidate.runDirectory, steps: candidate.result.steps ?? [] });
       } else {
         const restored = await this.backend.request("candidate.restore", { candidateId }, signal);
         this.update({ ...restored, issues: [restored.prepared.issue], selected: 0,
+          scanScope: restored.candidate.scanScope ?? restored.prepared.scanScope,
           instructions: restored.prepared.instructions ?? "", runDirectory: candidate.runDirectory,
           steps: restored.result.steps ?? [] });
       }

@@ -21,6 +21,11 @@ export interface Risk {
   recommendedConstraints?: unknown[];
   [key: string]: unknown;
 }
+export interface ScanScope {
+  scopePath: string;
+  files?: string[];
+  rules?: string[];
+}
 export interface Prepared {
   taskHandle: string;
   taskId: string;
@@ -30,6 +35,7 @@ export interface Prepared {
   issue: Issue;
   instructions: string;
   runDirectory: string;
+  scanScope?: ScanScope;
 }
 export interface Step {
   name: string;
@@ -63,6 +69,7 @@ export interface Candidate {
   afterFiles: Record<string, string>;
   changes: Change[];
   result: PipelineResult;
+  scanScope?: ScanScope;
 }
 export interface Environment {
   tools: { name: string; path: string; available: boolean; required: boolean }[];
@@ -91,11 +98,11 @@ export interface BridgeMethods {
   "session.hello": { protocolVersion: number; adapterVersion: string; transport: string; supportedRules: string[] };
   "environment.inspect": Environment;
   "issues.import": { issues: Issue[] };
-  "scan.start": { issues: Issue[]; runDirectory: string };
+  "scan.start": { issues: Issue[]; runDirectory: string; scopePath: string; rules?: string[]; scannedFiles?: string[] };
   "task.prepare": Prepared;
   "task.execute": { candidate: Candidate; result: PipelineResult; runDirectory: string };
   "task.validateCandidate": BridgeMethods["task.execute"];
-  "task.validateApplied": { result: PipelineResult; issues?: Issue[]; runDirectory: string };
+  "task.validateApplied": { result: PipelineResult; issues?: Issue[]; runDirectory: string; scanScope?: ScanScope };
   "candidate.restore": { candidate: Candidate; prepared: Prepared; result: PipelineResult };
   "candidate.check": Candidate;
   "candidate.describe": Candidate;

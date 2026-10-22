@@ -4,7 +4,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { readTransaction } from "../src/apply.ts";
 import { Workbench } from "../src/controller.ts";
-import type { Backend, BridgeMethods, Issue } from "../src/types.ts";
+import type { Backend, BridgeMethods, Candidate, Issue, Prepared } from "../src/types.ts";
 import { BridgeClient, BridgeError } from "../src/bridge.ts";
 import { assertCompatible } from "../src/compatibility.ts";
 import { loadConfig } from "../src/config.ts";
@@ -147,3 +147,46 @@ test("recovery errors persist the target ID and distinguish content conflicts", 
   assert.match(controller.state.logs, /恢复未完成/);
   await controller.dispose();
 });
+
+for (const kind of ["file", "directory"] as const) {
+  test(`initial ${kind} scan scope survives preparation, application and history restoration`, async (t) => {
+    const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
+    const actual = new BridgeClient(f.config);
+    const { issues } = await actual.request("issues.import", { records: f.record });
+    const scopePath = resolve(f.projectRoot, kind === "file" ? f.name : "entry/src/main/ets");
+    let prepared: Prepared | undefined;
+    let candidate: Candidate = f.candidate;
+    const backend: Backend = { request: async (method, params, signal, event) => {
+      if (method === "scan.start") return { issues, scopePath, runDirectory: f.candidate.runDirectory } as never;
+      if (method === "task.prepare") {
+        assert.deepEqual(params?.scanScope, { scopePath });
+        prepared = await actual.request("task.prepare", params, signal, event);
+        return prepared as never;
+      }
+      if (method === "task.execute") {
+        candidate = { ...f.candidate, taskHandle: prepared!.taskHandle, scanScope: prepared!.scanScope };
+        return { candidate, result: candidate.result, runDirectory: candidate.runDirectory } as never;
+      }
+      if (method === "candidate.check" || method === "candidate.describe") return candidate as never;
+      if (method === "task.validateApplied") return { result: { verdict: "PASS" }, issues: [],
+        scanScope: candidate.scanScope, runDirectory: candidate.runDirectory } as never;
+      throw new Error(`Unexpected method ${method}`);
+    } };
+    const controller = new Workbench(f.config, backend);
+    await controller.scan(scopePath);
+    await controller.prepare();
+    assert.deepEqual(controller.state.prepared?.scanScope, { scopePath });
+    await controller.execute();
+    await controller.apply();
+    await controller.validateApplied();
+    assert.deepEqual(controller.state.scanScope, { scopePath });
+    assert.deepEqual(controller.state.issues, []);
+    const restarted = new Workbench(f.config, backend);
+    await restarted.restore(candidate.candidateId);
+    assert.deepEqual(restarted.state.scanScope, { scopePath });
+    await restarted.validateApplied();
+    assert.deepEqual(restarted.state.scanScope, { scopePath });
+    assert.equal(restarted.state.error, undefined);
+    await controller.dispose(); await restarted.dispose();
+  });
+}

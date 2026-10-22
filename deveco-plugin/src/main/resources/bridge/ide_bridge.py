@@ -513,6 +513,41 @@ def load_run(identifier: str, config: dict, root: Path, manifest: str):
     return run, data
 
 
+def normalize_scan_scope(value: dict, root: Path):
+    if not isinstance(value, dict) or not isinstance(value.get("scopePath"), str) or not value["scopePath"].strip():
+        raise BridgeError("INVALID_INPUT", "异味检测范围缺少有效 scopePath，请重新检测")
+    scope = contained(root, Path(value["scopePath"]))
+    if not scope.is_dir() and not (scope.is_file() and scope.suffix.lower() in {".ets", ".ts"}):
+        raise BridgeError("INVALID_INPUT", "异味检测范围不存在或不是生产源码，请重新检测")
+    result = {"scopePath": str(scope)}
+    if "files" in value:
+        files = value["files"]
+        if not isinstance(files, list) or not files or any(not isinstance(name, str) or not name for name in files):
+            raise BridgeError("INVALID_INPUT", "异味检测文件集无效，请重新检测")
+        paths = [file_in_project(root, name) for name in files]
+        if any(not path.is_file() or not allowed_production(path.relative_to(root).as_posix()) for path in paths):
+            raise BridgeError("INVALID_INPUT", "异味检测文件集包含非生产源码，请重新检测")
+        result["files"] = list(dict.fromkeys(str(path) for path in paths))
+    if "rules" in value:
+        rules = value["rules"]
+        if not isinstance(rules, list) or not rules or any(not isinstance(rule, str) or rule not in RULES for rule in rules):
+            raise BridgeError("UNSUPPORTED_RULE", "异味检测范围包含无效规则")
+        result["rules"] = list(dict.fromkeys(rules))
+    return result
+
+
+def prepared_scan_scope(prepared: dict, root: Path):
+    if prepared.get("scanScope") is not None:
+        return normalize_scan_scope(prepared["scanScope"], root)
+    # Older records did not retain the initial scan scope. Recover only the known task files.
+    issue = prepared.get("issue", {})
+    files = [issue.get("absolutePath")] + [item.get("filePath") for item in issue.get("relatedTargets", [])]
+    if not files[0] or any(not isinstance(name, str) or not name for name in files):
+        raise BridgeError("INVALID_INPUT", "旧记录缺少异味检测范围，请重新检测")
+    return normalize_scan_scope({"scopePath": files[0] if len(files) == 1 else str(root),
+                                 **({"files": files} if len(files) > 1 else {})}, root)
+
+
 def prepare_candidate(params: dict, config: dict, root: Path, run: Path):
     from arkts_smell_refactor.dataset import load_dataset_tasks
     from arkts_smell_refactor.risk import analyze_risks
@@ -528,6 +563,7 @@ def prepare_candidate(params: dict, config: dict, root: Path, run: Path):
     if hash_file(target) != issue.get("sourceSha256"):
         raise BridgeError("BASELINE_CHANGED", "检测后目标代码已变化，请重新检测")
     original = harmony_root(target, root)
+    scan_scope = prepared_scan_scope({"issue": issue, **({"scanScope": params["scanScope"]} if "scanScope" in params else {})}, root)
     if not allowed_production(target.relative_to(original).as_posix()):
         raise BridgeError("INVALID_INPUT", "目标不属于允许重构的生产源码")
     related = issue.get("relatedTargets", [])
@@ -573,6 +609,7 @@ def prepare_candidate(params: dict, config: dict, root: Path, run: Path):
     review = build_review_prompt(task, risk) + "\n只使用平台提供的生产基线、当前快照、依赖与 Diff；不得访问原始工程或测试。\n"
     (task_dir / "review-prompt.md").write_text(review, encoding="utf-8")
     data = {"taskHandle": run.name, "taskId": task.task_id, "originalRoot": str(original),
+            "scanScope": scan_scope,
             "targetRelativePath": relative, "issue": issue, "baselineFiles": baseline,
             "configDigest": configuration_digest(config), "risk": risk, "runDirectory": str(run), "instructions": params.get("instructions", "")}
     write_json(run / "prepared.json", data)
@@ -811,6 +848,7 @@ def freeze_candidate(run: Path, stage: Path, original: Path, prepared_run: Path,
         result["failureReason"] = result["reason"]
     write_json(task_dir / "result.json", result)
     manifest = {"candidateId": run.name, "taskHandle": prepared_run.name, "taskId": prepared["taskId"],
+                "scanScope": prepared.get("scanScope") or prepared_scan_scope(prepared, original),
                 "originalRoot": str(original), "baselineFiles": before, "afterFiles": after,
                 "configDigest": digest, "changes": entries,
                 "verdict": result["verdict"], "runDirectory": str(run), "result": result}
@@ -895,6 +933,11 @@ def validate_applied(params: dict, config: dict, root: Path, run: Path):
     from arkts_smell_refactor.models import CommandResult
     candidate_run, candidate = load_run(params["candidateId"], config, root, "candidate.json")
     original = Path(candidate["originalRoot"])
+    if candidate.get("scanScope") is not None:
+        scan_scope = normalize_scan_scope(candidate["scanScope"], root)
+    else:
+        _, prepared = load_run(candidate["taskHandle"], config, root, "prepared.json")
+        scan_scope = prepared_scan_scope(prepared, root)
     if candidate["verdict"] != "PASS" or snapshot(original) != candidate["afterFiles"] or configuration_digest(config) != candidate["configDigest"]:
         raise BridgeError("BASELINE_CHANGED", "应用内容或配置与已验证候选不同，请重新检测")
     stage = run / "staging" / original.name
@@ -918,11 +961,11 @@ def validate_applied(params: dict, config: dict, root: Path, run: Path):
     result["validationPolicy"] = {"linterMode": config.get("linterMode", "required")}
     result["reviewEvidenceFrom"] = str(candidate_run)
     write_json(task_dir / "result.json", result)
-    response = {"result": result, "runDirectory": str(run)}
+    response = {"result": result, "runDirectory": str(run), "scanScope": scan_scope}
     if result["verdict"] == "PASS":
         if snapshot(original) != candidate["afterFiles"]:
             raise BridgeError("BASELINE_CHANGED", "工程在验证时变化，结果已失效")
-        refreshed = scan({"scopePath": str(original)}, config, root, run)
+        refreshed = scan(scan_scope, config, root, run)
         response["issues"] = refreshed["issues"]
     return response
 

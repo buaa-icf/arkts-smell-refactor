@@ -104,6 +104,8 @@ for (const [width, height] of [[120, 36], [80, 24]] as const) {
       assert.match(screen.captureCharFrame(), /方法：labelBaseStyle/);
       assert.match(screen.captureCharFrame(), /Feature Envy/);
       assert.match(screen.captureCharFrame(), /下一步：分析风险/);
+      screen.mockInput.pressKey("2"); await screen.flush();
+      assert.match(screen.captureCharFrame(), /异味检测范围/);
       // The selected method has no candidate. r must discover the durable application independently.
       await writeFile(resolve(f.candidate.runDirectory, "candidate.json"), JSON.stringify(f.candidate));
       await writeFile(resolve(f.candidate.runDirectory, "session.json"), JSON.stringify({ runId: f.candidate.candidateId,

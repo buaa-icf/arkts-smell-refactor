@@ -138,6 +138,10 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
               <Match when={props.tab() === "result"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme().primary}>阶段轨迹</text>
+                  <Show when={state().scanScope}>{(scope) => <text fg={theme().textMuted} wrapMode="char">
+                    异味检测范围：{scope().files ? scope().files!.join("、") : scope().scopePath}
+                  </text>}</Show>
+                  <text fg={theme().textMuted} wrapMode="word">构建和测试按完整工程执行；异味列表沿用检测范围。</text>
                   <For each={state().steps}>{(step) => <text fg={step.status === "FAIL" || step.status === "BLOCKED" ? theme().error : theme().text}
                     wrapMode="word">{step.name} · {step.status}{step.reason ? ` · ${step.reason}` : ""}</text>}</For>
                   <Show when={state().result}><text fg={theme().text} wrapMode="word">{json(state().result)}</text></Show>

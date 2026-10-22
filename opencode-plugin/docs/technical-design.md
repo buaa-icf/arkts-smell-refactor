@@ -101,15 +101,15 @@ opencode-plugin/
 | --- | --- | --- |
 | `session.hello` | `{}` | 协议、adapterVersion、transport、supportedRules |
 | `environment.inspect` | `{}` | tools、canDetect、canRefactor |
-| `scan.start` | scopePath 或 files、可选 rules | issues、runDirectory |
+| `scan.start` | scopePath 或 files、可选 rules | issues、runDirectory、scopePath、scannedFiles、rules |
 | `issues.import` | file / text / records | issues |
-| `task.prepare` | issue、instructions | taskHandle、risk、baselineFiles |
+| `task.prepare` | issue、instructions、可选 scanScope | taskHandle、risk、baselineFiles、scanScope |
 | `task.execute` | taskHandle | candidate、result |
 | `task.validateCandidate` | candidateId | 新冻结候选、result |
 | `candidate.restore` | candidateId | candidate、prepared、result |
 | `candidate.describe` | candidateId | 冻结清单 |
 | `candidate.check` | candidateId | PASS、全量基线、配置及冻结内容复核 |
-| `task.validateApplied` | candidateId | 应用后门禁与问题复检 |
+| `task.validateApplied` | candidateId | 应用后门禁与原范围问题复检、scanScope |
 | `history.list` | `{}` | 至多 200 条当前工程记录 |
 
 响应必须核对 protocolVersion、requestId、ok 和结果形状；非零退出不覆盖已有结构化错误。事件只有进程内 seq，不包含请求 ID，TypeScript 客户端绑定当前操作 ID，检查递增序号。支持 UTF-8 跨块拆分、粘连行、尾行、stderr、EOF、超时、非法 JSON 和单行上限。日志只保留有限字符，完整证据仍在 runs。
@@ -138,6 +138,14 @@ opencode-plugin/
 `r` 从持久化历史中的 APPLIED / APPLYING / CONFLICT 记录选择事务，不依赖左侧当前选中的方法或内存中的候选。单条记录直接进入确认，多条记录先选择，再显示候选 ID、变更文件和回滚说明。读取历史期间串行化；确认时按候选 ID 重新读取冻结清单及事务。切换问题、重新导入和重新启动后仍可回滚已有事务。已在 IDE 恢复到 before 摘要的文件无需重复写入；后续不同内容仍保留并报告冲突。
 
 TypeScript 操作在 runs/tui-operations.jsonl 追加起止事件、操作 ID、候选 ID、证据目录和错误信息，页面日志同步显示。不得记录业务说明、源码或模型凭证；日志写入失败在页面明确显示。事务保留 conflicts 兼容字段，新增每文件恢复问题（内容变化／I/O 错误及实际原因），不再把所有异常误报为用户修改。
+
+### 6.2 应用后复检范围（2026-10-22）
+
+修复前初次 scan.start 的 scopePath 未进入工作台状态及候选，validate_applied 在门禁 PASS 后固定扫描 originalRoot，再把全工程问题替换进左栏。工程根目录用于构建、测试和摘要核验；用户选择的异味检测范围必须独立保存。
+
+TypeScript 保存 scanScope（scopePath、可选 files／rules），task.prepare 将它写入 prepared.json，冻结候选及候选复检沿用该字段，历史恢复时从候选恢复。导入报告使用报告中的目标和关联文件作为范围。共享 Python bridge 仅扩展范围元数据与最后的列表刷新：全工程构建／测试、完整快照核验和变更文件异味门禁继续执行，最终列表按 scanScope 实际调用检测器，不靠前端过滤全工程结果。阶段页显示异味范围和工程门禁的区别。
+
+旧候选没有 scanScope 时，从 prepared.json 的目标及关联片段恢复文件范围；无法确定范围时报错，不能静默扩大为全工程。新扫描或导入开始时清除旧范围，选择同次检测的其他问题及重新填写说明保留范围。文件、目录、报告文件集、历史恢复及旧记录回退均需回归；测试使用示例工程和模拟门禁，不修改用户 BookRead 工程。
 
 ## 7. 构建与验证计划
 

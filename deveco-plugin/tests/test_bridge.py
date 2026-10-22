@@ -131,10 +131,11 @@ class BridgeTests(unittest.TestCase):
         bridge.configure_environment(config)
         return config
 
-    def prepare(self, config):
+    def prepare(self, config, scan_scope=None):
         issue = bridge.normalize_issues(self.record(), self.root)[0]
         run = bridge.create_run(config, self.root, "task.prepare")
-        prepared = bridge.prepare_candidate({"issue": issue, "instructions": "keep public entry"}, config, self.root, run)
+        prepared = bridge.prepare_candidate({"issue": issue, "instructions": "keep public entry",
+                    **({"scanScope": scan_scope} if scan_scope is not None else {})}, config, self.root, run)
         return prepared
 
     def test_environment_required_linter_must_actually_exist(self):
@@ -182,6 +183,7 @@ class BridgeTests(unittest.TestCase):
         candidate = response["candidate"]
         self.assertEqual("PASS", candidate["verdict"])
         self.assertEqual(1, len(candidate["changes"]))
+        self.assertEqual({"scopePath": str(self.source)}, candidate["scanScope"])
         path = run / "content/after" / candidate["changes"][0]["relativePath"]
         self.assertEqual(candidate["changes"][0]["afterSha256"], bridge.hashlib.sha256(path.read_bytes()).hexdigest())
         self.assertEqual(original, (run / "content/before" / candidate["changes"][0]["relativePath"]).read_bytes())
@@ -453,8 +455,8 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(3, bridge.smell_candidate_gate(task_dir, stage, {}))
         self.assertFalse((task_dir / "smell-after.json").exists())
 
-    def make_frozen_candidate(self, verdict="BLOCKED"):
-        config = self.backend_config(); prepared = self.prepare(config)
+    def make_frozen_candidate(self, verdict="BLOCKED", scan_scope=None, config=None):
+        config = config or self.backend_config(); prepared = self.prepare(config, scan_scope)
         def fake_pipeline(task_dir, plan, **kwargs):
             task = bridge.read_json(task_dir / "task.json")
             (Path(task["project_root"]) / self.source.relative_to(self.root)).write_text("class Page { update() { return 2; } }\n", encoding="utf-8")
@@ -612,6 +614,68 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("PASS", response["result"]["verdict"])
         self.assertEqual(str(candidate_run), response["result"]["reviewEvidenceFrom"])
         self.assertEqual([], response["issues"])
+
+    def test_applied_issue_refresh_retains_file_directory_and_report_scopes(self):
+        from arkts_smell_refactor.models import CommandResult
+        initial = self.source.read_bytes()
+        unrelated = self.root / "feature/other/src/main/ets/Other.ets"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("class Other {}", encoding="utf-8")
+        scopes = [
+            {"scopePath": str(self.source)},
+            {"scopePath": str(self.source.parent), "rules": ["@extrulesproject/long-method-check"]},
+            {"scopePath": str(self.root)},
+            {"scopePath": str(self.root), "files": [str(self.source)]},
+        ]
+        config = self.backend_config()
+        for scope in scopes:
+            with self.subTest(scope=scope):
+                self.source.write_bytes(initial)
+                config, candidate, candidate_run = self.make_frozen_candidate("PASS", scope, config)
+                self.assertEqual(scope, candidate["scanScope"])
+                self.assertEqual(scope, bridge.read_json(Path(config["runs"]) / candidate["taskHandle"] / "prepared.json")["scanScope"])
+                self.source.write_bytes((candidate_run / "content/after" / self.source.relative_to(self.root)).read_bytes())
+                run = bridge.create_run(config, self.root, "task.validateApplied")
+                steps = [CommandResult(name, "PASS") for name in ("smell", "build", "contract", "test", "linter")]
+                with patch.object(bridge, "pipeline_config", return_value={}), \
+                     patch("arkts_smell_refactor.runner._run_gates_fail_fast", return_value=steps) as gates, \
+                     patch.object(bridge, "scan", return_value={"issues": []}) as detector:
+                    response = bridge.validate_applied({"candidateId": candidate["candidateId"]}, config, self.root, run)
+                self.assertEqual("PASS", response["result"]["verdict"])
+                self.assertEqual(scope, response["scanScope"])
+                self.assertEqual(scope, detector.call_args.args[0])
+                self.assertEqual(self.root, detector.call_args.args[2])
+                # Engineering gates still use the complete staged project.
+                self.assertTrue(Path(gates.call_args.args[1].project_root).is_dir())
+                self.assertTrue((Path(gates.call_args.args[1].project_root) / unrelated.relative_to(self.root)).is_file())
+
+    def test_legacy_applied_candidate_uses_task_files_instead_of_project_root(self):
+        from arkts_smell_refactor.models import CommandResult
+        config, candidate, candidate_run = self.make_frozen_candidate("PASS")
+        candidate.pop("scanScope")
+        bridge.write_json(candidate_run / "candidate.json", candidate)
+        prepared_path = Path(config["runs"]) / candidate["taskHandle"] / "prepared.json"
+        prepared = bridge.read_json(prepared_path)
+        prepared.pop("scanScope")
+        bridge.write_json(prepared_path, prepared)
+        self.source.write_bytes((candidate_run / "content/after" / self.source.relative_to(self.root)).read_bytes())
+        run = bridge.create_run(config, self.root, "task.validateApplied")
+        with patch.object(bridge, "pipeline_config", return_value={}), \
+             patch("arkts_smell_refactor.runner._run_gates_fail_fast", return_value=[CommandResult("smell", "PASS")]), \
+             patch.object(bridge, "scan", return_value={"issues": []}) as detector:
+            response = bridge.validate_applied({"candidateId": candidate["candidateId"]}, config, self.root, run)
+        self.assertEqual({"scopePath": str(self.source)}, detector.call_args.args[0])
+        self.assertEqual({"scopePath": str(self.source)}, response["scanScope"])
+
+    def test_scan_scope_rejects_outside_paths_and_missing_legacy_targets(self):
+        outside = Path(self.directory.name) / "Outside.ets"
+        outside.write_text("class Outside {}", encoding="utf-8")
+        for scope in ({"scopePath": str(outside)}, {"scopePath": str(self.root), "files": [str(outside)]},
+                      {"scopePath": str(self.root), "files": []}, {"scopePath": str(self.root), "rules": ["custom/rule"]}):
+            with self.subTest(scope=scope), self.assertRaises(bridge.BridgeError):
+                bridge.normalize_scan_scope(scope, self.root)
+        with self.assertRaisesRegex(bridge.BridgeError, "缺少异味检测范围"):
+            bridge.prepared_scan_scope({}, self.root)
 
 
 if __name__ == "__main__":
