@@ -12,6 +12,7 @@ import {
   runGates,
 } from "../runner.js";
 import { prepareReviewMaterials } from "../workspace.js";
+import { candidateScanScope, preparedScanScope } from "./scan_scope.js";
 import {
   copyFile,
   hash,
@@ -75,6 +76,10 @@ export function prepareCandidate(
       throw new BridgeError("BASELINE_CHANGED", "检测后关联片段已变化");
   }
   const instructions = String(params.instructions ?? "");
+  const scanScope = preparedScanScope(ctx, {
+    issue,
+    ...(params.scanScope !== undefined ? { scanScope: params.scanScope } : {}),
+  });
   if (instructions.length > 8000)
     throw new BridgeError("INVALID_INPUT", "业务说明最多 8000 字符");
   const baseline = snapshot(original);
@@ -126,6 +131,7 @@ export function prepareCandidate(
   const prepared = {
     taskHandle: path.basename(run),
     taskId: task.task_id,
+    scanScope,
     originalRoot: original,
     targetRelativePath: targetRelative,
     issue,
@@ -332,6 +338,7 @@ export function freezeCandidate(
     candidateId: path.basename(run),
     taskHandle: path.basename(preparedRun),
     taskId: prepared.taskId,
+    scanScope: preparedScanScope(ctx, prepared),
     originalRoot: original,
     baselineFiles: before,
     afterFiles: after,
@@ -550,6 +557,7 @@ export async function validateApplied(
   ctx: BridgeContext,
   params: Json,
   run: string,
+  runAppliedGates: typeof runGates = runGates,
 ): Promise<Json> {
   const [oldRun, candidate] = loadRun(
       ctx,
@@ -568,6 +576,7 @@ export async function validateApplied(
     );
   const stage = path.join(run, "staging", path.basename(original));
   copyProject(original, stage);
+  const scanScope = candidateScanScope(ctx, candidate);
   const taskDir = path.join(run, "backend");
   copyArtifacts(
     path.join(oldRun, "backend"),
@@ -580,7 +589,7 @@ export async function validateApplied(
   const task = taskFromJson(readJson(path.join(taskDir, "task.json"))),
     plan = pipelineConfig(ctx, taskDir),
     started = now();
-  const steps = await runGates(
+  const steps = await runAppliedGates(
     taskDir,
     task,
     plan,
@@ -627,5 +636,5 @@ export async function validateApplied(
     gates: steps,
   });
   writeJson(path.join(taskDir, "result.json"), result);
-  return { result, runDirectory: run };
+  return { result, runDirectory: run, scanScope };
 }

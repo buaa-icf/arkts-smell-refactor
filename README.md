@@ -1,6 +1,6 @@
 # ArkTS 代码异味重构与验证工具
 
-`deveco-plugin/` 是另一个独立工程，包含现有 DevEco Studio 插件。本次迁移保留其源码；它当前的 Java/Python 连接程序仍依赖旧 Python 后端 API，**还没有适配新的 Node.js 后端**。本 README 的运行命令用于 TypeScript 命令行后端，不能将“后端迁移完成”理解成插件已适配。
+`deveco-plugin/` 包含 DevEco Studio 的 Java 插件，`opencode-plugin/` 包含 DevEco Code／OpenCode 的原生终端工作台。两者均通过 Node JSONL 桥接调用本仓库 TypeScript 后端。下文命令用于后端 CLI；TUI 的配置、`/arkts` 入口、候选 Diff、确认应用及回滚流程见 [TUI 使用说明](opencode-plugin/docs/usage-and-validation.md)。
 
 ## 1. 安装和启动
 

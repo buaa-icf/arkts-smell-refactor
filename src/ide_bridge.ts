@@ -75,16 +75,7 @@ export async function dispatch(
     case "task.validateApplied": {
       const result = await validateApplied(ctx, params, run!);
       if (result.result.verdict === "PASS") {
-        const [, candidate] = loadRun(
-          ctx,
-          params.candidateId,
-          "candidate.json",
-        );
-        const refreshed = await scan(
-          ctx,
-          { scopePath: candidate.originalRoot },
-          run!,
-        );
+        const refreshed = await scan(ctx, result.scanScope, run!);
         result.issues = refreshed.issues;
       }
       return result;

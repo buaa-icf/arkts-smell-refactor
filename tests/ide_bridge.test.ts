@@ -30,6 +30,10 @@ import {
   validateApplied,
 } from "../src/ide/candidates.js";
 import { serveRequest } from "../src/ide_bridge.js";
+import {
+  normalizeScanScope,
+  preparedScanScope,
+} from "../src/ide/scan_scope.js";
 import type { Json } from "../src/models.js";
 
 const backend = path.resolve(".");
@@ -328,20 +332,24 @@ for (const scenario of [
     );
   });
 
-function prepare(f: ReturnType<typeof setup>) {
+function prepare(f: ReturnType<typeof setup>, scanScope?: Json) {
   const run = f.ctx.createRun("task.prepare"),
     issue = normalizeIssues(f.record, f.root)[0];
   return {
     run,
     prepared: prepareCandidate(
       f.ctx,
-      { issue, instructions: "keep public entry" },
+      {
+        issue,
+        instructions: "keep public entry",
+        ...(scanScope ? { scanScope } : {}),
+      },
       run,
     ),
   };
 }
-async function candidate(f: ReturnType<typeof setup>) {
-  const p = prepare(f),
+async function candidate(f: ReturnType<typeof setup>, scanScope?: Json) {
+  const p = prepare(f, scanScope),
     run = f.ctx.createRun("task.execute");
   const response = await executeCandidate(
     f.ctx,
@@ -456,6 +464,7 @@ test("candidate revalidation runs gates/review but no refactor or repair Agent",
     },
   );
   assert.equal(result.candidate.verdict, "PASS");
+  assert.deepEqual(result.candidate.scanScope, c.response.candidate.scanScope);
   assert.deepEqual(snapshot(f.root), before);
 });
 test("config digest detects policy changes but ignores obsolete Python executable", (t) => {
@@ -551,4 +560,92 @@ test("nonexistent UUID history is artifact-unavailable rather than an internal e
       loadRun(f.ctx, "00000000-0000-0000-0000-000000000000", "candidate.json"),
     code("ARTIFACT_UNAVAILABLE"),
   );
+});
+
+for (const kind of [
+  "file",
+  "directory",
+  "project",
+  "report-files",
+  "legacy",
+] as const) {
+  test(`applied validation retains ${kind} scan scope and full engineering context`, async (t) => {
+    const f = setup(t);
+    const unrelated = path.join(f.root, "feature/other/src/main/ets/Other.ets");
+    writeText(unrelated, "export class Other {}");
+    const scope =
+      kind === "directory"
+        ? {
+            scopePath: path.dirname(f.target),
+            rules: ["@extrulesproject/long-method-check"],
+          }
+        : kind === "project"
+          ? { scopePath: f.root }
+          : kind === "report-files"
+            ? { scopePath: f.root, files: [f.target] }
+            : { scopePath: f.target };
+    const c = await candidate(f, scope);
+    assert.deepEqual(c.p.prepared.scanScope, scope);
+    assert.deepEqual(c.response.candidate.scanScope, scope);
+    if (kind === "legacy") {
+      delete c.response.candidate.scanScope;
+      delete c.p.prepared.scanScope;
+      writeJson(path.join(c.run, "candidate.json"), c.response.candidate);
+      writeJson(path.join(c.p.run, "prepared.json"), c.p.prepared);
+    }
+    fs.copyFileSync(
+      path.join(c.run, "content/after/entry/src/main/ets/Page.ets"),
+      f.target,
+    );
+    const run = f.ctx.createRun("task.validateApplied");
+    const result = await validateApplied(
+      f.ctx,
+      { candidateId: c.response.candidate.candidateId },
+      run,
+      async (_dir, task) => {
+        assert.ok(
+          fs.existsSync(
+            path.join(task.project_root, path.relative(f.root, unrelated)),
+          ),
+        );
+        return ["smell", "build", "contract", "test", "linter"].map((name) => ({
+          name,
+          status: "PASS",
+          duration_seconds: 0,
+        }));
+      },
+    );
+    assert.equal(result.result.verdict, "PASS");
+    assert.deepEqual(result.scanScope, scope);
+    scannerFixture(f, "success");
+    const refreshed = await scan(f.ctx, result.scanScope, run);
+    assert.deepEqual(
+      refreshed.scannedFiles,
+      kind === "project" ? [f.target, unrelated] : [f.target],
+    );
+    assert.deepEqual(
+      readJson(path.join(run, "project.json")).checkFiles,
+      refreshed.scannedFiles.map((file: string) =>
+        path.relative(f.root, file).replaceAll("\\", "/"),
+      ),
+    );
+  });
+}
+
+test("scope rejects outside paths, empty file sets, unsupported rules and unknown legacy targets", (t) => {
+  const f = setup(t);
+  const outside = path.join(f.base, "Outside.ets");
+  writeText(outside, "class Outside {}");
+  for (const value of [
+    { scopePath: outside },
+    { scopePath: f.root, files: [outside] },
+    { scopePath: f.root, files: [] },
+    { scopePath: f.root, rules: ["custom/rule"] },
+  ]) {
+    assert.throws(
+      () => normalizeScanScope(f.ctx, value),
+      (error) => error instanceof BridgeError,
+    );
+  }
+  assert.throws(() => preparedScanScope(f.ctx, {}), /缺少异味检测范围/);
 });

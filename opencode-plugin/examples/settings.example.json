@@ -1,0 +1,13 @@
+{
+  "projectRoot": "D:/harmonyos/MyApplication",
+  "backend": "C:/path/to/arkts-smell-refactor",
+  "homecheck": "D:/harmonyos/homecheck-extrule",
+  "studio": "D:/tool/DevEco/DevEco Studio",
+  "node": "node",
+  "deveco": "",
+  "hvigor": "",
+  "ohpm": "",
+  "linter": "",
+  "linterMode": "required",
+  "timeoutMs": 7200000
+}

@@ -1,0 +1,46 @@
+{
+  "name": "@arkts-refactor/opencode-plugin",
+  "version": "0.1.0",
+  "description": "DevEco Code native TUI for the ArkTS smell refactoring orchestrator",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./tui": "./src/tui.tsx"
+  },
+  "files": [
+    "src",
+    "docs",
+    "examples"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm --prefix .. run build",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:tui": "bun test --preload @opentui/solid/preload tests/ui.test.tsx",
+    "check": "npm run typecheck && npm test && npm run test:tui"
+  },
+  "dependencies": {
+    "diff": "8.0.4"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.3.4 <0.4",
+    "@opentui/solid": ">=0.3.4 <0.4",
+    "solid-js": "^1.9.12"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.17.9",
+    "@opentui/core": "0.3.4",
+    "@opentui/keymap": "0.3.4",
+    "@opentui/solid": "0.3.4",
+    "@types/node": "22.15.30",
+    "bun": "1.3.14",
+    "solid-js": "1.9.12",
+    "tsx": "4.20.6",
+    "typescript": "5.8.2"
+  },
+  "overrides": { "seroval": "^1.6.3", "@babel/core": "^7.29.1" },
+  "engines": {
+    "node": ">=22"
+  }
+}
