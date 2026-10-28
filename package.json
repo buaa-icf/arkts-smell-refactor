@@ -15,7 +15,7 @@
     "start": "node dist/cli.js start",
     "batch": "node dist/cli.js batch",
     "cli": "node dist/cli.js",
-    "test": "npm run build && node --test dist-tests/tests/*.test.js",
+    "test": "npm run build && node --test dist-tests/tests",
     "pretest": "tsc -p tsconfig.test.json"
   },
   "dependencies": {

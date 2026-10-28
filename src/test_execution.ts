@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Json } from "./models.js";
 import {
-  copyFile,
   isFile,
   now,
   readText,
@@ -136,6 +135,7 @@ export async function runTestPlan(
   plan: Json,
   launcher: string[],
   env = process.env,
+  redactOutput: (text: string) => string = (text) => text,
 ): Promise<number> {
   if (!plan.jobs?.length) {
     writeJson(path.join(taskDir, "test-results.json"), {
@@ -230,17 +230,22 @@ export async function runTestPlan(
           reason: "missing fresh device execution completion evidence",
         };
     }
+    evidence = JSON.parse(
+      JSON.stringify(evidence, (_key, value) =>
+        typeof value === "string" ? redactOutput(value) : value,
+      ),
+    );
     const log = path.join(evidenceDir, "hvigor.log");
-    writeText(log, run.output);
-    process.stdout.write(run.output);
+    writeText(log, redactOutput(run.output));
+    process.stdout.write(redactOutput(run.output));
     const copied: Json = {};
     for (const name of ["test_result.txt", "coverage.log"])
       if (isFile(path.join(artifacts, name))) {
         const saved = path.join(evidenceDir, name);
-        copyFile(path.join(artifacts, name), saved);
+        writeText(saved, redactOutput(readText(path.join(artifacts, name))));
         copied[name] = saved;
         if (evidence.status !== "PASS")
-          console.log(readText(saved).slice(-12000));
+          console.log(redactOutput(readText(saved).slice(-12000)));
       }
     results.jobs.push({
       ...job,

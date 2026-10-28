@@ -36,6 +36,11 @@ import {
   renderRuntimeSmokeTest,
 } from "./runtime_smoke.js";
 import { smellGate } from "./smell.js";
+import {
+  prepareSigning,
+  saveSigningReport,
+  signingToolFailure,
+} from "./signing.js";
 export function normalizeAgentPromptPaths(
   prompt: string,
   raw: Json,
@@ -177,29 +182,95 @@ export async function hvigorGate(
   });
   if (!isDir(workspace)) freshCopy(source, workspace, false);
   else copyTree(source, workspace, false);
+  const rawTask = isFile(path.join(taskDir, "task.json"))
+    ? readJson(path.join(taskDir, "task.json"))
+    : {};
+  const signingOptions = {
+    taskDir,
+    source,
+    workspace,
+    stage: plan ? ("test" as const) : ("build" as const),
+    required: plan
+      ? plan.jobs.some((job: Json) => job.kind === "instrument")
+      : rawTask.raw?.testKind === "instrument-test",
+    workspaceRoot: rawTask.workspace_root ?? rawTask.workspaceRoot,
+    hdc: [
+      path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc.exe"),
+      path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc"),
+    ].find(isFile),
+  };
+  const signing = await prepareSigning(signingOptions);
+  console.log(
+    `SIGNING_PREPARATION status=${signing.report.status} required=${signingOptions.required}`,
+  );
+  if (!signing.ready) {
+    console.error("SIGNING_GATE_BLOCKED: " + signing.report.reason);
+    if (plan)
+      writeJson(path.join(taskDir, "test-results.json"), {
+        status: "BLOCKED",
+        classification: "SIGNING_UNAVAILABLE",
+        reason: signing.report.reason,
+        jobs: [],
+      });
+    return 3;
+  }
   const marker = path.join(workspace, ".arkts-refactor-ohpm-installed");
   if (ohpm && !isFile(marker)) {
     const install = await runCommand([ohpm, "install"], {
       cwd: workspace,
-      stream: true,
     });
+    console.log(signing.redact(install.output));
     if (install.code !== 0) return install.code ?? 3;
     writeText(marker, "ok");
   }
-  if (plan)
-    return runTestPlan(
+  if (plan) {
+    const code = await runTestPlan(
       taskDir,
       workspace,
       plan,
       hvigorLauncher(hvigor),
       devecoEnvironment(hvigor),
+      signing.redact,
     );
+    signing.report.verification =
+      signingOptions.required && code === 0
+        ? "DEVICE_TEST_EXECUTION_CONFIRMED"
+        : "NOT_CONFIRMED";
+    signing.report.executionStatus =
+      code === 0 ? "PASS" : code === 3 ? "BLOCKED" : "FAIL";
+    saveSigningReport(signingOptions, signing.report);
+    return code;
+  }
   const result = await runCommand(
     [...hvigorLauncher(hvigor), taskName, "--no-daemon"],
-    { cwd: workspace, env: devecoEnvironment(hvigor), stream: true },
+    { cwd: workspace, env: devecoEnvironment(hvigor) },
   );
-  if (/ERR_REQUIRE_ESM/.test(result.output) && /hvigorfile\.js/.test(result.output)) {
-    console.error("BUILD_GATE_BLOCKED: Hvigor 构建脚本模块环境冲突，不能归因于生产代码重构");
+  console.log(signing.redact(result.output));
+  if (
+    signingOptions.required &&
+    (signingToolFailure(result.output) ||
+      (result.code === 0 && !/@SignHap\b/.test(result.output)))
+  ) {
+    signing.report.status = "BLOCKED";
+    signing.report.verification = "SIGNING_FAILED_OR_NOT_CONFIRMED";
+    saveSigningReport(signingOptions, signing.report);
+    console.error(
+      "SIGNING_GATE_BLOCKED: 实际签名失败、被跳过或没有签名完成证据",
+    );
+    return 3;
+  }
+  signing.report.verification =
+    signingOptions.required && result.code === 0
+      ? "BUILD_SIGNING_COMPLETED_INSTALLATION_NOT_VERIFIED"
+      : "NOT_REQUIRED_OR_NOT_CONFIRMED";
+  saveSigningReport(signingOptions, signing.report);
+  if (
+    /ERR_REQUIRE_ESM/.test(result.output) &&
+    /hvigorfile\.js/.test(result.output)
+  ) {
+    console.error(
+      "BUILD_GATE_BLOCKED: Hvigor 构建脚本模块环境冲突，不能归因于生产代码重构",
+    );
     return 3;
   }
   return result.code ?? 3;
@@ -310,6 +381,13 @@ async function runRuntimeCopy(
       .slice(0, 8),
   );
   freshCopy(source, workspace, false);
+  const signing = await prepareSigning({
+    taskDir: path.join(taskDir, "runtime-smoke-" + label),
+    source,
+    workspace,
+    required: false,
+    stage: "test",
+  });
   const tests = path.resolve(workspace, plan.modulePath, "src/test");
   if (!within(tests, workspace))
     throw new Error("Runtime tests escape workspace");
@@ -330,7 +408,7 @@ async function runRuntimeCopy(
   if (ohpm) {
     const install = await runCommand([ohpm, "install"], { cwd: workspace });
     const log = path.join(taskDir, `runtime-smoke-${label}-install.log`);
-    writeText(log, install.output);
+    writeText(log, signing.redact(install.output));
     if (install.code !== 0)
       return {
         passed: false,
@@ -353,7 +431,7 @@ async function runRuntimeCopy(
       { cwd: workspace, env: devecoEnvironment(hvigor) },
     ),
     log = path.join(taskDir, `runtime-smoke-${label}.log`);
-  writeText(log, run.output);
+  writeText(log, signing.redact(run.output));
   const evidence = resultEvidence(
     path.join(
       tests,
