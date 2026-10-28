@@ -78,6 +78,18 @@ export function discoverWorkspace(data: Json[], start: string): string {
   );
 }
 export function findHomecheck(workspace: string): string | null {
+  const override = process.env.ARKTS_REFACTOR_HOMECHECK;
+  if (override) {
+    const root = path.resolve(override);
+    if (
+      !isFile(path.join(root, "node_modules/homecheck/lib/run.js")) ||
+      !isFile(path.join(root, "extrulesproject-1.0.0.tgz"))
+    )
+      throw new Error(
+        "ARKTS_REFACTOR_HOMECHECK 指定的 HomeCheck 无效：" + root,
+      );
+    return root;
+  }
   return (
     [
       path.join(workspace, "homecheck-extrule"),
@@ -304,18 +316,67 @@ export async function runInteractive(
   mode: "required" | "skip" = "required",
 ): Promise<Json> {
   const data = await readPastedJson(),
-    started = now(),
+    workspace = discoverWorkspace(data, workspaceHint ?? process.cwd());
+  return runTasks(baseDir, workspace, data, undefined, mode);
+}
+export async function runTasks(
+  baseDir: string,
+  workspace: string,
+  data: Json[],
+  selectedTasks?: RefactorTask[],
+  mode: "required" | "skip" = "required",
+  dryRun = false,
+  metadata: Json = {},
+): Promise<Json> {
+  const started = now(),
     d = new Date(),
     pad = (n: number) => String(n).padStart(2, "0"),
     name = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`,
-    session = path.join(baseDir, "runs", name);
-  fs.mkdirSync(session, { recursive: true });
+    runsRoot = path.join(baseDir, "runs");
+  fs.mkdirSync(runsRoot, { recursive: true });
+  const session = fs.mkdtempSync(path.join(runsRoot, name + "-"));
   const input = path.join(session, "input.json");
   writeJson(input, data);
-  const workspace = discoverWorkspace(data, workspaceHint ?? process.cwd()),
-    tools = discoverTools(workspace),
-    tasks = loadDatasetTasks(input, workspace),
+  const tools = dryRun ? {} : discoverTools(workspace),
+    tasks = selectedTasks ?? loadDatasetTasks(input, workspace),
     summary: Json[] = [];
+  writeJson(path.join(session, "manifest.json"), {
+    ...metadata,
+    workspace,
+    dryRun,
+    tools,
+    total: tasks.length,
+    tasks,
+  });
+  if (dryRun) {
+    console.log(
+      `预览：共 ${tasks.length} 条，不启动 Agent 或验证工具\n任务清单：${path.join(session, "manifest.json")}`,
+    );
+    return { sessionDir: session, workspace, dryRun: true, tasks };
+  }
+  const saveSummary = () => {
+    const counts = Object.fromEntries(
+      ["PASS", "FAIL", "BLOCKED", "INCOMPLETE"].map((v) => [
+        v,
+        summary.filter((t) => t.verdict === v).length,
+      ]),
+    );
+    const final = {
+      sessionDir: session,
+      workspace,
+      counts,
+      total: tasks.length,
+      completed: summary.length,
+      remaining: tasks.length - summary.length,
+      durationSeconds: round(now() - started),
+      tasks: summary,
+      validationPolicy: { linterMode: mode },
+      ...metadata,
+    };
+    writeJson(path.join(session, "summary.json"), final);
+    return final;
+  };
+  saveSummary();
   console.log(`已接收 ${tasks.length} 条异味\n本地仓库根目录：${workspace}`);
   console.log(
     "工具发现：" +
@@ -326,47 +387,54 @@ export async function runInteractive(
   console.log("Linter 模式：" + mode);
   for (const [i, task] of tasks.entries()) {
     const taskStarted = now(),
-      taskDir = path.join(session, task.task_id),
-      { risk, smoke, contract } = prepareTask(task, taskDir, mode);
-    console.log(
-      `\n[${i + 1}/${tasks.length}] ${task.target.symbol ?? task.target.file_path}\n  静态风险：${risk.riskLevel}；Refactor Agent 仅接收生产代码与重构规范`,
-    );
-    const config = autoConfig(task, taskDir, tools, smoke, contract, mode);
-    writeJson(path.join(taskDir, "effective-config.json"), config);
-    const result = await executePipeline(
-      taskDir,
-      config,
-      false,
-      (name, status) => console.log(`  ${name}: ${status}`),
-      taskStarted,
-    );
-    console.log(
-      `  最终结果：${result.verdict}；总耗时：${result.durationSeconds.toFixed(1)} 秒${result.timedOut ? "（已达到20分钟上限）" : ""}`,
-    );
-    summary.push({
-      taskId: task.task_id,
-      target: task.target.symbol ?? task.target.file_path,
-      verdict: result.verdict,
-      durationSeconds: result.durationSeconds,
-      timedOut: result.timedOut,
-      taskDir,
-    });
+      taskDir = path.join(session, task.task_id);
+    try {
+      const { risk, smoke, contract } = prepareTask(task, taskDir, mode);
+      console.log(
+        `\n[${i + 1}/${tasks.length}] ${task.target.symbol ?? task.target.file_path}\n  静态风险：${risk.riskLevel}；Refactor Agent 仅接收生产代码与重构规范`,
+      );
+      const config = autoConfig(task, taskDir, tools, smoke, contract, mode);
+      writeJson(path.join(taskDir, "effective-config.json"), config);
+      const result = await executePipeline(
+        taskDir,
+        config,
+        false,
+        (name, status) => console.log(`  ${name}: ${status}`),
+        taskStarted,
+      );
+      console.log(
+        `  最终结果：${result.verdict}；总耗时：${result.durationSeconds.toFixed(1)} 秒${result.timedOut ? "（已达到20分钟上限）" : ""}`,
+      );
+      summary.push({
+        taskId: task.task_id,
+        smellType: task.smell_type,
+        testKind: task.raw.testKind ?? null,
+        target: task.target.symbol ?? task.target.file_path,
+        verdict: result.verdict,
+        durationSeconds: result.durationSeconds,
+        timedOut: result.timedOut,
+        taskDir,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const result = {
+        taskId: task.task_id,
+        target: task.target.symbol ?? task.target.file_path,
+        smellType: task.smell_type,
+        testKind: task.raw.testKind ?? null,
+        verdict: "BLOCKED",
+        durationSeconds: round(now() - taskStarted),
+        reason,
+        taskDir,
+      };
+      writeJson(path.join(taskDir, "result.json"), result);
+      summary.push(result);
+      console.error(`  ${task.task_id}: BLOCKED；${reason}`);
+    }
+    saveSummary();
   }
-  const counts = Object.fromEntries(
-      ["PASS", "FAIL", "BLOCKED", "INCOMPLETE"].map((v) => [
-        v,
-        summary.filter((t) => t.verdict === v).length,
-      ]),
-    ),
-    final = {
-      sessionDir: session,
-      workspace,
-      counts,
-      durationSeconds: round(now() - started),
-      tasks: summary,
-      validationPolicy: { linterMode: mode },
-    };
-  writeJson(path.join(session, "summary.json"), final);
+  const final = saveSummary(),
+    counts = final.counts;
   console.log(
     "\n完成：" +
       Object.entries(counts)

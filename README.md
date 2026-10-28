@@ -36,17 +36,34 @@ npm start
 
 看到粘贴提示后输入完整 JSON，程序会自动开始。无需安装全局命令，也不用给本项目单独配置 PATH。
 
+自动化批量跑全测试集脚本：
+
+```sh
+npm run batch -- --workspace "D:\ROG\Documents\harmonyos\test_supplement"
+```
+
 ## 2. 外部工具和工作区
 
 本工具负责调用本机已安装的工具：DevEco Code（`deveco`）、Hvigor（`hvigorw`）、ohpm、CodeLinter（`codelinter`）和 HomeCheck。前四项按当前进程的 PATH 查找；本项目本身无需加入 PATH。`doctor` 只检查路径，不能代替 Agent 登录、SDK、签名、网络或设备的实际验证。
 
 HomeCheck 从以下位置依次查找：
 
+如需与工作区分开指定，设置环境变量 `ARKTS_REFACTOR_HOMECHECK`，它优先于以下自动查找路径。显式路径无效会报错，不会回退使用其他版本。例如 PowerShell：
+
+```powershell
+$env:ARKTS_REFACTOR_HOMECHECK = "D:/ROG/Documents/harmonyos/二阶段上传文件留存/homecheck-extrule"
+npm start -- --workspace "D:/ROG/Documents/harmonyos/test_supplement"
+```
+
+该环境变量只影响当前终端及其子进程，不改变待重构仓库的位置。未设置时按以下顺序查找：
+
 1. `<工作区>/homecheck-extrule`
 2. `<工作区上一级>/homecheck-extrule`
 3. `<当前启动目录>/homecheck-extrule`
 
 候选必须包含 `node_modules/homecheck/lib/run.js` 和 `extrulesproject-1.0.0.tgz`；扫描还需要 `config/projectConfig.json`、`config/ruleConfig.json` 和 `scan:files` 脚本。
+
+重构复检会传入 `--perf=false --f1=false`，只做异味检测，不调用 CLOC、不统计吞吐量，也不计算数据集 F1。因此复检不依赖 CLOC；HomeCheck 需支持这两个参数同时关闭时仍执行检测。HomeCheck 常规性能实验的默认行为不变。
 
 工作区结构例如：
 

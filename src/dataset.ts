@@ -48,7 +48,15 @@ export function loadDatasetTasks(
       ? parentKind
       : null;
   const kinds = new Map<string, string | null>();
-  if (!datasetKind)
+  if (
+    !datasetKind &&
+    data.some(
+      (r) =>
+        r &&
+        Array.isArray(r.messages) &&
+        r.messages.some((m: Json) => !r.testKind && !m?.testKind),
+    )
+  )
     for (const kind of ["local-test", "instrument-test"])
       for (const p of walk(
         path.join(workspace, "arkts-code-smell/dataset/positive", kind),

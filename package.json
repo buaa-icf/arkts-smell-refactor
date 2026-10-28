@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli.js start",
+    "batch": "node dist/cli.js batch",
     "cli": "node dist/cli.js",
     "test": "npm run build && node --test dist-tests/tests/*.test.js",
     "pretest": "tsc -p tsconfig.test.json"

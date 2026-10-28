@@ -170,6 +170,7 @@ export async function hvigorGate(
   const toolRoot = path.resolve(fileURLToPath(import.meta.url), "../.."),
     short = crypto.createHash("sha1").update(taskDir).digest("hex").slice(0, 8),
     workspace = path.join(toolRoot, "v", short);
+  ensureValidationModuleScope(path.dirname(workspace));
   writeJson(path.join(taskDir, "validation-workspace.json"), {
     path: workspace,
     sourceRoot: source,
@@ -197,7 +198,19 @@ export async function hvigorGate(
     [...hvigorLauncher(hvigor), taskName, "--no-daemon"],
     { cwd: workspace, env: devecoEnvironment(hvigor), stream: true },
   );
+  if (/ERR_REQUIRE_ESM/.test(result.output) && /hvigorfile\.js/.test(result.output)) {
+    console.error("BUILD_GATE_BLOCKED: Hvigor 构建脚本模块环境冲突，不能归因于生产代码重构");
+    return 3;
+  }
   return result.code ?? 3;
+}
+export function ensureValidationModuleScope(storageRoot: string): void {
+  // This boundary belongs to the tool, not to any copied/source Harmony project.
+  // Preserve project-level package.json files, which take precedence over it.
+  writeJson(path.join(storageRoot, "package.json"), {
+    private: true,
+    type: "commonjs",
+  });
 }
 export function parseLinterIssues(output: string, fallback: string): Json[] {
   return [

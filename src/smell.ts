@@ -158,6 +158,7 @@ export async function smellGate(
         "scan:files",
         "--",
         "--f1=false",
+        "--perf=false",
         "--dashboard=false",
         "--files=" + relativeFiles.join(","),
         "--baseProjectConfig=" + projectConfig,

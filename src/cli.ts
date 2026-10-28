@@ -3,7 +3,13 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { discoverTools, prepareTask, runInteractive } from "./automatic.js";
+import {
+  discoverTools,
+  prepareTask,
+  runInteractive,
+  runTasks,
+} from "./automatic.js";
+import { loadBatch } from "./batch.js";
 import { loadDatasetTasks } from "./dataset.js";
 import { executePipeline, loadConfig } from "./runner.js";
 import { isDir, isFile, readJson, writeJson } from "./utils.js";
@@ -29,6 +35,7 @@ const HELP = `ArkTS 异味重构工具（TypeScript / Node.js）
 node dist/cli.js configure --workspace <仓库总目录>
 node dist/cli.js doctor [--workspace <仓库总目录>]
 node dist/cli.js start [--workspace <仓库总目录>] [--linter-mode required|skip]
+node dist/cli.js batch [--workspace <仓库总目录>] [--dry-run]
 node dist/cli.js prepare --dataset <JSON> --workspace <仓库总目录> --output <任务目录> [--index N]
 node dist/cli.js run --task-dir <任务目录> --config <JSON> [--dry-run]
 
@@ -114,7 +121,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.log("verdict: " + result.verdict);
     return ["PASS", "DRY_RUN"].includes(result.verdict) ? 0 : 2;
   }
-  if (command === "start") {
+  if (command === "start" || command === "batch") {
     const mode = values["linter-mode"];
     if (mode !== "required" && mode !== "skip")
       throw new Error("--linter-mode 必须为 required 或 skip");
@@ -122,6 +129,26 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       path.dirname(fileURLToPath(import.meta.url)),
       "..",
     );
+    if (command === "batch") {
+      const workspace = defaultWorkspace(values.workspace);
+      if (!workspace)
+        throw new Error("请先 configure --workspace 或传入 --workspace");
+      const batch = loadBatch(workspace);
+      console.log("四类异味：" + JSON.stringify(batch.metadata.smellCounts));
+      const final = await runTasks(
+        base,
+        workspace,
+        batch.data,
+        batch.tasks,
+        mode,
+        values["dry-run"] ?? false,
+        batch.metadata,
+      );
+      return final.dryRun ||
+        final.tasks.every((t: { verdict: string }) => t.verdict === "PASS")
+        ? 0
+        : 2;
+    }
     const final = await runInteractive(
       base,
       defaultWorkspace(values.workspace),

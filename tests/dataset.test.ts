@@ -6,7 +6,7 @@ import {
   normalizeInput,
   relatedTargets,
 } from "../src/dataset.js";
-import { autoConfig } from "../src/automatic.js";
+import { autoConfig, findHomecheck } from "../src/automatic.js";
 import {
   buildRefactorPrompt,
   buildRepairPrompt,
@@ -32,6 +32,26 @@ const record = {
     },
   ],
 };
+test("HomeCheck 可独立于工作区指定，路径无效时禁止静默回退", (t) => {
+  const root = fixture(t), workspace = path.join(root, "workspace"),
+    scanner = path.join(root, "二阶段/homecheck-extrule");
+  for (const dir of [path.join(workspace, "homecheck-extrule"), scanner]) {
+    writeText(path.join(dir, "node_modules/homecheck/lib/run.js"), "");
+    writeText(path.join(dir, "extrulesproject-1.0.0.tgz"), "fixture");
+  }
+  const previous = process.env.ARKTS_REFACTOR_HOMECHECK;
+  try {
+    delete process.env.ARKTS_REFACTOR_HOMECHECK;
+    assert.equal(findHomecheck(workspace), path.join(workspace, "homecheck-extrule"));
+    process.env.ARKTS_REFACTOR_HOMECHECK = scanner;
+    assert.equal(findHomecheck(workspace), scanner);
+    process.env.ARKTS_REFACTOR_HOMECHECK = path.join(root, "missing");
+    assert.throws(() => findHomecheck(workspace), /指定的 HomeCheck 无效/);
+  } finally {
+    if (previous === undefined) delete process.env.ARKTS_REFACTOR_HOMECHECK;
+    else process.env.ARKTS_REFACTOR_HOMECHECK = previous;
+  }
+});
 test("粘贴对象和数组保持标准数据格式", () => {
   assert.deepEqual(normalizeInput(record), [record]);
   assert.deepEqual(normalizeInput([record]), [record]);

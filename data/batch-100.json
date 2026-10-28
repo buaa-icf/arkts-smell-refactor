@@ -1,0 +1,1562 @@
+[
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/pages/wifi.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 340,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'isNeedRenderConnectedWiFi' is feature-envious toward 'WiFiMenuModel' (ATFD=5, LDA=0.17, CPFD=1). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/comp/AccountCard.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "621b5f966691fd276e1618b979065ea77f47ef26",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 31,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'updateBookCoins' is feature-envious toward 'AppStorage' (ATFD=5, LDA=0.00, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/RechargePage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c21e0a6ca8bc7fe40af7557ca325954e0fab9968",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 25,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'updateBookCoins' is feature-envious toward 'AppStorage' (ATFD=5, LDA=0.00, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/commons/src/main/ets/model/User.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "9dddb6a48a5ec8d5016d3ef49e075e34d45665c8",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 81,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'toBasicUserInfo' is highly coupled to 'BasicUserInfo' (8/8 calls, 100%). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/components/answer_questions/src/main/ets/components/AnswerQuestionsPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "d35e3a2c7142868cbf5d5f318499631299306499",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 709,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'transTopicItemModel' is highly coupled to 'AnswerItem' (4/5 calls, 80%). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/TravelTemplate/FullServiceHotel/features/service/hotel/src/main/ets/viewmodels/HotelOrderPageVM.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "d35e3a2c7142868cbf5d5f318499631299306499",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 28,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'initData' is highly coupled to 'DatePickerPanelVM' (5/6 calls, 83%). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/MedicalTemplate/MedicalCare/features/patient/src/main/ets/viewmodel/PatientViewModel.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 147,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'checkPatientInfo' is feature-envious toward 'PatientModel' (ATFD=21, LDA=0.00, CPFD=1). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/ShoppingMall/features/business_home/src/main/ets/viewmodel/StoreGuideDetailViewModel.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "69b8b81ae984e1d95ca344cf3449040619a4ac0a",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 8,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'getParams' is feature-envious toward 'GuideRouter' (ATFD=20, LDA=0.00, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/scenes/position/src/main/ets/viewModels/TransactionInfoVM.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 36,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'getTransactionRecordInfo' is feature-envious toward 'ITransactionInfo|undefined' (ATFD=19, LDA=0.14, CPFD=1). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/HouseholdService/features/business_home/src/main/ets/viewmodel/OrderVM.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 143,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'getTotalCash' is feature-envious toward '@%unk/%unk: GoodInfo|@agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/HouseholdService/features/business_home/src/main/ets/viewmodel/OrderVM.ets: OrderVM' (ATFD=13, LDA=0.13, CPFD=1). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/Express/commons/lib_foundation/src/main/ets/model/ObserveModel.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "0e3a54372f8117e4ca2c0dd6ade6103e590af04e",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 76,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'updateUserInfo' is feature-envious toward 'IUserInfo' (ATFD=12, LDA=0.00, CPFD=1). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_order/src/main/ets/viewModels/OrderInfoPageVM.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 45,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'getOrderInfo' is feature-envious toward 'IOrderInfo|undefined' (ATFD=11, LDA=0.15, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BusinessTemplate/EnterpriseRecruitment/product/phone/src/main/ets/pages/mine/AvatarUpload.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "262956742f1daf990b21d316e397d55cb7f15496",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 289,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'checkImageAdapt' is highly coupled to 'CropModel' (5/6 calls, 83%). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 311,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'drawClipImage' is feature-envious toward 'CanvasPath' (ATFD=29, LDA=0.26, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/features/user/src/main/ets/pages/UserDetail.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 76,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'initialiseEnumField' is feature-envious toward '@%unk/%unk: UserFullInfo|@agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/features/user/src/main/ets/pages/UserDetail.ets: MyDetailPage' (ATFD=44, LDA=0.20, CPFD=1). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/features/user/src/main/ets/pages/UserDetail.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 102,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'initialiseUserInfoTextField' is feature-envious toward '@%unk/%unk: UserInfo|@agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/features/user/src/main/ets/pages/UserDetail.ets: MyDetailPage' (ATFD=20, LDA=0.20, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/TravelTemplate/FullServiceHotel/features/service/hotel/src/main/ets/pages/HotelOrderPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 218,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'formInputStyle' is feature-envious toward 'TextInputAttribute' (ATFD=12, LDA=0.00, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EntertainmentTemplate/MuseumTicket/features/mine/src/main/ets/pages/AddVisitorPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 24,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'cloneContact' is feature-envious toward 'MinePageVM' (ATFD=11, LDA=0.31, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EntertainmentTemplate/MuseumTicket/features/mine/src/main/ets/pages/EditVisitorPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 23,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'cloneContact' is feature-envious toward 'MinePageVM' (ATFD=11, LDA=0.31, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/features/feed/src/main/ets/pages/FeedListPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 388,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'setClickLike' is feature-envious toward 'Feed|null' (ATFD=11, LDA=0.21, CPFD=2). Consider moving logic or introducing delegation.",
+        "rule": "@extrulesproject/feature-envy-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/model/accessibilityImpl/AccessibilitySettingModel.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 32,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'accessibilityConfigSetting' is too long. Consider refactoring. (Current: 68 lines, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/pages/vpn/ipsecVpnEdit.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 60,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'initCertList' is too long. Consider refactoring. (Current: 82 lines, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/MedicalTemplate/MedicalCare/common/common/src/main/ets/api/BaseApi.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c21e0a6ca8bc7fe40af7557ca325954e0fab9968",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 67,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'sendRequest' is too long. Consider refactoring. (Current: 111 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/MedicalTemplate/MedicalCare/features/patient/src/main/ets/viewmodel/PatientViewModel.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 147,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'checkPatientInfo' is too long. Consider refactoring. (Current: 117 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/NavigationTemplate/AirTrip/Application/features/flight/src/main/ets/pages/SubmitOrderPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 98,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'submitOrder' is too long. Consider refactoring. (Current: 103 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 413,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'moveClipCanvasFreeType' is too long. Consider refactoring. (Current: 149 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 501,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'moveClipCanvasRatioType' is too long. Consider refactoring. (Current: 189 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/SocialTemplate/SocialDating/features/user/src/main/ets/pages/UserDetail.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "778036397d23decbd39e5c7e3a680c8221e4125c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 606,
+        "column": 3,
+        "severity": "WARN",
+        "message": "Method 'UploadProfilePicDialogBuilder' is too long. Consider refactoring. (Current: 84 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/components/reader_tool_bar/src/main/ets/components/ReaderToolBar.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 198,
+        "column": 3,
+        "severity": "WARN",
+        "message": "Method 'buildSettingSheet' is too long. Consider refactoring. (Current: 113 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_home/src/main/ets/views/SearchPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 88,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 125 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/comp/MyInfoCard.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 145,
+        "column": 3,
+        "severity": "WARN",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 104 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/AboutPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 68,
+        "column": 3,
+        "severity": "WARN",
+        "message": "Method 'aboutCardView' is too long. Consider refactoring. (Current: 115 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/FeedbackPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 25,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 127 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/LoginPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 233,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 161 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/MemberAgreementPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 7,
+        "column": 3,
+        "severity": "WARN",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 116 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/MemberCenterPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 29,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 176 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/RechargePage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 37,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 151 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_read_kit/src/main/ets/components/BookCoverCard.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 42,
+        "column": 3,
+        "severity": "WARN",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 94 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/ComprehensiveMall/commons/lib_foundation/src/main/ets/featurecomponents/tabswiper/TabSwiper.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "37fedd6f29f14a6dc6ec41252556d309ffcbd8db",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 230,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'onTabSwiperAttributeChange' is too long. Consider refactoring. (Current: 125 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/components/swiper_card/src/main/ets/components/TUISwiper.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 68,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'initDataByIsCovered' is too long. Consider refactoring. (Current: 136 statements, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ToolsTemplate/SmartHome/features/device_service/src/main/ets/pages/QuickLoginPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c21e0a6ca8bc7fe40af7557ca325954e0fab9968",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 103,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'handleLoginWithHuaweiIDButton' is too long. Consider refactoring. (Current: 55 lines, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BusinessTemplate/OfficeAttendance/scenes/agency/src/main/ets/agency/components/AgencyTaskCalender.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 128,
+        "column": 3,
+        "severity": "ERROR",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 150 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BusinessTemplate/OfficeAttendance/scenes/schedule/src/main/ets/schedule/components/ScheduleForm.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 255,
+        "column": 3,
+        "severity": "ERROR",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 328 lines, Max: 120)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FoodAndDrinkTemplate/TeaDrinkOrders/features/order/src/main/ets/pages/GoodDetailPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 287,
+        "column": 34,
+        "severity": "ERROR",
+        "message": "Method '%AM19$goodPkgComp' is too long. Consider refactoring. (Current: 77 lines, Max: 50)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ToolsTemplate/SmartHome/features/device_service/src/main/ets/view/AgreementView.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 54,
+        "column": 3,
+        "severity": "SUGGESTION",
+        "message": "Method 'build' is too long. Consider refactoring. (Current: 82 lines, Max: 80)",
+        "rule": "@extrulesproject/long-method-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/model/accessibilityImpl/AccessibilitySettingModel.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 3,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 10 cases detected in method 'accessibilityConfigSetting'. Consider using polymorphism or strategy. Case line counts: 'highContrastText' (7 lines); 'invertColor' (7 lines); 'animationOff' (7 lines); 'audioMono' (7 lines); 'mouseKey' (7 lines); 'shortKey' (7 lines); 'captions' (7 lines); 'daltonizationState' (7 lines); 'ignoreRepeatClick' (7 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/pages/accessibilityScreenTouch.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 4,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 6 cases detected in method 'setNumberBecomeValue'. Consider using polymorphism or strategy. Case line counts: 0 (4 lines); 25 (4 lines); 50 (4 lines); 75 (4 lines); 100 (4 lines); default (5 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/pages/vpn/ipsecVpnEdit.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 6 cases detected in method 'updateCaServerCertVisibility'. Consider using polymorphism or strategy. Case line counts: VpnTypeModel.TYPE_IKEV2_IPSEC_MSCHAPv2 (1 line); VpnTypeModel.TYPE_IKEV2_IPSEC_RSA (1 line); VpnTypeModel.TYPE_L2TP_IPSEC_RSA (1 line); VpnTypeModel.TYPE_IPSEC_XAUTH_RSA (1 line); VpnTypeModel.TYPE_IPSEC_HYBRID_RSA (3 lines); default (3 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/pages/vpn/ipsecVpnEdit.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 6 cases detected in method 'updateIpsecIdentifierVisibility'. Consider using polymorphism or strategy. Case line counts: VpnTypeModel.TYPE_IKEV2_IPSEC_MSCHAPv2 (1 line); VpnTypeModel.TYPE_IKEV2_IPSEC_PSK (1 line); VpnTypeModel.TYPE_IKEV2_IPSEC_RSA (1 line); VpnTypeModel.TYPE_L2TP_IPSEC_PSK (1 line); VpnTypeModel.TYPE_IPSEC_XAUTH_PSK (3 lines); default (3 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_settings/product/phone/src/main/ets/pages/vpn/vpnLine.ets",
+    "sourceProject": "applications_settings",
+    "commitHash": "2b5f9146ba664424f2987983e4dab7e92f436fef",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 118,
+        "column": 5,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 6 cases detected in method 'onConnectStateChange'. Consider using polymorphism or strategy. Case line counts: VpnConstant.VPN_STATE_CONNECTING (3 lines); VpnConstant.VPN_STATE_CONNECTED (3 lines); VpnConstant.VPN_STATE_DISCONNECTING (3 lines); VpnConstant.VPN_STATE_DISCONNECTED (3 lines); VpnConstant.VPN_STATE_CONNECT_FAILED (3 lines); default (6 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "applications_photos/feature/editor/src/main/ets/default/view/CropStyleBar.ets",
+    "sourceProject": "applications_photos",
+    "commitHash": "7684e29e1d71d68983eb3bf06927834ad9eff688",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 130,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Long if-else chain with 8 branches detected in method 'onRotateClicked'. Consider using polymorphism or strategy.",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/MoneyTrack/components/bill_data_processing/src/main/ets/utils/basedb/BaseDB.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "6541b36921f815ecb75450bcb50486f72476e4cd",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 281,
+        "column": 5,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 13 cases detected in method '_buildPredicates'. Consider using polymorphism or strategy. Case line counts: DBOperator.EQUAL (3 lines); DBOperator.NOT_EQUAL (3 lines); DBOperator.GREATER (3 lines); DBOperator.GREATER_OR_EQUAL (3 lines); DBOperator.LESS (3 lines); DBOperator.LESS_OR_EQUAL (3 lines); DBOperator.LIKE (3 lines); DBOperator.IS_NULL (3 lines); DBOperator.IS_NOT_NULL (3 lines); DBOperator.BEGIN_WITH (3 lines); DBOperator.END_WITH (3 lines); DBOperator.CONTAIN (3 lines); default (5 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/MoneyTrack/components/bill_manage/src/main/ets/components/CustomKeyboard.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "55a58abb4cfca378cf880570caf7ea6596b3c135",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 4,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'handleClick'. Consider using polymorphism or strategy. Case line counts: CustomKeyboardButtonType.NUMBER (3 lines); CustomKeyboardButtonType.CALENDAR (3 lines); CustomKeyboardButtonType.SUBTRACTION (5 lines); CustomKeyboardButtonType.ADDITION (5 lines); CustomKeyboardButtonType.POINT (6 lines); CustomKeyboardButtonType.DELETE (8 lines); CustomKeyboardButtonType.CONFIRM (3 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BusinessTemplate/Notes/components/secretlock/src/main/ets/util/AuthUtil.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "4388a85a0d794cc3ac76b2d49e4032a9966bad62",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Long if-else chain with 15 branches detected in method 'getErrorMsg'. Consider using polymorphism or strategy.",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/CarsTemplate/DriverLicenseExam/commons/datasource/src/main/ets/ExamService.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "55a58abb4cfca378cf880570caf7ea6596b3c135",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 5,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 15 cases detected in method 'getExamQuestionList'. Consider using polymorphism or strategy. Case line counts: EXAM_MANAGER_TYPE.sequence (3 lines); EXAM_MANAGER_TYPE.random (4 lines); EXAM_MANAGER_TYPE.chapter_name (8 lines); EXAM_MANAGER_TYPE.easy (3 lines); EXAM_MANAGER_TYPE.simple (3 lines); EXAM_MANAGER_TYPE.normal (3 lines); EXAM_MANAGER_TYPE.mistake (5 lines); EXAM_MANAGER_TYPE.difficult (3 lines); EXAM_MANAGER_TYPE.single (3 lines); EXAM_MANAGER_TYPE.multi (3 lines); EXAM_MANAGER_TYPE.judging (3 lines); EXAM_MANAGER_TYPE.error (3 lines); EXAM_MANAGER_TYPE.collect (3 lines); EXAM_MANAGER_TYPE.search (3 lines); EXAM_MANAGER_TYPE.mock_exam (3 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/CarsTemplate/DriverLicenseExam/products/entry/src/main/ets/pages/specialExercises/SpecialExercisesView.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8491a4b9ea2846ad2f29dc2c665b9a0cc079c303",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 29,
+        "column": 5,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 7 cases detected in method 'setQuestionCount'. Consider using polymorphism or strategy. Case line counts: EXAM_MANAGER_TYPE.easy (3 lines); EXAM_MANAGER_TYPE.simple (3 lines); EXAM_MANAGER_TYPE.normal (3 lines); EXAM_MANAGER_TYPE.mistake (3 lines); EXAM_MANAGER_TYPE.difficult (7 lines); EXAM_MANAGER_TYPE.single (3 lines); EXAM_MANAGER_TYPE.judging (5 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/ArtTraining/Application/feature/mine/src/main/ets/utils/OrderUtil.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "217329ee5331c096323a78a1dad5c32ff807269e",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'handleOrderOperation'. Consider using polymorphism or strategy. Case line counts: OrderActionMap.IMMEDIATE_PAYMENT (3 lines); OrderActionMap.CANCEL_ORDER (3 lines); OrderActionMap.CONTACT_CUSTOMER_SERVICE (11 lines); OrderActionMap.REQUEST_REFUND (3 lines); OrderActionMap.CANCEL_REFUND (3 lines); OrderActionMap.REORDER (6 lines); OrderActionMap.DELETE (3 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/commons/commonlib/src/main/ets/utils/FormatUtil.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "37fedd6f29f14a6dc6ec41252556d309ffcbd8db",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 121,
+        "column": 5,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 10 cases detected in method 'getTransactionStateTitle'. Consider using polymorphism or strategy. Case line counts: 1 (2 lines); 2 (2 lines); 3 (2 lines); 4 (2 lines); default (5 lines); 1 (2 lines); 2 (2 lines); 3 (2 lines); 4 (2 lines); default (7 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FoodAndDrinkTemplate/TeaDrinkOrders/commons/common/src/main/ets/mock/MockResponse.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b516ad48c1532e8c313354b9b6cbfce530b0c457",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 4,
+        "column": 2,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 29 cases detected in method 'getMockResponse'. Consider using polymorphism or strategy. Case line counts: RequestUrl.GET_HM_SYSTEM_URL (2 lines); RequestUrl.GET_LOGIN_HM_URL (2 lines); RequestUrl.MODIFY_USER_INFO (2 lines); RequestUrl.GET_OPEN_LOGIN_HM_URL (2 lines); RequestUrl.GET_CLOSE_LOGIN_HM_URL (2 lines); RequestUrl.GET_COUPONS_URL (2 lines); RequestUrl.GET_STORE_LIST_URL (2 lines); RequestUrl.GET_STORE_INFO_URL (2 lines); RequestUrl.GET_DISHES_LIST_URL (2 lines); RequestUrl.GET_DEL_CAR_URL (2 lines); RequestUrl.GET_ADD_DN_ORDER_URL (2 lines); RequestUrl.GET_MY_ORDER_URL (2 lines); RequestUrl.GET_CANCEL_ORDER_URL (2 lines); RequestUrl.GET_ORDER_INFO_URL (2 lines); RequestUrl.LQ_COUPONS_URL (2 lines); RequestUrl.GET_MY_CAR_URL (2 lines); RequestUrl.GET_UPD_CAR_URL (2 lines); RequestUrl.GET_GOOD_INFO_URL (2 lines); RequestUrl.GET_GOOD_SPEC_URL (2 lines); RequestUrl.GET_ADD_CAR_URL (2 lines); RequestUrl.GET_MY_COUPONS_URL (2 lines); RequestUrl.GET_DELETE_ORDER_URL (2 lines); RequestUrl.GET_HUAWEI_PAY_INFO_URL (2 lines); RequestUrl.GET_USER_ADDRESS_LIST (2 lines); RequestUrl.GET_USER_ADDRESS (2 lines); RequestUrl.MODIFY_USER_ADDRESS (2 lines); RequestUrl.DELETE_USER_ADDRESS (2 lines); RequestUrl.GET_PRIVACY_INFO (2 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/HealthAndFitnessTemplate/FitnessCenter/common/external_interactions/src/main/ets/Service/MockService.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "9f6bd02dccf8ab5645ba00970b2184f14bbd017b",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 6 cases detected in method 'getBookStateString'. Consider using polymorphism or strategy. Case line counts: BookState.ALL (2 lines); BookState.TO_BE_USE (2 lines); BookState.COMPLETED (2 lines); BookState.EXPIRED (2 lines); BookState.CANCELED (2 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/HouseholdService/commons/lib_foundation/src/main/ets/http/HttpMockMap.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "df8720db99075978371a5a00c82c4404aad09273",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 24,
+        "column": 2,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'MockApi'. Consider using polymorphism or strategy. Case line counts: URL_MAP.LOGIN_WITH_HUAWEI_ID (2 lines); URL_MAP.GET_USER_INFO (2 lines); URL_MAP.UPDATE_USER_INFO (2 lines); URL_MAP.GET_HOME_INFO (2 lines); URL_MAP.UPDATE_CITY_SELECTED (2 lines); URL_MAP.UPDATE_CITY_CURRENT (2 lines); URL_MAP.GET_CATEGORY_INFO (2 lines); URL_MAP.GET_GOOD_LIST (2 lines); URL_MAP.GET_GOOD (2 lines); URL_MAP.PRE_ORDER (2 lines); URL_MAP.PAY_ORDER (2 lines); URL_MAP.GET_ORDER_LIST (2 lines); URL_MAP.GET_ORDER (2 lines); URL_MAP.REFUND (2 lines); URL_MAP.CANCEL_ORDER (2 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/LifeBeauty/commons/utils/src/main/ets/http/AxiosBase.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "cb41eed7ca7ca350c4fab8c8884aa1bb7f698235",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 53,
+        "column": 2,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 21 cases detected in method 'getMockResponse'. Consider using polymorphism or strategy. Case line counts: URL_MAP.LOGIN_WITH_HUAWEI_ID (2 lines); URL_MAP.REFRESH_TOKEN (2 lines); URL_MAP.BIND_MOBILE_WITH_CODE (2 lines); URL_MAP.CONFIRM_REBIND_MOBILE (2 lines); URL_MAP.GET_USER_INFO (2 lines); URL_MAP.UNBIND_MOBILE (2 lines); URL_MAP.GET_STORE_INFO (2 lines); URL_MAP.GET_STORE_LIST (2 lines); URL_MAP.GET_GOOD_LIST (2 lines); URL_MAP.GET_APPOINTMENT_LIST (2 lines); URL_MAP.CREATE_APPOINTMENT_INFO (2 lines); URL_MAP.UPDATE_APPOINTMENT_INFO (2 lines); URL_MAP.CANCEL_APPOINTMENT (2 lines); URL_MAP.ACTIVE_MEMBER_CARD (2 lines); URL_MAP.GET_SINGLE_VISIT_CARD_LIST (2 lines); URL_MAP.GET_GROUP_LIST (2 lines); URL_MAP.PRE_ORDER (2 lines); URL_MAP.GET_MY_SINGLE_VISIT_CARD_LIST (2 lines); URL_MAP.GET_MY_GROUP_LIST (2 lines); URL_MAP.REFUND_GROUP (2 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/Parking/commons/componentLib/src/main/ets/components/CommonKeyboard.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "366bef4f9bddb95ebc4abb3999af1aeee0ab7aea",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'intDisableKey'. Consider using polymorphism or strategy. Case line counts: 1 (3 lines); 2 (1 line); 3 (1 line); 4 (1 line); 5 (1 line); 7 (3 lines); 6 (3 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/ShoppingMall/commons/lib_common/src/main/ets/httprequest/AxiosHttp.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "267b7149e3146d0579a4041aee76f9ed2f01581c",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 4,
+        "column": 2,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 16 cases detected in method 'getMockResponse'. Consider using polymorphism or strategy. Case line counts: RequestUrl.GET_SHOPPING_MALL_INFO_URL (2 lines); RequestUrl.GET_USER_INFO (2 lines); RequestUrl.ADD_PLATE_NUMBER (2 lines); RequestUrl.DELETE_PLATE_NUMBER (2 lines); RequestUrl.QUERY_PLATE_NUMBER (2 lines); RequestUrl.GET_OPEN_LOGIN_HM_URL (2 lines); RequestUrl.GET_CLOSE_LOGIN_HM_URL (2 lines); RequestUrl.GET_PAY_RECORD_LIST (2 lines); RequestUrl.GET_PAY_DETAIL (2 lines); RequestUrl.PAY_ORDER (2 lines); RequestUrl.MODIFY_USER_INFO (2 lines); RequestUrl.GET_MY_WALLET_LIST_URL (2 lines); RequestUrl.GET_SERVICE_URL (2 lines); RequestUrl.GET_STORE_GUIDE_URL (2 lines); RequestUrl.GET_PRIVACY_INFO (2 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/ShoppingMall/components/module_keyboard/src/main/ets/components/UILicensePlate.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "428d050edf09fed0550eafcc3c37eaaf700ea929",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'intDisableKey'. Consider using polymorphism or strategy. Case line counts: 1 (3 lines); 2 (1 line); 3 (1 line); 4 (1 line); 5 (1 line); 7 (3 lines); 6 (3 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/MovieTVAndLivestreamingTemplate/WebShortDrama/components/video_swiper/src/main/ets/view/VideoPlayView.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "538952eb404d1ce9aac8dc9f4c3be2e99a65ffc5",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 3,
+        "column": 6,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 10 cases detected in method 'setAVPlayerStateListen'. Consider using polymorphism or strategy. Case line counts: 'idle' (3 lines); 'initialized' (6 lines); 'prepared' (18 lines); 'playing' (6 lines); 'paused' (4 lines); 'stopped' (4 lines); 'completed' (8 lines); 'released' (3 lines); 'error' (4 lines); default (3 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/NavigationTemplate/Metro/features/Home/src/main/ets/functions/HomeFunctions.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "37fedd6f29f14a6dc6ec41252556d309ffcbd8db",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 2,
+        "column": 2,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'getColor'. Consider using polymorphism or strategy. Case line counts: '1号线' (2 lines); '2号线' (2 lines); '3号线' (2 lines); '4号线' (2 lines); '5号线' (2 lines); '10号线' (2 lines); 'S1号线' (2 lines); 'S3号线' (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/NewsTemplate/News/commons/network/src/main/ets/mock/MockResponse.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "4d0dddea65a6c2deab7e4c138abc02ae1187c08f",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 4,
+        "column": 2,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 27 cases detected in method 'getMockResponse'. Consider using polymorphism or strategy. Case line counts: RequestUrl.GET_HM_SYSTEM_URL (2 lines); RequestUrl.GET_LOGIN_HM_URL (2 lines); RequestUrl.GET_OPEN_LOGIN_HM_URL (2 lines); RequestUrl.GET_CLOSE_LOGIN_HM_URL (2 lines); RequestUrl.GET_COUPONS_URL (2 lines); RequestUrl.GET_STORE_INFO_URL (2 lines); RequestUrl.GET_TABLE_TITLE_URL (2 lines); RequestUrl.GET_ZHUO_HAO_URL (2 lines); RequestUrl.GET_DISHES_LIST_URL (2 lines); RequestUrl.GET_DEL_CAR_URL (2 lines); RequestUrl.GET_ADD_DN_ORDER_URL (2 lines); RequestUrl.GET_MY_ORDER_URL (2 lines); RequestUrl.GET_CANCEL_ORDER_URL (2 lines); RequestUrl.GET_ORDER_INFO_URL (2 lines); RequestUrl.GET_LQ_COUPONS_URL (2 lines); RequestUrl.GET_MY_CAR_URL (2 lines); RequestUrl.GET_UPD_CAR_URL (2 lines); RequestUrl.GET_GOOD_INFO_URL (2 lines); RequestUrl.GET_GOOD_SPEC_URL (2 lines); RequestUrl.GET_ADD_CAR_URL (2 lines); RequestUrl.GET_MY_COUPONS_URL (2 lines); RequestUrl.GET_HELP_URL (2 lines); RequestUrl.GET_IS_NEW_URL (2 lines); RequestUrl.GET_DELETE_ORDER_URL (2 lines); RequestUrl.GET_ADD_GOODS_URL (2 lines); RequestUrl.GET_HUAWEI_PAY_INFO_URL (2 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/NewsTemplate/News/features/mine/src/main/ets/utils/SetFontSizeUtil.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "9ff98885c9081e9d92be411ad76d9e9de48c9cb5",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 3,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 6 cases detected in method 'getTextByFontSize'. Consider using polymorphism or strategy. Case line counts: 12 (3 lines); 14 (3 lines); 16 (3 lines); 18 (3 lines); 20 (3 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/components/CarouseCutToolBar.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8060bd7f522db5e7fee45fe8eb38d5ceadb90d54",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 3,
+        "column": 4,
+        "severity": "SUGGESTION",
+        "message": "Switch statement with 8 cases detected in method 'getCropRatio'. Consider using polymorphism or strategy. Case line counts: 0 (3 lines); 1 (6 lines); 2 (3 lines); 3 (3 lines); 4 (3 lines); 5 (3 lines); 6 (3 lines); default (2 lines).",
+        "rule": "@extrulesproject/switch-statement-check"
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/ComprehensiveMall/modules/scene/shopping/src/main/ets/logic/CartPageLogic.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "4a64a51688f5fca031a870b7748157e280f0da87",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 139,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): CartPageLogic.ets:139-156 is similar to agc-template-market-harmonyos-demos/ShoppingTemplate/ComprehensiveMall/modules/scene/shopping/src/main/ets/logic/CartPageLogic.ets:238-255.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 139,
+        "rangeEnd": 156
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/ComprehensiveMall/scenes/shopping/src/main/ets/logic/CartPageLogic.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "572aa1adfb2890f44168c7efbce4d46bc5ee53f6",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 122,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): CartPageLogic.ets:122-139 is similar to agc-template-market-harmonyos-demos/ShoppingTemplate/ComprehensiveMall/scenes/shopping/src/main/ets/logic/CartPageLogic.ets:181-198.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 122,
+        "rangeEnd": 139
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_mine/src/main/ets/viewModels/EditNamePageVM.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "local-test",
+    "messages": [
+      {
+        "line": 10,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): EditNamePageVM.ets:10-49 is similar to agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_mine/src/main/ets/viewModels/EditPhonePageVM.ets:10-49.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 10,
+        "rangeEnd": 49
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/AboutPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b9445e27d154b3d9a800d9460f2773a56fd21bef",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 71,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): AboutPage.ets:71-124 is similar to agc-template-market-harmonyos-demos/BooksAndReferenceTemplate/BookRead/feature/book_person/src/main/ets/views/AboutPage.ets:128-185. (102 tokens, 26 lines)",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 71,
+        "rangeEnd": 124
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/BusinessTemplate/OfficeAttendance/scenes/agency/src/main/ets/mock/DataManager.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 13,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): DataManager.ets:13-33 is similar to agc-template-market-harmonyos-demos/BusinessTemplate/OfficeAttendance/scenes/schedule/src/main/ets/mock/DataManager.ets:13-33. (140 tokens, 29 lines)",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 13,
+        "rangeEnd": 33
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/CarsTemplate/DriverLicenseExam/products/entry/src/main/ets/pages/mine/PersonalSetting.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 71,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): PersonalSetting.ets:71-91 is similar to agc-template-market-harmonyos-demos/CarsTemplate/DriverLicenseExam/products/entry/src/main/ets/pages/mine/PersonalSetting.ets:93-113.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 71,
+        "rangeEnd": 91
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/components/login_info/src/main/ets/components/QuickLogin.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 311,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): QuickLogin.ets:311-370 is similar to agc-template-market-harmonyos-demos/EducationTemplate/Exam/components/login_info/src/main/ets/components/QuickLogin.ets:453-510.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 311,
+        "rangeEnd": 370
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/homePage/src/main/ets/model/PracticeMode.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 19,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): PracticeMode.ets:19-139 is similar to agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/topicPage/src/main/ets/viewModel/PracticeMode.ets:17-139.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 19,
+        "rangeEnd": 139
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/homePage/src/main/ets/pages/AuthenticationPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 1,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): AuthenticationPage.ets:1-71 is similar to agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/AuthenticationPage.ets:1-71.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 1,
+        "rangeEnd": 71
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/CollectionPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 20,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): CollectionPage.ets:20-46 is similar to agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/CoursePage.ets:20-47.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 20,
+        "rangeEnd": 46
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/CollectionPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 73,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): CollectionPage.ets:73-93 is similar to agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/CoursePage.ets:74-94.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 73,
+        "rangeEnd": 93
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/CollectionPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 95,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): CollectionPage.ets:95-125 is similar to agc-template-market-harmonyos-demos/EducationTemplate/Exam/features/minePage/src/main/ets/views/CoursePage.ets:96-126.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 95,
+        "rangeEnd": 125
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EntertainmentTemplate/MuseumTicket/features/home/src/main/ets/component/RecommendBar.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 3,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): RecommendBar.ets:3-53 is similar to agc-template-market-harmonyos-demos/EntertainmentTemplate/MuseumTicket/features/mine/src/main/ets/components/RecommendBar.ets:3-53.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 3,
+        "rangeEnd": 53
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/EntertainmentTemplate/MuseumTicket/features/mine/src/main/ets/pages/AddVisitorPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 1,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): AddVisitorPage.ets:1-158 is similar to agc-template-market-harmonyos-demos/EntertainmentTemplate/MuseumTicket/features/mine/src/main/ets/pages/EditVisitorPage.ets:1-158.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 1,
+        "rangeEnd": 158
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/commons/componentlib/src/main/ets/components/CommonProductProfile.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "50634e2ca8454de0ec32b192c45c9550008aec84",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 39,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): CommonProductProfile.ets:39-56 is similar to agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/commons/componentlib/src/main/ets/components/CommonProductProfile.ets:67-84.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 39,
+        "rangeEnd": 56
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/scenes/tab/mine/src/main/ets/pages/EditNamePage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 18,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): EditNamePage.ets:18-70 is similar to agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/scenes/tab/mine/src/main/ets/pages/EditPhonePage.ets:18-70.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 18,
+        "rangeEnd": 70
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/scenes/tab/mine/src/main/ets/viewModels/EditNamePageVM.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "50634e2ca8454de0ec32b192c45c9550008aec84",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 6,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): EditNamePageVM.ets:6-40 is similar to agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/scenes/tab/mine/src/main/ets/viewModels/EditPhonePageVM.ets:6-40.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 6,
+        "rangeEnd": 40
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/KidsTemplate/ChildrenEducation/scenes/tabs/minepage/src/main/ets/views/settings/TimeCtrl.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b26d8054dada0583cca89ab1f2d5f8f967088d43",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 90,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): TimeCtrl.ets:90-100 is similar to agc-template-market-harmonyos-demos/KidsTemplate/ChildrenEducation/scenes/tabs/minepage/src/main/ets/views/settings/TimeCtrl.ets:114-124.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 90,
+        "rangeEnd": 100
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/KidsTemplate/ChildrenEducation/scenes/tabs/minepage/src/main/ets/views/settings/TimeCtrl.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b26d8054dada0583cca89ab1f2d5f8f967088d43",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 165,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): TimeCtrl.ets:165-179 is similar to agc-template-market-harmonyos-demos/KidsTemplate/ChildrenEducation/scenes/tabs/minepage/src/main/ets/views/settings/TimeCtrl.ets:189-203.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 165,
+        "rangeEnd": 179
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "a0c054902850561a498eeec823819c7f24204a26",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 443,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same class): PictureBeautification.ets:443-475 is similar to agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets:557-588.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 443,
+        "rangeEnd": 475
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_home/src/main/ets/components/HomeVisit.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "b26d8054dada0583cca89ab1f2d5f8f967088d43",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 8,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): HomeVisit.ets:8-59 is similar to agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_home/src/main/ets/components/ShippingInfo.ets:9-61.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 8,
+        "rangeEnd": 59
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_mine/src/main/ets/pages/EditNamePage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 18,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): EditNamePage.ets:18-70 is similar to agc-template-market-harmonyos-demos/ShoppingTemplate/Express/features/business_mine/src/main/ets/pages/EditPhonePage.ets:18-70.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 18,
+        "rangeEnd": 70
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/KidsTemplate/PostpartumCareCenter/scenes/activities/src/main/ets/view/ActivityBooking.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "8d76d0299bf144b7f2530972b68a757879ffdb83",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 70,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): ActivityBooking.ets:70-88 is similar to agc-template-market-harmonyos-demos/KidsTemplate/PostpartumCareCenter/scenes/activities/src/main/ets/view/ActivityBooking.ets:118-136.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 70,
+        "rangeEnd": 88
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/AdministrativeAffairs/Application/commons/components/src/main/ets/components/AboutUs.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "77f2cafe2d25ada52b3a60eda00f1152660a76b6",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 42,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): AboutUs.ets:42-57 is similar to agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/AdministrativeAffairs/Application/commons/components/src/main/ets/components/AboutUs.ets:63-78.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 42,
+        "rangeEnd": 57
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/ShoppingMall/components/module_points/src/main/ets/components/SubmitPointConfirm.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 15,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): SubmitPointConfirm.ets:15-36 is similar to agc-template-market-harmonyos-demos/LifestyleAndServiceTemplate/ShoppingMall/components/module_points/src/main/ets/components/SubmitPointConfirm.ets:60-81.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 15,
+        "rangeEnd": 36
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/MovieTVAndLivestreamingTemplate/WebShortDrama/features/mine/src/main/ets/pages/MyFavoritesPage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "22d686590d1ffc25bea875ac504fc22c1054b45c",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 8,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): MyFavoritesPage.ets:8-32 is similar to agc-template-market-harmonyos-demos/MovieTVAndLivestreamingTemplate/WebShortDrama/features/mine/src/main/ets/pages/WatchRecordsPage.ets:8-32.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 8,
+        "rangeEnd": 32
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/NavigationTemplate/AirTrip/Application/features/home/src/main/ets/pages/HomePage.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "5af98e83907aaadc3057861d1001b7505da3e2e9",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 194,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): HomePage.ets:194-209 is similar to agc-template-market-harmonyos-demos/NavigationTemplate/AirTrip/Application/features/home/src/main/ets/pages/HomePage.ets:238-253.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 194,
+        "rangeEnd": 209
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/components/StickerToolBar.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "22d686590d1ffc25bea875ac504fc22c1054b45c",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 78,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (different classes): StickerToolBar.ets:78-131 is similar to agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/components/StickerToolBar.ets:141-194.",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 78,
+        "rangeEnd": 131
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/commons/network/src/main/ets/mocks/mockData/TransactionDatasetMock.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "22d686590d1ffc25bea875ac504fc22c1054b45c",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 49,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same method): TransactionDatasetMock.ets > TransactionDatasetMock.getMonthTransactionList():49-61 is similar to agc-template-market-harmonyos-demos/FinanceTemplate/FinancialManagement/commons/network/src/main/ets/mocks/mockData/TransactionDatasetMock.ets > TransactionDatasetMock.getMonthTransactionList():82-94. (100 tokens, 13 lines)",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 49,
+        "rangeEnd": 61
+      }
+    ]
+  },
+  {
+    "filePath": "agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets",
+    "sourceProject": "agc-template-market-harmonyos-demos",
+    "commitHash": "c7088ced058a063407aba6f32125d500be253978",
+    "testKind": "instrument-test",
+    "messages": [
+      {
+        "line": 476,
+        "column": 0,
+        "severity": "SUGGESTION",
+        "message": "Code Clone Type-2 (same class): PictureBeautification.ets > PictureBeautification.moveClipCanvasFreeType():476-487 is similar to agc-template-market-harmonyos-demos/PhotographyTemplate/ImageProcessing/scenes/picture_beautification/src/main/ets/pages/PictureBeautification.ets > PictureBeautification.moveClipCanvasRatioType():590-600. (100 tokens, 12 lines)",
+        "rule": "@extrulesproject/code-clone-fragment-check",
+        "rangeStart": 476,
+        "rangeEnd": 487
+      }
+    ]
+  }
+]
