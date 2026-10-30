@@ -25,7 +25,6 @@ public final class SettingsConfigurable implements Configurable {
         panel = new JPanel(new GridBagLayout());
         fields.clear();
         row("backend", "重构后端目录", true);
-        row("homecheck", "HomeCheck 目录", true);
         row("studio", "DevEco Studio 目录", true);
         row("node", "Node 可执行文件", false);
         row("deveco", "DevEco Code（留空自动发现）", false);

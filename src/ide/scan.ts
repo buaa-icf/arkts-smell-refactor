@@ -277,7 +277,7 @@ export async function scan(
   ruleConfig.extRuleSet = [
     {
       ruleSetName: "extrulesproject",
-      packagePath: path.join(homecheck, "extrulesproject-1.0.0.tgz"),
+      packagePath: path.join(homecheck, "rules"),
       extRules: Object.fromEntries(rules.map((rule) => [rule, 2])),
     },
   ];

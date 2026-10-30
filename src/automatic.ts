@@ -22,6 +22,7 @@ import {
 } from "./utils.js";
 import { which } from "./process.js";
 import { TEST_TOOL_BLOCKERS } from "./test_execution.js";
+import { bundledHomecheck } from "./homecheck_runtime.js";
 export async function readPastedJson(
   input: NodeJS.ReadableStream = process.stdin,
 ): Promise<Json[]> {
@@ -78,29 +79,8 @@ export function discoverWorkspace(data: Json[], start: string): string {
   );
 }
 export function findHomecheck(workspace: string): string | null {
-  const override = process.env.ARKTS_REFACTOR_HOMECHECK;
-  if (override) {
-    const root = path.resolve(override);
-    if (
-      !isFile(path.join(root, "node_modules/homecheck/lib/run.js")) ||
-      !isFile(path.join(root, "extrulesproject-1.0.0.tgz"))
-    )
-      throw new Error(
-        "ARKTS_REFACTOR_HOMECHECK 指定的 HomeCheck 无效：" + root,
-      );
-    return root;
-  }
-  return (
-    [
-      path.join(workspace, "homecheck-extrule"),
-      path.join(path.dirname(workspace), "homecheck-extrule"),
-      path.join(process.cwd(), "homecheck-extrule"),
-    ].find(
-      (p) =>
-        isFile(path.join(p, "node_modules/homecheck/lib/run.js")) &&
-        isFile(path.join(p, "extrulesproject-1.0.0.tgz")),
-    ) ?? null
-  );
+  // Never load a scanner supplied by a target checkout, cwd, PATH or old env override.
+  return bundledHomecheck();
 }
 export function discoverTools(
   workspace: string,
@@ -191,7 +171,18 @@ export function autoConfig(
               blockedOutputRegex: "SMELL_GATE_BLOCKED",
               timeoutSeconds: 1800,
             }
-          : missing("HomeCheck 或 Harmony 工程根目录"),
+          : root
+            ? {
+                command: [
+                  process.execPath,
+                  "-e",
+                  "console.error('SMELL_GATE_BLOCKED: 内置 HomeCheck 依赖缺失，请在 refactor 目录执行 npm ci');process.exit(3)",
+                ],
+                cwd: "{task_dir}",
+                blockedOutputRegex: "SMELL_GATE_BLOCKED",
+                timeoutSeconds: 30,
+              }
+            : missing("Harmony 工程根目录"),
       build:
         tools.hvigorw && root
           ? {

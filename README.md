@@ -13,18 +13,10 @@ npm install
 npm run build
 ```
 
-从已提交的锁文件重建依赖时可以用 `npm ci` 替代 `npm install`。`npm run build` 把 `src/` 的 TypeScript 编译到 `dist/`，修改源码后要重新构建。
-
 首次保存包含待重构仓库的总目录：
 
 ```sh
 npm run cli -- configure --workspace "D:/ROG/Documents/harmonyos/test_supplement"
-```
-
-macOS 示例：
-
-```sh
-npm run cli -- configure --workspace "/Users/you/harmonyos/test_supplement"
 ```
 
 然后检查外部工具是否可找到并启动：
@@ -44,34 +36,22 @@ npm run batch -- --workspace "D:\ROG\Documents\harmonyos\test_supplement"
 
 ## 2. 外部工具和工作区
 
-本工具负责调用本机已安装的工具：DevEco Code（`deveco`）、Hvigor（`hvigorw`）、ohpm、CodeLinter（`codelinter`）和 HomeCheck。前四项按当前进程的 PATH 查找；本项目本身无需加入 PATH。`doctor` 只检查路径，不能代替 Agent 登录、SDK、签名、网络或设备的实际验证。
+本工具调用本机已安装的 DevEco Code（`deveco`）、Hvigor（`hvigorw`）、ohpm 和 CodeLinter（`codelinter`），这些命令按当前进程的 PATH 查找；本项目本身无需加入 PATH。`doctor` 只检查路径，不能代替 Agent 登录、SDK、签名、网络或设备的实际验证。
 
-HomeCheck 从以下位置依次查找：
+**HomeCheck 固定使用本仓库自带的 npm 包** `@arkts-refactor/homecheck-runtime@1.0.0`。制品保存在 `vendor/arkts-refactor-homecheck-runtime-1.0.0.tgz`，约 9 MB；安装后位于 `node_modules/@arkts-refactor/homecheck-runtime/`。其中包含 HomeCheck 0.9.9-rc.26、ArkAnalyzer 1.0.92、ArkTS 解析器、编译后的自定义规则、既有补丁、范围外告警过滤和全部运行依赖。
 
-如需与工作区分开指定，设置环境变量 `ARKTS_REFACTOR_HOMECHECK`，它优先于以下自动查找路径。显式路径无效会报错，不会回退使用其他版本。例如 PowerShell：
+命令行、DevEco Studio 桥接后端和 OpenCode 桥接后端均使用该包，不再查找工作区、当前目录或 PATH 中的 HomeCheck。旧的 `ARKTS_REFACTOR_HOMECHECK` 和插件 `homecheck` 路径设置不再参与选择，避免误用另一台电脑或旧版本的扫描器。
 
-```powershell
-$env:ARKTS_REFACTOR_HOMECHECK = "D:/ROG/Documents/harmonyos/二阶段上传文件留存/homecheck-extrule"
-npm start -- --workspace "D:/ROG/Documents/harmonyos/test_supplement"
-```
+扫描由当前 Node.js 直接启动包内 `scan.cjs`，规则直接加载，不在扫描期间调用 npm、联网下载依赖、Git、CLOC、F1 或性能面板。包本身是跨平台 JavaScript，不打包平台专用 Node 可执行文件；需要本机已安装受支持的 Node.js。当前只支持四类 ArkTS 异味，不启用 ArkAnalyzer 可选的 C++ 原生解析器。ArkTS SDK 如存在则从 DevEco 环境/工具安装位置发现，不在包中保存本机 SDK 绝对路径。
 
-该环境变量只影响当前终端及其子进程，不改变待重构仓库的位置。未设置时按以下顺序查找：
-
-1. `<工作区>/homecheck-extrule`
-2. `<工作区上一级>/homecheck-extrule`
-3. `<当前启动目录>/homecheck-extrule`
-
-候选必须包含 `node_modules/homecheck/lib/run.js` 和 `extrulesproject-1.0.0.tgz`；扫描还需要 `config/projectConfig.json`、`config/ruleConfig.json` 和 `scan:files` 脚本。
-
-重构复检会传入 `--perf=false --f1=false`，只做异味检测，不调用 CLOC、不统计吞吐量，也不计算数据集 F1。因此复检不依赖 CLOC；HomeCheck 需支持这两个参数同时关闭时仍执行检测。HomeCheck 常规性能实验的默认行为不变。
+依赖不完整时明确报 BLOCKED，并提示重新运行 `npm ci`，不会回退到本机其他 HomeCheck。包可只读安装；临时配置、报告和日志都写入本次任务输出目录。报告包含版本和已加载规则列表，缺少目标规则、Scene 失败、规则执行报错、文件数不符或报告缺失都不能当作“没有异味”。
 
 工作区结构例如：
 
 ```text
 test_supplement/
 ├─ agc-template-market-harmonyos-demos/
-├─ applications_settings/
-└─ homecheck-extrule/
+└─ applications_settings/
 ```
 
 `--workspace` 指向这层总目录。实际 Harmony 工程从目标文件向上查找 `build-profile.json5` 和 `hvigor/hvigor-config.json5`，不把包含多个应用的仓库根目录直接当作可构建工程。
@@ -79,19 +59,6 @@ test_supplement/
 默认工作区优先级：命令行参数 → `ARKTS_REFACTOR_WORKSPACE` → 用户配置。用户配置保存在 Windows 的 `%APPDATA%/arkts-smell-refactor/config.json`，或 macOS/Linux 的 `$XDG_CONFIG_HOME/arkts-smell-refactor/config.json`（未设置时为 `~/.config/...`）。可沿用原来保存的工作区设置。
 
 Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工具不会因为只编译成功、设备未连接、报告为空或复用了旧报告而判测试通过。
-
-### 自动签名准备
-
-构建/测试入口会自动运行 `src/signing.ts`，无需额外的批跑参数：
-
-1. Instrument 样例优先检查当前工程的产品、`signingConfigs`、证书/密钥/Profile 路径，核对应用 bundleName、运行系统、证书与 Profile 的绑定及有效期。产品引用名不一致（如引用 `release`，实际只有 `default`）可在仅有一个匹配候选时自动修复。
-2. 原路径属于别的电脑时，仅在本机 `~/.ohos/config` 的已知签名目录中查找唯一同名材料，并重新检查实际证书和 Profile，不凭文件名直接判可用。当前工程没有匹配项时，只从工作区里**相同应用标识、相同运行系统**的工程复用已有签名配置；不会猜密钥密码或借用其他应用的签名。只有裸 `.p12/.p7b` 文件而缺少密钥配置/密码时，仍需先在 DevEco 完成配置。
-3. Debug Profile 还要检查已连接设备的 UDID 授权；设备不可识别、没有授权、材料过期或多个候选无法确定时，返回 `SIGNING_GATE_BLOCKED`，不进入代码修复 Loop。不会申请账号证书、生成真实授权 Profile、连接云端或修改设备安全设置。
-4. 准备成功只标记 `PREPARED`（静态匹配）。找到 OpenSSL 时额外校验 CMS 签名完整性，但不把它等同于签发链受设备信任；未找到时延后到真实工具链/设备验证。实际签名成功仍不等于可安装，Instrument Test 必须继续安装并产生新鲜设备执行证据才能 PASS。签名失败/被跳过/缺少完成证据会 BLOCKED；普通业务编译错误仍为 FAIL。
-
-**只修改隔离验证副本，不修改源仓库、原证书或系统签名目录；新增匹配的签名配置不进入 Agent 工作副本或提示词。** 编译及 Local Test 不要求设备签名，在验证副本中删除不需要的签名引用/配置，以无签名方式编译，不把缺少设备签名误算为代码失败。混合测试计划只要包含 Instrument Test 就必须准备签名。
-
-每个任务生成脱敏的 `signing-report.json`，并分别保留 `signing-report-build.json`、`signing-report-test.json`；记录匹配/拒绝原因、证书指纹、副本配置动作及后续验证状态，不记录密码、私钥或设备 UDID。构建和测试日志会屏蔽已读取的密钥密码。签名失败优先查看此报告；没有可用授权材料时，需在 DevEco 中为当前应用/设备首次配置后重跑，工具不会假装自动签名成功。
 
 ## 3. 输入格式
 
@@ -139,7 +106,7 @@ Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工
 
 ## 5. 各层如何判断
 
-- **异味**：调用 HomeCheck 文件级 `npm run scan:files -- ...`，只扫描当前目标和本任务修改/新增的生产文件；使用独立本轮报告。判断原符号（含 `%AM序号$外层方法` 匿名名称）及本次变更方法的异味，不能直接复用数据集旧行号去判断别的方法。扫描工具错误是 BLOCKED，实际异味残留是 FAIL。
+- **异味**：当前 Node.js 调用内置包的 `scan.cjs`，只扫描当前目标和本任务修改/新增的生产文件；使用独立本轮报告。判断原符号（含 `%AM序号$外层方法` 匿名名称）及本次变更方法的异味，不能直接复用数据集旧行号去判断别的方法。扫描工具错误是 BLOCKED，实际异味残留是 FAIL。
 - **构建**：在 `v/` 下的验证副本执行 Hvigor；必要时由平台先调用 ohpm。Agent 不得自行修改签名、wrapper 或依赖配置。
 - **公共契约**：保存模块导出和公开成员签名，比较是否删除或不兼容变更。
 - **测试**：解析 `build-profile.json5` 的模块配置和 `List.test.*` 注册链。优先匹配目标文件同名 suite，也能查找别的宿主模块；无法精确匹配则保守执行受影响模块中可用的 Local/Instrument 测试。每次先清除副本旧报告，必须有新生成的 Hypium 用例和完整汇总，Instrument 还要求设备完成标记。beforeAll 找不到测试宿主属于 BLOCKED，不冒充业务断言失败。

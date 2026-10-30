@@ -194,7 +194,11 @@ test("bridge required/skip policy changes only linter requirement", (t) => {
     skipped.tools.find((r: Json) => r.name === "codelinter").required,
     false,
   );
-  fs.unlinkSync(path.join(f.config.homecheck, "config/projectConfig.json"));
+  assert.notEqual(
+    skipped.tools.find((r: Json) => r.name === "HomeCheck").path,
+    f.config.homecheck,
+  );
+  fs.rmdirSync(path.join(f.config.studio, "sdk/default/openharmony/ets"));
   assert.equal(
     inspectEnvironment({ ...config, linterMode: "skip" }).canDetect,
     false,
@@ -470,10 +474,10 @@ test("candidate revalidation runs gates/review but no refactor or repair Agent",
 test("config digest detects policy changes but ignores obsolete Python executable", (t) => {
   const f = setup(t),
     digest = configurationDigest(f.ctx);
-  f.config.linterMode = "skip";
+  f.ctx.config.linterMode = "skip";
   assert.notEqual(configurationDigest(f.ctx), digest);
-  f.config.linterMode = "required";
-  (f.config as Json).python = "obsolete";
+  f.ctx.config.linterMode = "required";
+  (f.ctx.config as Json).python = "obsolete";
   assert.equal(configurationDigest(f.ctx), digest);
 });
 test("smell candidate gate distinguishes remaining smell from tool failure without stale evidence", async (t) => {

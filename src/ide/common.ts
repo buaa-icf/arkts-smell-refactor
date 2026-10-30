@@ -14,6 +14,7 @@ import {
   writeJson,
 } from "../utils.js";
 import { which } from "../process.js";
+import { bundledHomecheck } from "../homecheck_runtime.js";
 
 export const RULES: Record<string, string> = {
   "@extrulesproject/feature-envy-check": "feature-envy",
@@ -219,7 +220,7 @@ export function discoverTools(
     hvigorw: resolve(config.hvigor, "hvigorw"),
     ohpm: resolve(config.ohpm, "ohpm"),
     codelinter: resolve(config.linter, "codelinter"),
-    homecheck: config.homecheck ?? null,
+    homecheck: bundledHomecheck(),
   };
 }
 export function configureEnvironment(config: BridgeConfig): void {
@@ -243,7 +244,7 @@ export function configureEnvironment(config: BridgeConfig): void {
 export function inspectEnvironment(config: BridgeConfig): Json {
   validatePolicy(config);
   const tools = discoverTools(config),
-    homecheck = config.homecheck ?? "",
+    homecheck = bundledHomecheck() ?? "",
     studio = config.studio ?? "",
     backend = config.backend ?? "";
   const rows: Json[] = [
@@ -268,8 +269,9 @@ export function inspectEnvironment(config: BridgeConfig): Json {
       name: "HomeCheck",
       path: homecheck,
       available: [
-        "node_modules/homecheck/lib/run.js",
-        "extrulesproject-1.0.0.tgz",
+        "scan.cjs",
+        "runtime-manifest.json",
+        "rules/lib/index.js",
         "config/projectConfig.json",
         "config/ruleConfig.json",
       ].every((p) => isFile(path.join(homecheck, p))),
@@ -309,7 +311,9 @@ export class BridgeContext {
     public scanner: string,
     private output: (event: Json) => void = (event) =>
       process.stdout.write(JSON.stringify(event) + "\n"),
-  ) {}
+  ) {
+    this.config = { ...config, homecheck: bundledHomecheck() ?? undefined };
+  }
   emit(event: string, data: Json): void {
     this.output({
       protocolVersion: 1,
@@ -368,7 +372,7 @@ export function configurationDigest(ctx: BridgeContext): string {
     }
   }
   jsFiles(path.join(backend, "dist"));
-  const pkg = path.join(config.homecheck ?? "", "extrulesproject-1.0.0.tgz"),
+  const pkg = path.join(bundledHomecheck() ?? "", "runtime-manifest.json"),
     sdk = path.join(config.studio ?? "", "sdk/default/openharmony/ets"),
     metadata: Json = {};
   if (isDir(sdk))

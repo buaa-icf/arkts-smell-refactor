@@ -3,6 +3,7 @@ node_modules/
 dist/
 dist-tests/
 .test-tmp/
+.test-tmp-homecheck-package-*/
 .npm-cache/
 *.tsbuildinfo
 

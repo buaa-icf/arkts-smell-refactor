@@ -32,8 +32,9 @@ const record = {
     },
   ],
 };
-test("HomeCheck 可独立于工作区指定，路径无效时禁止静默回退", (t) => {
-  const root = fixture(t), workspace = path.join(root, "workspace"),
+test("HomeCheck 固定使用 npm 内置版本，不搜索工作区或旧环境变量", (t) => {
+  const root = fixture(t),
+    workspace = path.join(root, "workspace"),
     scanner = path.join(root, "二阶段/homecheck-extrule");
   for (const dir of [path.join(workspace, "homecheck-extrule"), scanner]) {
     writeText(path.join(dir, "node_modules/homecheck/lib/run.js"), "");
@@ -42,11 +43,14 @@ test("HomeCheck 可独立于工作区指定，路径无效时禁止静默回退"
   const previous = process.env.ARKTS_REFACTOR_HOMECHECK;
   try {
     delete process.env.ARKTS_REFACTOR_HOMECHECK;
-    assert.equal(findHomecheck(workspace), path.join(workspace, "homecheck-extrule"));
+    const bundled = findHomecheck(workspace);
+    assert(
+      bundled?.includes(path.join("@arkts-refactor", "homecheck-runtime")),
+    );
     process.env.ARKTS_REFACTOR_HOMECHECK = scanner;
-    assert.equal(findHomecheck(workspace), scanner);
+    assert.equal(findHomecheck(workspace), bundled);
     process.env.ARKTS_REFACTOR_HOMECHECK = path.join(root, "missing");
-    assert.throws(() => findHomecheck(workspace), /指定的 HomeCheck 无效/);
+    assert.equal(findHomecheck(workspace), bundled);
   } finally {
     if (previous === undefined) delete process.env.ARKTS_REFACTOR_HOMECHECK;
     else process.env.ARKTS_REFACTOR_HOMECHECK = previous;

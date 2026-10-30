@@ -13,7 +13,8 @@ import {
   within,
   writeJson,
 } from "./utils.js";
-import { runCommand, which } from "./process.js";
+import { runCommand } from "./process.js";
+import { detectorSdkPaths } from "./homecheck_runtime.js";
 import { changedCurrentLines } from "./workspace.js";
 import { ownerAtLine, symbolRegion } from "./analysis/source.js";
 export const reportedSymbol = (message: string) =>
@@ -125,8 +126,9 @@ export async function smellGate(
     fs.mkdirSync(reportDir, { recursive: true });
     writeJson(projectConfig, {
       ...readJson(path.join(homecheck, "config/projectConfig.json")),
+      ...detectorSdkPaths(),
       projectName: task.source_project,
-      projectPath: path.dirname(source),
+      projectPath: source + path.sep,
       repos: [`${task.source_project}=${source}`],
       checkFiles: relativeFiles,
       datasetDir: "",
@@ -140,38 +142,29 @@ export async function smellGate(
       extRuleSet: [
         {
           ruleSetName: "extrulesproject",
-          packagePath: path.join(homecheck, "extrulesproject-1.0.0.tgz"),
+          packagePath: path.join(homecheck, "rules"),
           extRules: { [task.rule]: 2 },
         },
       ],
     });
-    const runner = path.join(homecheck, "scripts/gitcodeArktsPerfTest.js"),
-      npm = which("npm");
-    if (!isFile(runner) || !npm)
-      return blocked("HomeCheck 文件级扫描入口或 npm 不存在");
+    const runner = path.join(homecheck, "scan.cjs");
+    if (!isFile(runner))
+      return blocked("内置 HomeCheck 缺失，请运行 npm ci 安装项目依赖");
     const scratch = path.join(taskDir, "homecheck-temp");
     fs.mkdirSync(scratch, { recursive: true });
     const run = await runCommand(
       [
-        npm,
-        "run",
-        "scan:files",
-        "--",
-        "--f1=false",
-        "--perf=false",
-        "--dashboard=false",
-        "--files=" + relativeFiles.join(","),
-        "--baseProjectConfig=" + projectConfig,
-        "--baseRuleConfig=" + ruleConfig,
-        "--includeRules=" +
-          task.rule
-            .split("/")
-            .at(-1)!
-            .replace(/-check$/, ""),
-        "--outputDir=" + reportDir,
+        process.execPath,
+        runner,
+        "--project-config",
+        projectConfig,
+        "--rule-config",
+        ruleConfig,
+        "--summary",
+        path.join(reportDir, "summary.json"),
       ],
       {
-        cwd: homecheck,
+        cwd: scratch,
         env: { ...process.env, TEMP: scratch, TMP: scratch, TMPDIR: scratch },
         stream: true,
       },

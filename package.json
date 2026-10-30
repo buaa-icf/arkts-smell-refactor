@@ -14,11 +14,13 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli.js start",
     "batch": "node dist/cli.js batch",
+    "package:homecheck": "node scripts/package-homecheck.mjs",
     "cli": "node dist/cli.js",
     "test": "npm run build && node --test dist-tests/tests",
     "pretest": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
+    "@arkts-refactor/homecheck-runtime": "file:vendor/arkts-refactor-homecheck-runtime-1.0.0.tgz",
     "cross-spawn": "^7.0.6",
     "diff": "^8.0.2",
     "json5": "^2.2.3"

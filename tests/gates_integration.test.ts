@@ -14,19 +14,33 @@ import {
 import { runCommand } from "../src/process.js";
 import { fixture, makeProject } from "./helpers.js";
 test("验证副本不继承工具 ESM；不覆盖工程自身的模块配置", async (t) => {
-  const root = fixture(t), storage = path.join(root, "v"),
+  const root = fixture(t),
+    storage = path.join(root, "v"),
     project = path.join(storage, "project");
   writeJson(path.join(root, "package.json"), { type: "module" });
-  writeText(path.join(project, "hvigorfile.js"), "module.exports = { loaded: true };");
-  const probe = [process.execPath, "-e", "console.log(require('./hvigorfile.js').loaded)"];
+  writeText(
+    path.join(project, "hvigorfile.js"),
+    "module.exports = { loaded: true };",
+  );
+  const probe = [
+    process.execPath,
+    "-e",
+    "console.log(require('./hvigorfile.js').loaded)",
+  ];
   ensureValidationModuleScope(storage);
   const result = await runCommand(probe, { cwd: project });
   assert.equal(result.code, 0, result.output);
   assert.equal(result.output.trim(), "true");
   assert(!isFile(path.join(project, "package.json")));
-  writeJson(path.join(project, "package.json"), { type: "module", name: "source-config" });
+  writeJson(path.join(project, "package.json"), {
+    type: "module",
+    name: "source-config",
+  });
   ensureValidationModuleScope(storage);
-  assert.deepEqual(readJson(path.join(project, "package.json")), { type: "module", name: "source-config" });
+  assert.deepEqual(readJson(path.join(project, "package.json")), {
+    type: "module",
+    name: "source-config",
+  });
   assert.equal(readJson(path.join(root, "package.json")).type, "module");
 });
 for (const mode of [
@@ -79,29 +93,35 @@ for (const mode of [
   "missing-report",
   "malformed",
 ])
-  test(`HomeCheck 实际 npm 子进程编排：${mode}`, async (t) => {
+  test(`HomeCheck 内置 Node 子进程编排（无 npm）：${mode}`, async (t) => {
     const root = fixture(t),
       p = makeProject(root),
       homecheck = path.join(root, "检测工具 有空格"),
-      script = path.join(homecheck, "scripts/gitcodeArktsPerfTest.js");
+      script = path.join(homecheck, "scan.cjs");
     writeJson(path.join(homecheck, "package.json"), {
       scripts: { "scan:files": "node scripts/gitcodeArktsPerfTest.js" },
     });
     writeJson(path.join(homecheck, "config/projectConfig.json"), {});
     writeJson(path.join(homecheck, "config/ruleConfig.json"), {});
-    const detectionOnlyCheck = "if(!args.includes('--perf=false')||!args.includes('--f1=false'))throw Error('refactor must disable CLOC/performance and F1');";
     writeText(
       script,
-      `const fs=require('node:fs'),path=require('node:path');const args=process.argv.slice(2),get=k=>args.find(a=>a.startsWith(k+'=')).slice(k.length+1);const report=get('--outputDir'),cfg=JSON.parse(fs.readFileSync(get('--baseProjectConfig'),'utf8'));if(cfg.checkFiles.length!==1||cfg.checkFiles[0]!=='feature/src/main/ets/Page.ets')throw Error('bad scan scope');if(!process.env.TEMP.includes('homecheck-temp'))throw Error('missing private temp');if(${JSON.stringify(mode)}==='tool-error')process.exit(13);if(${JSON.stringify(mode)}==='missing-report')process.exit(0);const output=path.join(report,'runs/app/feature-envy/issuesReport.json');fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,${JSON.stringify(mode)}==='malformed'?'bad':JSON.stringify(${mode === "remaining" ? JSON.stringify([{ filePath: p.target, messages: [{ rule: "@extrulesproject/feature-envy-check", message: "Method 'work' is feature-envious toward 'Info'", line: 2 }] }]) : "[]"}));fs.writeFileSync(path.join(report,'runs/app/issuesReport.json'),'[]');fs.writeFileSync(path.join(report,'summary.json'),JSON.stringify({repositories:[{path:${JSON.stringify(p.source)},runs:[{ruleName:'@extrulesproject/feature-envy-check',success:true,exitCode:0,issuesReportPath:output}]}]}));`,
+      `const fs=require('node:fs'),path=require('node:path');const args=process.argv.slice(2),get=k=>args[args.indexOf(k)+1];const report=path.dirname(get('--summary')),cfg=JSON.parse(fs.readFileSync(get('--project-config'),'utf8'));if(cfg.checkFiles.length!==1||cfg.checkFiles[0]!=='feature/src/main/ets/Page.ets')throw Error('bad scan scope');if(!process.env.TEMP.includes('homecheck-temp'))throw Error('missing private temp');if(${JSON.stringify(mode)}==='tool-error')process.exit(13);if(${JSON.stringify(mode)}==='missing-report')process.exit(0);const output=path.join(report,'runs/app/feature-envy/issuesReport.json');fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,${JSON.stringify(mode)}==='malformed'?'bad':JSON.stringify(${mode === "remaining" ? JSON.stringify([{ filePath: p.target, messages: [{ rule: "@extrulesproject/feature-envy-check", message: "Method 'work' is feature-envious toward 'Info'", line: 2 }] }]) : "[]"}));fs.writeFileSync(path.join(report,'runs/app/issuesReport.json'),'[]');fs.writeFileSync(path.join(report,'summary.json'),JSON.stringify({repositories:[{path:${JSON.stringify(p.source)},runs:[{ruleName:'@extrulesproject/feature-envy-check',success:true,exitCode:0,issuesReportPath:output}]}]}));`,
     );
     writeJson(path.join(p.taskDir, "smell-after.json"), [{ message: "stale" }]);
-    writeText(script, fs.readFileSync(script, 'utf8').replace("const report=get('--outputDir')", detectionOnlyCheck + "const report=get('--outputDir')"));
     writeJson(
       path.join(p.taskDir, "homecheck-report/runs/old/issuesReport.json"),
       [],
     );
     const before = process.env.TEMP,
+      originalPath = process.env.PATH;
+    let code;
+    try {
+      process.env.PATH = "";
       code = await smellGate(p.taskDir, homecheck, p.source);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
     assert.equal(code, mode === "clean" ? 0 : mode === "remaining" ? 1 : 3);
     assert.equal(process.env.TEMP, before);
     if (mode === "clean")

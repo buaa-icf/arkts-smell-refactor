@@ -18,7 +18,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     public static final Topic<Runnable> SETTINGS_CHANGED = Topic.create("ArkTS Refactor settings changed", Runnable.class);
     public static final class Config {
         public String backend = Path.of(System.getProperty("user.home"), "Desktop", "group_project", "arkts-smell-refactor").toString();
-        public String homecheck = Path.of(System.getProperty("user.home"), "Desktop", "group_project", "arkts异味检查工具", "homecheck-extrule").toString();
+        public String homecheck = ""; // Legacy setting; backend uses its bundled npm scanner.
         public String studio = defaultPath("D:/tool/DevEco/DevEco Studio", "");
         public String node = defaultPath("D:/tool/NodeJs/node.exe", "node");
         public String deveco = "";
