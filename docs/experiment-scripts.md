@@ -1,6 +1,8 @@
 # 异味重构实验批跑脚本
 
-本文记录本机 `tools/*.ps1` 辅助脚本的用法。这些脚本及依赖它们的本地回归测试由 Git 忽略，不随仓库分发；新克隆仓库可使用正式 CLI 入口。运行 PowerShell 示例前执行 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`。
+本文记录本机 `tools/*.ps1` 辅助脚本的用法。这些脚本由 Git 忽略，不随仓库分发；新克隆仓库可使用正式 CLI 入口。运行 PowerShell 示例前执行 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`。
+
+脚本调用本仓库 TypeScript 后端的编译产物 `dist/cli.js`，因此首次使用前须在仓库根目录执行 `npm install` 和 `npm run build`；缺少 `dist/cli.js` 时脚本直接报错，不会回退到旧 Python 入口。
 
 四个入口按“异味类型 + 样例数据集”命名，执行的是完整重构实验：首轮 Agent、异味/构建/契约/测试门禁、可选 Linter、语义评审及必要返修。每条任务结束后恢复运行前的 `.ets` / `.ts` 源码快照，并清理该条新增的源码。
 
@@ -34,7 +36,7 @@ Remove-Item Env:ARKTS_REVIEW_VARIANT -ErrorAction SilentlyContinue
 
 需要测试 Coding Plan 的增强推理时，单独设置 `$env:ARKTS_REFACTOR_VARIANT = 'high'`，首轮与返修均生效，评审保持独立。当前已接通 low/high/max 到实际 HTTP `reasoning_effort` 的映射；不传档位时保持服务端默认（官方 GLM-5.3 为 max）。完整对照命令见 [Coding Plan high/max 试验](coding-plan-high-trial-20261030.md)。
 
-脚本自动设置原生进程输入/输出所需的 UTF-8 编码和 `PYTHONUNBUFFERED=1`，运行结束后恢复原目录与相关环境变量。`-LogDirectory` 同时显示终端输出并保存日志，每次脚本调用生成一个 `outputyyyyMMdd-HHmmss-fff.log`。PowerShell 5.1 的 Tee-Object 默认保存 UTF-16 LE，PowerShell 7 默认保存 UTF-8；日志读取程序应按 BOM/实际编码读取。
+脚本自动设置原生进程输入/输出所需的 UTF-8 编码，运行结束后恢复原目录与控制台编码。`-LogDirectory` 同时显示终端输出并保存日志，每次脚本调用生成一个 `outputyyyyMMdd-HHmmss-fff.log`。PowerShell 5.1 的 Tee-Object 默认保存 UTF-16 LE，PowerShell 7 默认保存 UTF-8；日志读取程序应按 BOM/实际编码读取。
 
 ## 四种完整运行
 
@@ -107,10 +109,10 @@ foreach ($ordinal in @(1, 3)) {
 |---|---|
 | `-DatasetRoot PATH` | `positive` 目录，其下须有 `local-test` / `instrument-test` 及对应 JSON |
 | `-Workspace PATH` | 包含各 `sourceProject` 仓库的目录 |
-| `-HomeCheckRoot PATH` | 包含 `homecheck-extrule` 子目录的工作目录 |
-| `-PythonExe PATH` | Python 可执行文件路径或命令名，默认 `python` |
+| `-HomeCheckRoot PATH` | 包含 `homecheck-extrule` 子目录的工作目录（仅用于旧本机布局；后端默认使用仓库内置的 HomeCheck 包） |
+| `-NodeExe PATH` | Node.js 可执行文件路径或命令名，默认 `node`；要求 20.19 或更高版本 |
 
-`-ListOnly` 只需数据集可读，不要求源码工程、Python 或 HomeCheck 可用。超出范围或反向区间会在启动实验前报错。
+`-ListOnly` 只需数据集可读，不要求源码工程、Node 构建产物或 HomeCheck 可用。超出范围或反向区间会在启动实验前报错。
 
 每条正常完成仍输出 `RESULT ordinal=... verdict=... pipelineExit=... totalSeconds=... task=...`、`ROLLBACK_SNAPSHOT=...` 和 `END ordinal=...`，结果保存在本工具仓库 `runs/` 下。任务目录新增 `experiment.json`，记录 `dataset`、`datasetKind`、`smellType`、`ordinal`、`linterMode`，用于区分不同数据集的同名任务与序号。端到端 `totalSeconds` 口径与旧脚本一致，源码回滚在计时之后。
 
