@@ -173,7 +173,7 @@ export function WorkbenchView(props: { api: TuiPluginApi; controller: Workbench;
               <Match when={props.tab() === "environment"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme().textMuted}>e 刷新 · 修改插件 JSON 设置后重启宿主</text>
-                  <text fg={theme().text}>Python {props.controller.config.python}</text>
+                  <text fg={theme().text}>Node {props.controller.config.node}</text>
                   <text fg={theme().text} wrapMode="char">后端 {props.controller.config.backend}</text>
                   <text fg={theme().text} wrapMode="char">证据 {props.controller.config.runs}</text>
                   <text fg={theme().text}>Code Linter {props.controller.config.linterMode}</text>

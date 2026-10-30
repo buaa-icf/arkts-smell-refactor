@@ -24,9 +24,7 @@ public final class SettingsConfigurable implements Configurable {
     @Override public @Nullable JComponent createComponent() {
         panel = new JPanel(new GridBagLayout());
         fields.clear();
-        row("python", "Python 可执行文件", false);
         row("backend", "重构后端目录", true);
-        row("homecheck", "HomeCheck 目录", true);
         row("studio", "DevEco Studio 目录", true);
         row("node", "Node 可执行文件", false);
         row("deveco", "DevEco Code（留空自动发现）", false);
@@ -90,8 +88,8 @@ public final class SettingsConfigurable implements Configurable {
 
     @Override public void apply() throws ConfigurationException {
         var config = read();
-        if (config.python.isBlank() || config.backend.isBlank() || config.runs.isBlank())
-            throw new ConfigurationException("请配置 Python、后端目录和任务目录。");
+        if (config.node.isBlank() || config.backend.isBlank() || config.runs.isBlank())
+            throw new ConfigurationException("请配置 Node.js、TypeScript 后端目录和任务目录。");
         PluginSettings.getInstance().loadState(config);
     }
 

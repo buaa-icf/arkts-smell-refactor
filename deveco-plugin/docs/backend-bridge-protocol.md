@@ -1,5 +1,7 @@
 # DevEco 插件与 ArkTS 重构后端桥接协议
 
+> 当前 0.2.0 使用 Node worker，插件入口 `bridge/ide_bridge.cjs` 加载后端 `dist/ide_bridge.js`，每进程一个请求，协议版本仍为 1。下文保留原设计；Python、长连接、幂等重放等描述不代表当前已实现能力。当前行为见 [Node 连接适配](node-backend-adaptation.md)。
+
 日期：2026-10-14
 
 协议：拟新增 `ide-bridge/1`，尚未实现。

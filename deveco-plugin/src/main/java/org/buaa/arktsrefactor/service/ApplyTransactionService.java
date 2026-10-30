@@ -10,7 +10,7 @@ import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
-import org.buaa.arktsrefactor.bridge.PythonBridgeClient;
+import org.buaa.arktsrefactor.bridge.NodeBridgeClient;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -27,17 +27,17 @@ public final class ApplyTransactionService {
 
     /** Reads and verifies all frozen content on the worker before entering the IDE write action. */
     public static ApplyTransactionService prepare(JsonObject candidate, Path ideRoot, Path runs) throws IOException {
-        if (!"PASS".equals(PythonBridgeClient.string(candidate, "verdict"))) throw new IOException("候选未通过全部必需验证");
-        String id = PythonBridgeClient.string(candidate, "candidateId");
+        if (!"PASS".equals(NodeBridgeClient.string(candidate, "verdict"))) throw new IOException("候选未通过全部必需验证");
+        String id = NodeBridgeClient.string(candidate, "candidateId");
         UUID.fromString(id);
         Path run = runs.toRealPath().resolve(id).toRealPath();
         if (!run.startsWith(runs.toRealPath())) throw new IOException("候选产物目录越界");
-        Path original = Path.of(PythonBridgeClient.string(candidate, "originalRoot")).toRealPath();
+        Path original = Path.of(NodeBridgeClient.string(candidate, "originalRoot")).toRealPath();
         if (!original.startsWith(ideRoot.toRealPath())) throw new IOException("候选不属于当前工程");
         List<FileTransaction.Change> changes = new ArrayList<>();
         long retainedSize = 0;
         for (JsonElement element : candidate.getAsJsonArray("changes")) {
-            JsonObject item = element.getAsJsonObject(); String name = PythonBridgeClient.string(item, "relativePath");
+            JsonObject item = element.getAsJsonObject(); String name = NodeBridgeClient.string(item, "relativePath");
             Path suffix = Path.of(name).normalize();
             if (suffix.isAbsolute() || suffix.startsWith("..")) throw new IOException("候选文件路径越界");
             Path afterFile = run.resolve("content/after").resolve(suffix).toRealPath();
@@ -45,7 +45,7 @@ public final class ApplyTransactionService {
             retainedSize += Files.size(afterFile);
             if (Files.size(afterFile) > 32L * 1024 * 1024 || retainedSize > 64L * 1024 * 1024) throw new IOException("变更内容过大，无法安全保留 Undo 数据；请缩小任务范围");
             byte[] after = Files.readAllBytes(afterFile);
-            if (!FileTransaction.sha(after).equals(PythonBridgeClient.string(item, "afterSha256"))) throw new IOException("候选内容已变化：" + name);
+            if (!FileTransaction.sha(after).equals(NodeBridgeClient.string(item, "afterSha256"))) throw new IOException("候选内容已变化：" + name);
             byte[] before = null;
             if (item.has("beforeSha256") && !item.get("beforeSha256").isJsonNull()) {
                 Path beforeFile = run.resolve("content/before").resolve(suffix).toRealPath();

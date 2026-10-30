@@ -1,14 +1,14 @@
 # ArkTS Refactor：DevEco Code TUI 插件技术设计
 
-日期：2026-10-18。实现语言：TypeScript / TSX。插件、配置示例、测试与文档均位于 `opencode-plugin/`。
+首次设计：2026-10-18；TypeScript 后端集成更新：2026-10-22。实现语言：TypeScript / TSX。插件、配置示例、测试与文档均位于 `opencode-plugin/`。
 
 ## 1. 目标与现有基础
 
-在 DevEco Code 的终端界面内提供独立的 ArkTS 异味工作台。用户选择业务工程，检测或导入 HomeCheck JSON，查看风险与约束，在隔离候选工程中执行 Python 智能体编排，审阅 Diff，应用通过验证的候选并复检。
+在 DevEco Code 的终端界面内提供独立的 ArkTS 异味工作台。用户选择业务工程，检测或导入 HomeCheck JSON，查看风险与约束，在隔离候选工程中执行 TypeScript 智能体编排，审阅 Diff，应用通过验证的候选并复检。
 
-Python 后端继续使用本仓库的 `src/arkts_smell_refactor/`。现有 CLI 的 `start` 会自动修改业务工程，不适合作为“预览后应用”的入口。仓库另有已实现的 `deveco-plugin/src/main/resources/bridge/ide_bridge.py`，实际支持单请求进程、结构化事件、HomeCheck 检测、候选隔离和五层门禁。首版直接调用这份适配器，不复制 Python 业务逻辑，不改动 Java 插件或 Python 源码。
+后端使用本仓库的 `src/` TypeScript 工程，先构建到 `dist/`。现有 CLI 的 `start` 会自动修改业务工程，不适合作为“预览后应用”的入口。TUI 直接调用共享的 `deveco-plugin/src/main/resources/bridge/ide_bridge.cjs`，加载 `dist/ide_bridge.js`，支持单请求进程、结构化事件、HomeCheck 检测、候选隔离和五层门禁。首版曾使用 Python 桥接；本集成分支保留 main 删除旧 Python 的迁移方向，将范围修复移植到新后端，不保留两套实现。见[集成记录](typescript-backend-integration.md)。
 
-注意：`deveco-plugin/docs/backend-bridge-protocol.md` 包含更完整的未来协议设想。实现必须以实际 `ide_bridge.py` 为准，不能假定常驻连接、公开 cancel RPC 或 artifact RPC 已存在。
+注意：`deveco-plugin/docs/backend-bridge-protocol.md` 包含更完整的未来协议设想。实现必须以实际 `src/ide_bridge.ts` 为准，不能假定常驻连接、公开 cancel RPC 或 artifact RPC 已存在。
 
 ## 2. 宿主扩展调查与兼容条件
 
@@ -33,8 +33,8 @@ flowchart LR
   P --> U[SolidJS 工作台与弹窗]
   U --> C[工作台 Controller]
   C --> B[TypeScript JSONL BridgeClient]
-  B --> A[现有 ide_bridge.py]
-  A --> O[Python 异味分析与智能体编排]
+  B --> A[共享 ide_bridge.cjs / dist/ide_bridge.js]
+  A --> O[TypeScript 异味分析与智能体编排]
   C --> T[候选应用事务]
   T --> F[用户业务工程]
   O --> S[隔离候选工程与冻结证据]
@@ -54,10 +54,10 @@ opencode-plugin/
     config.ts             配置验证和默认路径
     apply.ts              候选哈希验证与可恢复应用事务
     types.ts              实际桥接协议 DTO
-  tests/                  协议、事务、控制器与真实 Python 冒烟测试
+  tests/                  协议、事务、控制器与真实 Node 冒烟测试
 ```
 
-默认后端目录由插件源码位置向上定位仓库。业务工程默认取宿主当前目录，也支持显式设置。运行证据默认放到系统临时目录的专属目录，使用工程路径摘要隔离；禁止将 runs 放进业务工程，避免快照复制自身。配置中可指定 Python、后端、bridge、HomeCheck、Studio、Node、DevEco、hvigor、ohpm、linter、证据目录及 linterMode。相对路径与 configFile 相对于宿主当前目录解析；跨目录启动推荐绝对路径。
+默认后端目录由插件源码位置向上定位仓库。业务工程默认取宿主当前目录，也支持显式设置。运行证据默认放到系统临时目录的专属目录，使用工程路径摘要隔离；禁止将 runs 放进业务工程，避免快照复制自身。配置中可指定后端、bridge、HomeCheck、Studio、Node、DevEco、hvigor、ohpm、linter、证据目录及 linterMode。旧 python 字段不再使用。相对路径与 configFile 相对于宿主当前目录解析；跨目录启动推荐绝对路径。
 
 ## 4. TUI 交互
 
@@ -81,7 +81,7 @@ opencode-plugin/
 
 ## 5. 实际后端协议
 
-每个操作启动 `<python> -u <bridgePath>`，cwd 为 backendRoot，UTF-8 stdin 发送一行 JSON 后关闭。stdout 为 JSONL，stderr 为诊断。使用 `spawn` 的参数数组与 `shell:false`，路径和用户文本不拼接到 shell。
+每个操作启动 `<node> <bridgePath>`，默认 bridgePath 为共享 CJS 引导程序，cwd 为 backendRoot，UTF-8 stdin 发送一行 JSON 后关闭。stdout 为 JSONL，stderr 为诊断。使用 `spawn` 的参数数组与 `shell:false`，路径和用户文本不拼接到 shell。node 默认取 PATH 中的 node，不使用宿主的 process.execPath（DevEco 宿主可能是 Bun 可执行文件）。
 
 请求：
 
@@ -143,7 +143,7 @@ TypeScript 操作在 runs/tui-operations.jsonl 追加起止事件、操作 ID、
 
 修复前初次 scan.start 的 scopePath 未进入工作台状态及候选，validate_applied 在门禁 PASS 后固定扫描 originalRoot，再把全工程问题替换进左栏。工程根目录用于构建、测试和摘要核验；用户选择的异味检测范围必须独立保存。
 
-TypeScript 保存 scanScope（scopePath、可选 files／rules），task.prepare 将它写入 prepared.json，冻结候选及候选复检沿用该字段，历史恢复时从候选恢复。导入报告使用报告中的目标和关联文件作为范围。共享 Python bridge 仅扩展范围元数据与最后的列表刷新：全工程构建／测试、完整快照核验和变更文件异味门禁继续执行，最终列表按 scanScope 实际调用检测器，不靠前端过滤全工程结果。阶段页显示异味范围和工程门禁的区别。
+TypeScript 保存 scanScope（scopePath、可选 files／rules），task.prepare 将它写入 prepared.json，冻结候选及候选复检沿用该字段，历史恢复时从候选恢复。导入报告使用报告中的目标和关联文件作为范围。共享 Node bridge 扩展范围元数据与最后的列表刷新：全工程构建／测试、完整快照核验和变更文件异味门禁继续执行，最终列表按 scanScope 实际调用检测器，不靠前端过滤全工程结果。阶段页显示异味范围和工程门禁的区别。
 
 旧候选没有 scanScope 时，从 prepared.json 的目标及关联片段恢复文件范围；无法确定范围时报错，不能静默扩大为全工程。新扫描或导入开始时清除旧范围，选择同次检测的其他问题及重新填写说明保留范围。文件、目录、报告文件集、历史恢复及旧记录回退均需回归；测试使用示例工程和模拟门禁，不修改用户 BookRead 工程。
 
@@ -154,7 +154,7 @@ TypeScript 严格检查，TSX 交由宿主 OpenTUI Solid 转换器处理；交�
 验证优先覆盖跨进程和写文件边界：
 
 - JSONL 多块中文、错误关联、崩溃与超时／取消进程树。
-- 真实 Python bridge 的 hello、导入、风险准备，使用临时 Harmony 工程，不调用模型。
+- 真实 Node bridge 的 hello、导入、风险准备，使用临时 Harmony 工程，不调用模型。
 - Controller 的并发禁止、问题切换失效、运行结果和错误状态。
 - PASS 候选应用、基线过期、摘要不符、路径逃逸、测试文件与软链接拒绝、失败恢复与用户修改冲突。
 - TUI 的构建／类型检查，以及可行时的无终端渲染与按键验证。
@@ -162,6 +162,6 @@ TypeScript 严格检查，TSX 交由宿主 OpenTUI Solid 转换器处理；交�
 
 ## 8. 首版限制
 
-依赖同仓库已有 bridge 文件，npm 包不单独携带完整 Python 后端。按显式 backendRoot 使用本地源码；独立分发或通用服务协议以后再抽取。
+依赖同仓库已有 bridge 文件及编译后的 TypeScript 后端，TUI 包不单独携带完整编排实现。按显式 backendRoot 使用本地构建；独立分发或通用服务协议以后再抽取。旧 Python 后端的候选摘要不能作为 Node 后端下可直接应用的凭据。
 
 只支持 bridge 已开放的四条规则：Feature Envy、Long Method、Switch Statement、Code Clone。检测与完整编排依赖本机外部工具；缺失时展示环境诊断或后端 BLOCKED。首版不扩展检测算法，不接入编辑器 WebView，不改变后端重构和测试隔离策略。

@@ -14,6 +14,10 @@ test("configuration rejects in-project evidence and invalid settings", async () 
   await assert.rejects(loadConfig({ runs: "./runs" }), /之外/);
   await assert.rejects(loadConfig({ linterMode: "anything" }), /linterMode/);
   await assert.rejects(loadConfig({ timeoutMs: -1 }), /timeoutMs/);
+  await assert.rejects(loadConfig({ node: "" }), /node 不能为空/);
+  const migrated = await loadConfig({ python: "obsolete-python", node: "node" });
+  assert.equal(migrated.node, "node");
+  assert.equal("python" in migrated, false);
   assert.throws(() => assertCompatible({}), /原生 TUI/);
 });
 test("changing issues or instructions invalidates prepared evidence", async (t) => {

@@ -14,7 +14,7 @@ import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
-import org.buaa.arktsrefactor.bridge.PythonBridgeClient;
+import org.buaa.arktsrefactor.bridge.NodeBridgeClient;
 import org.buaa.arktsrefactor.model.Issue;
 import org.buaa.arktsrefactor.persistence.PluginSettings;
 
@@ -60,8 +60,8 @@ public final class ProjectSessionService implements Disposable {
     private final Project project;
     private final ViewState state = new ViewState();
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
-    private final PythonBridgeClient bridge = new PythonBridgeClient();
-    private final PythonBridgeClient environmentBridge = new PythonBridgeClient();
+    private final NodeBridgeClient bridge = new NodeBridgeClient();
+    private final NodeBridgeClient environmentBridge = new NodeBridgeClient();
     private String environmentAttemptKey = "";
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "arkts-refactor-worker"); thread.setDaemon(true); return thread;
@@ -91,7 +91,7 @@ public final class ProjectSessionService implements Disposable {
     private void markStale(String path) {
         if (state.prepared == null || state.applying || project.getBasePath() == null) return;
         JsonObject prepared = state.prepared;
-        Path root = Path.of(PythonBridgeClient.string(prepared, "originalRoot")).toAbsolutePath().normalize();
+        Path root = Path.of(NodeBridgeClient.string(prepared, "originalRoot")).toAbsolutePath().normalize();
         Path file = Path.of(path).toAbsolutePath().normalize();
         if (!file.startsWith(root)) return;
         String relative = root.relativize(file).toString().replace('\\', '/');
@@ -162,7 +162,7 @@ public final class ProjectSessionService implements Disposable {
             } catch (Exception error) {
                 ui(() -> {
                     state.environmentChecking = false; state.environment = null; state.environmentCheckedAt = "";
-                    state.environmentMessage = "环境检查失败：" + error.getMessage() + "\n请检查 Python 和工具设置后重试。";
+                    state.environmentMessage = "环境检查失败：" + error.getMessage() + "\n请检查 Node.js、已编译后端和工具设置后重试。";
                     changed();
                 });
             }
@@ -171,11 +171,11 @@ public final class ProjectSessionService implements Disposable {
 
     public void scan(JsonObject params) {
         if (state.busy || disposed) return;
-        state.scanTarget = params.has("scopePath") ? PythonBridgeClient.string(params, "scopePath") : Objects.toString(project.getBasePath(), "");
+        state.scanTarget = params.has("scopePath") ? NodeBridgeClient.string(params, "scopePath") : Objects.toString(project.getBasePath(), "");
         state.scanMessage = "正在检测，请稍候…";
         run("scan.start", params, "正在检测…", result -> {
             replaceIssues(result.getAsJsonArray("issues"));
-            state.scanTarget = PythonBridgeClient.string(result, "scopePath");
+            state.scanTarget = NodeBridgeClient.string(result, "scopePath");
             int files = result.get("fileCount").getAsInt();
             int rules = result.getAsJsonArray("rules").size();
             state.scanMessage = "检测完成：" + files + " 个文件，" + rules + " 条规则，" + state.issues.size() + " 条异味。";
@@ -214,22 +214,22 @@ public final class ProjectSessionService implements Disposable {
 
     public void generate() {
         if (state.prepared == null) return;
-        JsonObject params = new JsonObject(); params.addProperty("taskHandle", PythonBridgeClient.string(state.prepared, "taskHandle"));
+        JsonObject params = new JsonObject(); params.addProperty("taskHandle", NodeBridgeClient.string(state.prepared, "taskHandle"));
         state.candidate = null; state.result = null;
         run("task.execute", params, "正在生成并验证候选…", this::candidateResult);
     }
 
     private void candidateResult(JsonObject response) {
         state.candidate = response.getAsJsonObject("candidate"); state.result = response.getAsJsonObject("result");
-        String verdict = PythonBridgeClient.string(state.result, "verdict");
-        String reason = PythonBridgeClient.string(state.result, "failureReason");
+        String verdict = NodeBridgeClient.string(state.result, "verdict");
+        String reason = NodeBridgeClient.string(state.result, "failureReason");
         state.status = "候选副本验证：" + verdict + (reason.isBlank() ? "" : "；" + reason) +
                 (verdict.equals("BLOCKED") ? "。修复环境后可重新验证候选。" : "。") + "原工程状态：尚未应用。";
     }
 
     public void validateCandidate() {
         if (state.candidate == null || state.applied || state.stale) return;
-        JsonObject params = new JsonObject(); params.addProperty("candidateId", PythonBridgeClient.string(state.candidate, "candidateId"));
+        JsonObject params = new JsonObject(); params.addProperty("candidateId", NodeBridgeClient.string(state.candidate, "candidateId"));
         run("task.validateCandidate", params, "正在重新验证候选副本…", this::candidateResult);
     }
 
@@ -241,7 +241,7 @@ public final class ProjectSessionService implements Disposable {
             state.issues = List.of(issue); state.activeIssueId = issue.id();
             state.scanTarget = issue.absolutePath(); state.scanMessage = "已恢复候选对应的异味；候选验证通过后可应用。";
             state.applied = false; state.stale = false;
-            state.runDirectory = PythonBridgeClient.string(response, "runDirectory");
+            state.runDirectory = NodeBridgeClient.string(response, "runDirectory");
             candidateResult(response);
             state.status = "已恢复候选，可查看 Diff 或点击“重新验证候选”。原工程状态：尚未应用。";
         });
@@ -249,7 +249,7 @@ public final class ProjectSessionService implements Disposable {
 
     public void apply() {
         if (state.candidate == null) return;
-        JsonObject params = new JsonObject(); params.addProperty("candidateId", PythonBridgeClient.string(state.candidate, "candidateId"));
+        JsonObject params = new JsonObject(); params.addProperty("candidateId", NodeBridgeClient.string(state.candidate, "candidateId"));
         runPrepared("candidate.check", params, "正在核对基线与候选内容…", candidate -> {
             ApplyTransactionService prepared;
             try {
@@ -275,7 +275,7 @@ public final class ProjectSessionService implements Disposable {
 
     public void validateApplied() {
         if (!state.applied || state.candidate == null) return;
-        JsonObject params = new JsonObject(); params.addProperty("candidateId", PythonBridgeClient.string(state.candidate, "candidateId"));
+        JsonObject params = new JsonObject(); params.addProperty("candidateId", NodeBridgeClient.string(state.candidate, "candidateId"));
         run("task.validateApplied", params, "正在验证当前工程并复检…", result -> {
             state.result = result.getAsJsonObject("result");
             if (result.has("issues")) {
@@ -283,7 +283,7 @@ public final class ProjectSessionService implements Disposable {
                 for (JsonElement issue : result.getAsJsonArray("issues")) issues.add(new Issue(issue.getAsJsonObject()));
                 state.issues = List.copyOf(issues);
             }
-            state.status = "本轮工程验证：" + PythonBridgeClient.string(state.result, "verdict") + (state.stale ? "；当前编辑内容已变化，结果过期。" : "；已应用的代码保留。");
+            state.status = "本轮工程验证：" + NodeBridgeClient.string(state.result, "verdict") + (state.stale ? "；当前编辑内容已变化，结果过期。" : "；已应用的代码保留。");
         });
     }
 
@@ -335,7 +335,7 @@ public final class ProjectSessionService implements Disposable {
             AtomicReference<String> run = new AtomicReference<>("");
             try {
                 JsonObject result = bridge.call(method, params, root, config, event -> {
-                    if ("run.started".equals(PythonBridgeClient.string(event, "event"))) run.set(PythonBridgeClient.string(event.getAsJsonObject("data"), "runDirectory"));
+                    if ("run.started".equals(NodeBridgeClient.string(event, "event"))) run.set(NodeBridgeClient.string(event.getAsJsonObject("data"), "runDirectory"));
                     event(event);
                 });
                 Runnable completion = decode.apply(result);
@@ -380,18 +380,18 @@ public final class ProjectSessionService implements Disposable {
     private void event(JsonObject event) {
         ui(() -> {
             JsonObject data = event.has("data") ? event.getAsJsonObject("data") : new JsonObject();
-            switch (PythonBridgeClient.string(event, "event")) {
-                case "run.started" -> state.runDirectory = PythonBridgeClient.string(data, "runDirectory");
+            switch (NodeBridgeClient.string(event, "event")) {
+                case "run.started" -> state.runDirectory = NodeBridgeClient.string(data, "runDirectory");
                 case "scan.started" -> {
                     if (state.activeMethod.equals("scan.start")) {
-                        state.scanTarget = PythonBridgeClient.string(data, "scopePath");
+                        state.scanTarget = NodeBridgeClient.string(data, "scopePath");
                         state.scanMessage = "正在检测：" + data.get("fileCount").getAsInt() + " 个文件，" + data.getAsJsonArray("rules").size() + " 条规则…";
                     }
                 }
-                case "workflow.changed" -> state.status = PythonBridgeClient.string(data, "status");
-                case "step.updated" -> state.steps.put(PythonBridgeClient.string(data, "stepId"), PythonBridgeClient.string(data, "status"));
+                case "workflow.changed" -> state.status = NodeBridgeClient.string(data, "status");
+                case "step.updated" -> state.steps.put(NodeBridgeClient.string(data, "stepId"), NodeBridgeClient.string(data, "status"));
                 case "log.appended" -> {
-                    state.log += PythonBridgeClient.string(data, "text");
+                    state.log += NodeBridgeClient.string(data, "text");
                     if (state.log.length() > 100_000) state.log = state.log.substring(state.log.length() - 100_000);
                 }
                 default -> { }

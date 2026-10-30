@@ -1,5 +1,7 @@
 # 插件主体实现与使用
 
+> 本文保留 0.1.5 的实施记录，不再代表当前运行环境。0.2.0 已改为 Node.js / TypeScript，旧 Python 命令不再适用。当前安装、使用与测试请看 [README](../README.md) 和 [Node 连接适配](node-backend-adaptation.md)。
+
 更新：2026-10-18，插件版本 0.1.5。本文记录当前代码行为；[端到端设计](deveco-plugin-end-to-end-design.md)与[桥接协议设计](backend-bridge-protocol.md)保留完整目标方案。
 
 Gradle 工程根目录现为主仓库下的 `deveco-plugin/`，本页构建和测试命令均在该目录执行；[仓库集成说明](repository-integration.md)记录迁移方式。

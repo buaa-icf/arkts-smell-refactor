@@ -1,0 +1,13 @@
+{
+  "name": "@arkts-refactor/homecheck-runtime",
+  "version": "1.0.0",
+  "description": "Pinned, offline ArkTS smell scanner for arkts-smell-refactor",
+  "license": "ISC",
+  "type": "commonjs",
+  "main": "scan.cjs",
+  "bin": { "arkts-homecheck": "scan.cjs" },
+  "engines": { "node": ">=20.19" },
+  "files": ["scan.cjs", "fsConcurrencyLimit.cjs", "outOfScopeIssueFilter.cjs", "rules", "config", "patches", "runtime-manifest.json", "THIRD_PARTY_NOTICES.md"],
+  "dependencies": { "homecheck": "0.9.9-rc.26", "arkanalyzer": "1.0.92", "ohos-typescript": "4.9.5-r4", "graceful-fs": "4.2.11" },
+  "bundledDependencies": ["homecheck", "arkanalyzer", "ohos-typescript", "graceful-fs"]
+}

@@ -17,12 +17,13 @@ test("JSONL rejects pollution and oversized messages", () => {
   assert.throws(() => new JsonLines(() => {}).push(Buffer.from("debug text\n")), /非法 JSON/);
   assert.throws(() => new JsonLines(() => {}).push(Buffer.alloc(8 * 1024 * 1024 + 1, 120)), /8 MiB/);
 });
-test("real Python bridge hello, import and prepare run without model calls or source edits", async (t) => {
+test("real Node bridge hello, import and prepare run without model calls or source edits", async (t) => {
   const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
   const client = new BridgeClient(f.config);
   const hello = await client.request("session.hello");
   assert.equal(hello.transport, "one-request-per-process");
   assert.equal(hello.protocolVersion, 1);
+  assert.equal(hello.backendLanguage, "typescript");
   const imported = await client.request("issues.import", { records: f.record });
   assert.equal(imported.issues.length, 1);
   assert.equal(imported.issues[0]?.symbol, "update");
@@ -39,32 +40,33 @@ test("real Python bridge hello, import and prepare run without model calls or so
   await assert.rejects(client.request("issues.import", { records: [{ ...f.record, filePath: "../outside.ets" }] }), /不允许包含/);
 });
 
-const fakeBackend = `import sys,json,time,subprocess
-r=json.loads(sys.stdin.readline())
-mode=r['params'].get('mode','ok')
-if mode == 'crash':
-    sys.stderr.write('诊断信息');sys.exit(7)
-if mode == 'wrong': r['requestId']='different'
-if mode == 'sequence':
-    print(json.dumps({'protocolVersion':1,'type':'event','seq':2,'event':'log.appended','data':{}}),flush=True)
-if mode == 'sleep':
-    child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])
-    print(json.dumps({'protocolVersion':1,'type':'event','seq':1,'event':'child','data':{'pid':child.pid}}),flush=True)
-    time.sleep(60)
-result={'protocolVersion':1,'transport':'test','supportedRules':[]}
-print(json.dumps({'protocolVersion':1,'type':'response','requestId':r['requestId'],'ok':True,'result':result}),flush=True)
+const fakeBackend = `const {spawn}=require('node:child_process');
+let text=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk=>text+=chunk);
+process.stdin.on('end', ()=>{
+ const r=JSON.parse(text), mode=r.params.mode||'ok';
+ const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+ if(mode==='crash'){process.stderr.write('诊断信息');process.exitCode=7;return;}
+ if(mode==='wrong')r.requestId='different';
+ if(mode==='sequence')send({protocolVersion:1,type:'event',seq:2,event:'log.appended',data:{}});
+ if(mode==='sleep'){
+   const child=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'ignore'});
+   send({protocolVersion:1,type:'event',seq:1,event:'child',data:{pid:child.pid}});
+   setTimeout(()=>{},60000);return;
+ }
+ send({protocolVersion:1,type:'response',requestId:r.requestId,ok:true,result:{protocolVersion:1,transport:'test',supportedRules:[]}});
+});
 `;
 test("bridge reports EOF, mismatched requests and sequence gaps", async (t) => {
   const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
-  const path = resolve(f.directory, "fake.py"); await writeFile(path, fakeBackend);
+  const path = resolve(f.directory, "fake.cjs"); await writeFile(path, fakeBackend);
   const client = new BridgeClient({ ...f.config, bridgePath: path });
   await assert.rejects(client.request("session.hello", { mode: "crash" }), /未返回响应.*诊断信息/);
   await assert.rejects(client.request("session.hello", { mode: "wrong" }), /响应关联/);
   await assert.rejects(client.request("session.hello", { mode: "sequence" }), /序号/);
 });
-test("user cancellation terminates the Python worker and its child", async (t) => {
+test("user cancellation terminates the Node worker and its child", async (t) => {
   const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
-  const path = resolve(f.directory, "sleep.py"); await writeFile(path, fakeBackend);
+  const path = resolve(f.directory, "sleep.cjs"); await writeFile(path, fakeBackend);
   const client = new BridgeClient({ ...f.config, bridgePath: path });
   const abort = new AbortController();
   let pid = 0;
@@ -77,7 +79,7 @@ test("user cancellation terminates the Python worker and its child", async (t) =
 });
 test("timeout terminates a nonresponsive operation", async (t) => {
   const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
-  const path = resolve(f.directory, "sleep.py"); await writeFile(path, fakeBackend);
+  const path = resolve(f.directory, "sleep.cjs"); await writeFile(path, fakeBackend);
   const client = new BridgeClient({ ...f.config, bridgePath: path, timeoutMs: 300 });
   await assert.rejects(client.request("session.hello", { mode: "sleep" }), /超时/);
 });

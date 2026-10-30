@@ -1,63 +1,125 @@
 {
   "taskTimeoutSeconds": 1200,
+  "linterMode": "required",
+  "maxRepairAttempts": 3,
   "refactorAgent": {
     "command": [
-      "deveco-code",
-      "--project",
-      "{project_root}",
-      "--prompt-file",
-      "{prompt_file}"
+      "node",
+      "{backend_root}/dist/gate.js",
+      "refactor",
+      "--task-dir",
+      "{task_dir}",
+      "--source-root",
+      "{harmony_root}",
+      "--deveco",
+      "deveco"
     ],
-    "cwd": "{project_root}",
-    "timeoutSeconds": 1800
+    "cwd": "{task_dir}",
+    "timeoutSeconds": 1200,
+    "blockedOutputRegex": "GATE_BLOCKED|rate limit|service.*overloaded"
+  },
+  "repairAgent": {
+    "command": [
+      "node",
+      "{backend_root}/dist/gate.js",
+      "refactor",
+      "--task-dir",
+      "{task_dir}",
+      "--source-root",
+      "{harmony_root}",
+      "--deveco",
+      "deveco",
+      "--prompt-file",
+      "{repair_prompt_file}"
+    ],
+    "cwd": "{task_dir}",
+    "timeoutSeconds": 1200,
+    "blockedOutputRegex": "GATE_BLOCKED|rate limit|service.*overloaded"
   },
   "gates": {
     "smell": {
       "command": [
-        "your-smell-check-wrapper",
-        "--task",
-        "{task_file}"
+        "node",
+        "{backend_root}/dist/gate.js",
+        "smell",
+        "--task-dir",
+        "{task_dir}",
+        "--source-root",
+        "{harmony_root}",
+        "--homecheck-root",
+        "REPLACE_WITH_HOMECHECK_ROOT"
       ],
-      "cwd": "{project_root}",
-      "timeoutSeconds": 600
+      "cwd": "{task_dir}",
+      "blockedOutputRegex": "SMELL_GATE_BLOCKED|GATE_BLOCKED"
     },
     "build": {
       "command": [
+        "node",
+        "{backend_root}/dist/gate.js",
+        "hvigor",
+        "--task-dir",
+        "{task_dir}",
+        "--source-root",
+        "{harmony_root}",
+        "--hvigorw",
         "hvigorw",
+        "--ohpm",
+        "ohpm",
+        "--task",
         "assembleHap"
       ],
-      "cwd": "{project_root}",
-      "timeoutSeconds": 1800
+      "cwd": "{task_dir}",
+      "blockedOutputRegex": "GATE_BLOCKED|Invalid storeFile value|Failed[^\\r\\n]*@SignHap|certificate|no devices"
     },
     "test": {
       "command": [
+        "node",
+        "{backend_root}/dist/gate.js",
+        "hvigor",
+        "--task-dir",
+        "{task_dir}",
+        "--source-root",
+        "{harmony_root}",
+        "--hvigorw",
         "hvigorw",
-        "test"
+        "--ohpm",
+        "ohpm",
+        "--task",
+        "auto-test"
       ],
-      "cwd": "{project_root}",
-      "timeoutSeconds": 1800
+      "cwd": "{task_dir}",
+      "blockedOutputRegex": "TEST_GATE_BLOCKED|GATE_BLOCKED|Invalid storeFile value|no devices"
     },
     "linter": {
       "command": [
-        "codelinter",
-        "{target_file}",
-        "-c",
-        "code-linter.json5"
+        "node",
+        "{backend_root}/dist/gate.js",
+        "linter",
+        "--task-dir",
+        "{task_dir}",
+        "--source-root",
+        "{harmony_root}",
+        "--codelinter",
+        "codelinter"
       ],
-      "cwd": "{project_root}",
-      "timeoutSeconds": 600
+      "cwd": "{task_dir}",
+      "blockedOutputRegex": "GATE_BLOCKED"
     }
   },
   "reviewAgent": {
     "command": [
-      "deveco-code",
-      "--project",
-      "{project_root}",
-      "--read-only",
-      "--prompt-file",
-      "{review_prompt_file}"
+      "deveco",
+      "run",
+      "严格执行附件中的只读评审任务，只输出要求的 JSON。",
+      "-f",
+      "{review_prompt_file}",
+      "--dir",
+      "{task_dir}",
+      "--format",
+      "json",
+      "--dangerously-skip-permissions"
     ],
-    "cwd": "{project_root}",
-    "timeoutSeconds": 1800
+    "cwd": "{task_dir}",
+    "timeoutSeconds": 1200
   }
 }

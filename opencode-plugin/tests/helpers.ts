@@ -15,7 +15,7 @@ export async function fixture() {
   const projectRoot = resolve(directory, "示例 Project");
   await mkdir(projectRoot);
   const config = await loadConfig({ projectRoot, backend: backendRoot, runs: resolve(directory, "runs"),
-    python: process.env.ARKTS_TEST_PYTHON ?? "python", timeoutMs: 15_000 });
+    node: process.env.ARKTS_TEST_NODE ?? "node", timeoutMs: 15_000 });
   const name = "entry/src/main/ets/Page.ets";
   await mkdir(dirname(resolve(projectRoot, name)), { recursive: true });
   const before = Buffer.from("class Page { update() { return 1; } }\n");

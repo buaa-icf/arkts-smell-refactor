@@ -15,6 +15,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm --prefix .. run build",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:tui": "bun test --preload @opentui/solid/preload tests/ui.test.tsx",
     "check": "npm run typecheck && npm test && npm run test:tui"
