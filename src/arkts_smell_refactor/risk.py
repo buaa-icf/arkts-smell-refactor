@@ -10,6 +10,7 @@ from .analysis.feature_envy import analyze_feature_envy, feature_envy_risks_and_
 from .analysis.god_class import analyze_god_class, risks_and_constraints as god_class_risks
 from .analysis.cyclic_dependency import analyze_cyclic_dependency, risks_and_constraints as cycle_risks
 from .analysis.switch_statement import analyze_switch_statement
+from .analysis.long_method import analyze_long_method
 from .utils import iter_source_files, normalized_relative
 
 
@@ -112,6 +113,7 @@ def analyze_risks(task: RefactorTask) -> dict[str, Any]:
         **({"switchStatementAnalysis": smell_analysis} if task.smell_type == "switch-statement" and smell_analysis else {}),
         **({"featureEnvyAnalysis": smell_analysis} if task.smell_type == "feature-envy" and smell_analysis else {}),
         **({"codeCloneAnalysis": smell_analysis} if task.smell_type == "code-clone" and smell_analysis else {}),
+        **({"longMethodAnalysis": smell_analysis} if task.smell_type == "long-method" and smell_analysis else {}),
         "analysisLimitations": [
             "调用点采用文本级静态扫描，反射、字符串注册和跨语言调用可能无法识别",
             "ArkTS 类型解析器尚未接入，public/export 判断为保守近似",
@@ -233,6 +235,7 @@ def _add_smell_specific(
         if "@Builder" in range_text or "build()" in range_text:
             risks.append(_risk("UI_STRUCTURE_CHANGE", "high", "目标可能包含 ArkUI Builder/组件树", [task.target.file_path]))
         constraints.append({"code": "NO_NEW_CLONE", "reason": "长方法拆分可能复制相同 UI 片段", "instruction": "拆分后复检修改区域是否产生代码克隆"})
+        return analyze_long_method(task, target_text)
     elif task.smell_type == "switch-statement":
         analysis = analyze_switch_statement(task, target_text)
         controls = analysis.get("controlFlow", [])

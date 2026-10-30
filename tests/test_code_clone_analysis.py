@@ -4,13 +4,66 @@ import unittest
 from pathlib import Path
 
 from arkts_smell_refactor.automatic import _review_risk
-from arkts_smell_refactor.analysis.code_clone import analyze_code_clone
+from arkts_smell_refactor.analysis.code_clone import _ui_id_evidence, analyze_code_clone
 from arkts_smell_refactor.dataset import load_dataset_tasks
 from arkts_smell_refactor.prompts import build_refactor_prompt, build_repair_prompt, build_review_prompt
 from arkts_smell_refactor.risk import analyze_risks
 
 
 class CodeCloneAnalysisTests(unittest.TestCase):
+    def test_long_literal_evidence_reaches_initial_repair_and_independent_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "demo/src/main/ets/First.ets"
+            second = root / "demo/src/main/ets/Second.ets"
+            first.parent.mkdir(parents=True)
+            literal = "'" + "协议" * 110 + "' +\n    '保留\\n字符'"
+            first.write_text("@Builder\nfunction first() { Text(" + literal + ").id('first') }\n", encoding="utf-8")
+            second.write_text("@Builder\nfunction second() { Text(" + literal + ").id('second') }\n", encoding="utf-8")
+            task = self._task(root)
+            report = analyze_risks(task)
+            group = report["codeCloneAnalysis"]["sharedLiteralGroups"][0]
+            self.assertEqual(2, len(group["occurrences"]))
+            for prompt in (build_refactor_prompt(task, report), build_repair_prompt(task, report, {}, 1),
+                           build_review_prompt(task, _review_risk(report))):
+                self.assertIn(group["tokenSha256"], prompt)
+                self.assertIn("First.ets", prompt)
+                self.assertIn("Second.ets", prompt)
+                self.assertIn("不证明外部表达式或整个重构等价", prompt)
+                self.assertNotIn(literal, prompt)
+
+    def test_dynamic_ui_ids_do_not_swallow_following_modifiers(self):
+        source = """Text('a').id('prefix_' + index).fontColor($r('app.color.black'))
+Text('b').id(makeId('literal)(', nested(index))).width(10)
+Text('c').id(`row_${index}`).height(10)
+// Text('ignored').id('comment')
+Text(".id('not-code')").id(variable)
+/* .id('also-comment') */
+"""
+        ids = _ui_id_evidence(source)
+        self.assertEqual(["'prefix_' + index", "makeId('literal)(', nested(index))", "`row_${index}`", "variable"],
+                         [item["expression"] for item in ids])
+        self.assertEqual([1, 2, 3, 5], [item["line"] for item in ids])
+
+    def test_full_file_ids_and_private_characters_reach_all_prompts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "demo/src/main/ets/First.ets"
+            first.parent.mkdir(parents=True)
+            first.write_text("\nText('title\\uE74D')\n.id('prefix_' + index)\n" + "\n" * 7
+                             + "Text('raw\ue74d').id('trailing_id')\n", encoding="utf-8")
+            task = self._task(root)
+            report = analyze_risks(task)
+            instance = report["codeCloneAnalysis"]["instances"][0]
+            self.assertEqual([], instance["uiIds"])
+            self.assertEqual("'trailing_id'", instance["uiIdEvidence"][-1]["expression"])
+            for prompt in (build_refactor_prompt(task, report), build_review_prompt(task, report),
+                           build_repair_prompt(task, report, {"issues": []}, 1)):
+                self.assertIn("'prefix_' + index", prompt)
+                self.assertIn("'trailing_id'", prompt)
+                self.assertIn(r"\ue74d", prompt)
+                self.assertNotIn("raw\ue74d", prompt)
+
     def _task(self, root: Path):
         dataset = root / "positive.json"
         dataset.write_text(json.dumps([{
@@ -127,18 +180,20 @@ class CodeCloneAnalysisTests(unittest.TestCase):
                 self.assertNotIn("合计不超过 6 次", prompt)
                 self.assertIn("读取直接相关生产文件", prompt)
                 self.assertIn("`arkts_check`", prompt)
-                self.assertIn("两者每轮合计最多 2 次", prompt)
-                self.assertIn("第一次通过即停止内部验证", prompt)
-                self.assertIn("任一次验证若失败于 SDK", prompt)
+                self.assertIn("完整门禁由平台统一执行", prompt)
+                self.assertIn("不调用 `build_project`、`arkts_check`", prompt)
+                self.assertIn("不排查 SDK", prompt)
+                self.assertIn("minimumTokens=100", prompt)
+                self.assertIn("检测窗口可以跨方法边界", prompt)
                 self.assertNotIn("{exploration_scope}", prompt)
                 self.assertIn("@Require", prompt)
                 self.assertIn("export *", prompt)
                 # No time or execution budget may be added: a budget previously made the agent fail outright.
                 for forbidden in ("分钟", "时间预算", "超时后", "wall-clock", "wall clock"):
                     self.assertNotIn(forbidden, prompt)
-            # A3: edit every instance before running any verification.
-            self.assertIn("先完成全部实例的编辑，再执行验证", refactor_prompt)
-            self.assertIn("先完成本轮修复涉及的全部编辑，再执行验证", repair_prompt)
+            # Complete all edits and self-review before returning to platform gates.
+            self.assertIn("先完成全部实例的编辑，再自查", refactor_prompt)
+            self.assertIn("先完成本轮修复涉及的全部编辑，再自查", repair_prompt)
             self.assertIn("画像是词法线索", refactor_prompt)
             self.assertIn("实例未解析或与当前源码不符时先定向补齐", refactor_prompt)
 

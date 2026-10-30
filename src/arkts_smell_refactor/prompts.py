@@ -6,6 +6,7 @@ from typing import Any
 
 from .linter_profile import project_linter_guidance
 from .models import RefactorTask
+from .analysis.long_method import analyze_long_method
 
 
 SMELL_GUIDANCE = {
@@ -23,13 +24,21 @@ EXTRACTION_TYPE_CONSTRAINT = (
     "可保留联合类型或调整抽取边界，使运行行为保持不变。任何默认值、提前返回或类型断言都必须有原代码依据。"
 )
 
-AGENT_VERIFICATION_CONSTRAINTS = """- 内部验证只能调用 DevEco Code 内置的 `build_project` 与 `arkts_check`，两者每轮合计最多 2 次。完成编辑后按改动选择一种必要验证；第一次通过即停止内部验证，不为重复确认再调用另一工具。只有第一次失败且确认是本轮修改导致的编译错误或静态检查缺陷，才在修复后追加一次验证；第二次后交由平台 loop 处理。
-- 任一次验证若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止内部验证。禁止手工运行 hvigor、npm、pnpm 或 ohpm，禁止创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。完整门禁由平台统一执行，不在 Agent 内重复运行。"""
+AGENT_VERIFICATION_CONSTRAINTS = """- 完整门禁由平台统一执行：Agent 完成编辑和源码差异自查后立即交回，不调用 `build_project`、`arkts_check`，不自行运行构建、Linter 或测试。平台会执行 HomeCheck、构建、公共契约、测试、配置要求的 Linter 和独立语义评审，失败时附诊断定向返修。
+- 禁止手工运行 hvigor、npm、pnpm 或 ohpm；不排查 SDK、wrapper、证书、签名或下载环境，不创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。最终说明应如实写“已做源码自查，平台门禁待执行”，不能声称测试通过。"""
+
+AGENT_FOCUS_CONSTRAINTS = """- 这是局部、行为保持的重构：确认职责边界、输入输出及副作用后采用一个最小可行方案并编辑。没有新证据时不反复比较继承、泛型、架构迁移等备选方案；不要输出长计划或重复复述要求。
+- 收敛流程：批量读已知实例 → 确认一个抽取边界和差异参数 → 编辑全部实例 → 一轮定向源码自查 → 交回。只有发现具体缺口才追加读取，并只读能解决该缺口的定义；不要先递归列目录、遍历资源或枚举架构。已经确认的类型、字面量、ID 不重复证明；出现矛盾则定位差异，不能为减少步骤忽略矛盾。
+- 隔离副本不提供 Git 基线，不运行 git diff/status 或向父目录寻找仓库；源码自查使用当前文件，平台会生成正式差异供独立评审。
+- 仅使用附件和当前隔离工作区的本地生产代码。不调用 webfetch/websearch，不运行 deveco/devecocli docs search，不用 curl、浏览器、远程 MCP 或代理查网页；遇到 403/404 不重试或换站点。
+- 缺少新框架机制的语义证据时，优先缩小抽取边界，保留现有装饰器、状态所有权、宿主 Builder、响应式读取及生命周期，不靠猜测引入继承或新的状态传递模型。仍无法证明等价则报告具体缺失证据，不能伪造通过。"""
 
 EXTRACTION_QUALITY_CONSTRAINTS = """- 新增方法和成员优先遵守下方项目 Linter 摘要中的适用显式规则；未明确时沿用目标文件的可见性、命名及格式约定（如已有私有方法的前导下划线、分号、尾逗号和对象属性换行）；只调整本轮新增或修改的代码。
-- 不为提取先清理原有空白行或转换整个文件的 CRLF/LF；编辑优先使用唯一的非空代码锚点。若 oldString 匹配失败，从当前文件重新取得实际文本并缩小替换范围，不反复猜测空白行数量；保留原编码和换行格式。
+- 不为提取先清理原有空白行或转换整个文件的 CRLF/LF；编辑优先使用唯一的非空代码锚点。若 oldString 匹配失败，从当前文件重新取得实际文本并缩小替换范围，不反复猜测空白行数量。常规 UTF-8 文件的 BOM/统一换行由平台同步时适配；模板和续行表达式保留原文，不为换行探测或转换整文件。
+- 读取生产源码优先用 read；必须用 PowerShell 时显式 Get-Content -Encoding UTF8，不使用 $HOME/$home 等内置变量名。复制长字符串的完整原表达式，不凭显示乱码重打文本，不反复拼写正则或猜行号提取；已有字面量证据用于定位与比较，改动后只复核一次相关表达式。
+- 提取完成后逐一代入参数核对 .id(...) 的完整结果，包含前缀末尾下划线、动态 index 和检测范围后续的链式修饰符；不要重打乱码或不可见字符，原字符串应直接保留或按原始 Unicode 转义表达。不要为方便提取顺带重写过滤条件，尤其保持 indexOf 返回 -1/0 与布尔判断的原有语义。
 - 保留 `ForEach`/`LazyForEach` 原有 keyGenerator，包括原来未提供的情况；不要为消除 Linter 提示擅自新增 index-only key 或改变键值语义。若诊断要求调整，先核对数据更新与组件复用行为，无法证明等价则保留原行为并报告冲突。
-- 新增共享实现时：无默认值的 `@Param` 需配合 `@Require`，不得为过编译随意补默认值；组件调用点传入的属性须符合当前组件状态模型的初始化规则，不能把普通成员直接当作输入；聚合出口使用显式具名导出，避免新增 `export *` 引入 Linter 缺陷。"""
+- 新增共享实现时：无默认值的 `@Param` 需配合 `@Require`，不得为过编译随意补默认值；组件调用点传入的属性须符合当前组件状态模型的初始化规则，不能把普通成员直接当作输入；聚合出口使用显式具名导出，避免新增 `export *` 引入 Linter 缺陷。交回前一次核对“定义端 export → Index 具名再导出 → 消费端 import”三处符号一致，不能只检查 Index。"""
 
 
 def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any], *, linter_mode: str = "required") -> str:
@@ -68,8 +77,9 @@ def build_refactor_prompt(task: RefactorTask, risk: dict[str, Any], *, linter_mo
 - 不把原条件分支内的操作无条件移到分支外；提取前后必须保持条件和副作用边界。
 - 不要把“检测器不再命中”当作行为等价的证明。
 {AGENT_VERIFICATION_CONSTRAINTS}
+{AGENT_FOCUS_CONSTRAINTS}
 - {exploration_scope}
-- 先完成全部实例的编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
+- 先完成全部实例的编辑，再自查当前差异，随后交回平台验证。
 {EXTRACTION_QUALITY_CONSTRAINTS}
 {project_linter_guidance(task.target_path, Path(task.project_root), linter_mode)}
 {analysis_section}
@@ -87,7 +97,11 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
     analysis_section = f"\n{analysis_title}：\n{analysis_text}\n" if analysis_text else ""
     return f"""你是独立的 ArkTS 重构评审 Agent。该任务仅做只读评审，禁止修改任何文件。
 
-只使用任务目录中平台提供的 `review-diff.patch`、`baseline-production`、`current-production`、`review-context-production`、review-context.json、task.json、review-risk.json、refactor-changes.json 和 {gates_file} 评审以下重构。`review-context-production` 包含本次变更的直接与传递生产依赖（含本地包及重导出），必须核对新增委托、Mapper、Builder、Helper 等调用链末端的实际实现。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或任何写入命令。`commitHash` 只是输入元信息，不得替代本地重构前基线：
+不访问网页或外部文档，不调用 webfetch/websearch、文档 CLI、build_project 或 arkts_check，不重跑平台门禁。先读差异和门禁结论，再按具体风险定向读本地基线与当前代码；只核对本次变更，不展开与变更无关的设计评议。证据充分后直接输出 JSON，证据不足仍须 UNCERTAIN，不能为赶时间降低判定标准。
+
+优先使用本附件末尾的集中评审材料：变化文件前后路径、完整 diff、门禁摘要、完整风险清单及可容纳的完整源码。清单中 inline=true 的源码已完整提供，直接检查，不为取得相同内容重复读取文件或列目录；inline=false 的材料按所列精确路径批量补读。没有具体证据缺口时，不重复比较未变头尾或读取原始门禁日志。
+
+只使用任务目录中平台提供的 `review-packet.json`、`review-diff.patch`、`baseline-production`、`current-production`、`review-context-production`、review-context.json、task.json、review-risk.json、refactor-changes.json、{gates_file} 及本轮 smell-after.json、linter-after.json、public-contract-results.json、test-results.json 评审以下重构。`review-context-production` 包含本次变更的直接与传递生产依赖（含本地包及重导出），必须核对新增委托、Mapper、Builder、Helper 等调用链末端的实际实现。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或任何写入命令。`commitHash` 只是输入元信息，不得替代本地重构前基线：
 
 - 异味：{task.smell_type}
 - 文件：{_project_relative_path(task, task.target.file_path)}
@@ -98,7 +112,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 必须执行以下检查：
 
 1. 目标异味是否实质消除，而不只是逃避检测器；是否产生新异味。
-2. 打开并检查平台提供的 diff 涉及的每个生产代码文件及新增实现，不得用“只要新方法等价”代替实际核对；证据不足时必须输出 UNCERTAIN，不得扫描项目补充上下文。
+2. 检查平台提供的 diff 涉及的每个生产代码文件及新增实现；附件内的完整源码可直接作为证据，未内联的必要内容须定向补读。不得用“只要新方法等价”代替实际核对；证据不足时必须输出 UNCERTAIN，不得扫描项目补充上下文。
 3. 根据 review-risk.json 的每项语义风险检查响应式状态、UI ID、默认值、null/undefined、异常、数组顺序、对象引用和副作用顺序。
    特别检查条件分支内的调用是否被移到分支外；“无数据时不执行”与“无数据时重置状态”不等价。
 4. 调用点、编译和测试正确性由平台机械门禁负责，评审 Agent 不重复搜索调用点或测试代码；只核对 diff 中可见的入口契约变化、语义异味和风险是否消除。
@@ -112,7 +126,7 @@ def build_review_prompt(task: RefactorTask, risk: dict[str, Any], gates_file: st
 
 判定必须自洽：异味未实质消除、行为不等价或存在 blocking issue 时必须 FAIL；证据不足时必须 UNCERTAIN；PASS 不得包含 blocking issue。不得使用“通常”“应该”“可能一致”等推测作为 passed 证据。
 
-最终只输出一个 JSON 对象，不要使用 Markdown 代码围栏：
+最终只输出一个可被 JSON.parse 解析的 JSON 对象，不要使用 Markdown 代码围栏。字符串内引用代码、诊断或路径时，必须正确转义 ASCII 双引号、反斜杠和换行；不要把原始引号直接粘进 evidence/summary/reason 字符串。输出前检查 JSON 语法：
 
 {json.dumps({
   'verdict': 'PASS | FAIL | UNCERTAIN',
@@ -172,8 +186,9 @@ def build_repair_prompt(
 - 不读取或修改测试代码、构建配置、依赖及无关生产文件。
 - 不通过改名、挪行或按阈值拆小方法逃避异味检测。
 {AGENT_VERIFICATION_CONSTRAINTS}
+{AGENT_FOCUS_CONSTRAINTS}
 - {exploration_scope}
-- 先完成本轮修复涉及的全部编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
+- 先完成本轮修复涉及的全部编辑，再自查差异，随后交回平台验证。
 {EXTRACTION_QUALITY_CONSTRAINTS}
 {project_linter_guidance(task.target_path, Path(task.project_root), linter_mode)}
 {analysis_section}
@@ -345,18 +360,44 @@ def _code_clone_analysis_text(risk: dict[str, Any], task: RefactorTask | None = 
         policy_lines.append(f"- 优先抽取方式（约束上述建议形态）：{policy.get('preferredApproach', '保留入口，只抽取内部共同实现')}")
         policy_lines.extend(f"- 入口与抽取约束：{instruction}" for instruction in policy.get("constraints", []))
     seen_files = set()
+    shared_literals = analysis.get("sharedLiteralGroups", [])
+    if shared_literals:
+        policy_lines.append("- 平台已比较重构前长字符串 token 序列（不含连接空白/注释）：下列同指纹片段逐 token 相同，无须自行写脚本再次证明；这只证明所列字面量片段，不证明外部表达式或整个重构等价。指纹不同不能推出值不同。")
+        for group in shared_literals[:4]:
+            policy_lines.append(f"- 相同长字面量 SHA256={group['tokenSha256']}；位置：" + "；".join(
+                f"{_project_relative_path(task, entry['filePath']) if task else entry['filePath']}:L{entry['startLine']}-{entry['endLine']}"
+                for entry in group["occurrences"]))
+        policy_lines.append("- 按以下原始行列范围复制完整字面量及 + 连接表达式，范围末列不包含在片段内；不要重打或重新分段拼接。已修改文件的旧行号会漂移，按预览与当前代码定位；只有实际矛盾才重新比较。")
     for item in instances:
         file_path = str(item.get("filePath", ""))
-        if file_path in seen_files or not item.get("resolved"):
+        if not item.get("resolved"):
+            continue
+        relative_path = _project_relative_path(task, file_path) if task else file_path
+        segments = item.get("longLiteralSegments", [])
+        for segment in segments[:4]:
+            policy_lines.append(f"- 原长字面量片段 {relative_path}:{segment['startLine']}:{segment['startColumn']}–{segment['endLine']}:{segment['endColumnExclusive']}（末列不含），{segment['literalCount']} 个字符串 token；SHA256={segment['tokenSha256']}；开头预览={json.dumps(segment['preview'], ensure_ascii=True)}")
+        if len(segments) > 4:
+            policy_lines.append(f"- {relative_path} 另有 {len(segments) - 4} 个长字面量片段未展示。")
+        if file_path in seen_files:
             continue
         seen_files.add(file_path)
         hints = item.get("entryPointHints", [])
-        if not hints:
-            continue
-        relative_path = _project_relative_path(task, file_path) if task else file_path
-        evidence = "；".join(f"{hint['line']}: {hint['declaration']}" for hint in hints[:6])
-        omitted = f"；另有 {len(hints) - 6} 处未展示" if len(hints) > 6 else ""
-        policy_lines.append(f"- 原入口线索 {relative_path}（词法、非完整清单）：{evidence}{omitted}")
+        if hints:
+            evidence = "；".join(f"{hint['line']}: {hint['declaration']}" for hint in hints[:6])
+            omitted = f"；另有 {len(hints) - 6} 处未展示" if len(hints) > 6 else ""
+            policy_lines.append(f"- 原入口线索 {relative_path}（词法、非完整清单）：{evidence}{omitted}")
+        ids = item.get("uiIdEvidence", [])
+        if ids:
+            evidence = "；".join(f"L{entry['line']}={json.dumps(entry['expression'], ensure_ascii=True)}" for entry in ids[:24])
+            omitted = f"；另有 {len(ids) - 24} 处请查原文件" if len(ids) > 24 else ""
+            policy_lines.append(f"- 原 UI ID 表达式 {relative_path}（全文件词法线索，JSON 转义，仅保留核对，不扩大修改范围）：{evidence}{omitted}")
+        literals = item.get("sensitiveLiteralEvidence", [])
+        for entry in literals[:8]:
+            literal = entry["literal"]
+            evidence = json.dumps(literal, ensure_ascii=True) if len(literal) <= 600 else "字符串过长，请直接保留原文件该行的完整字面量"
+            policy_lines.append(f"- 含私用区/格式字符的原字面量 {relative_path}:L{entry['line']}（JSON 转义，勿重打或清洗）：{evidence}")
+        if len(literals) > 8:
+            policy_lines.append(f"- {relative_path} 另有 {len(literals) - 8} 处特殊字符字面量，请核对原文件。")
     policy_lines.extend(f"- 完成条件：{condition}" for condition in analysis.get("postConditions", []))
     return "\n".join([
         f"- 克隆组：{analysis.get('groupId', 'unknown')}；检测器类型：{analysis.get('detectorCloneKind') or '未解析'} {analysis.get('detectorContext') or ''}",
@@ -367,10 +408,21 @@ def _code_clone_analysis_text(risk: dict[str, Any], task: RefactorTask | None = 
         f"- 必须处理文件：{required_files}；跨文件：{boundary.get('crossFile', False)}",
         f"- 必须保持：{preserve}",
         *policy_lines,
+        *(f"- 检测判据：{rule}" for rule in analysis.get("detectorRules", [])),
     ])
 
 
 def _smell_analysis_text(risk: dict[str, Any], task: RefactorTask | None = None) -> tuple[str, str]:
+    long_method = risk.get("longMethodAnalysis")
+    if not long_method and task and task.smell_type == "long-method":
+        # Also support previously prepared tasks whose risk report has no profile.
+        long_method = analyze_long_method(task, "")
+    if long_method:
+        return "\n".join([
+            f"- 原检测计数：{long_method.get('reportedLineCount')}；原报告 Max：{long_method.get('reportedMax')}（未解析时为 None）",
+            f"- 建议形态：{long_method.get('recommendedPattern')}",
+            *(f"- 检测判据：{rule}" for rule in long_method.get("detectorRules", [])),
+        ]), "Long Method 检测规则与抽取指导"
     god_class = _god_class_analysis_text(risk, task)
     if god_class:
         return god_class, "God Class state and responsibility evidence"

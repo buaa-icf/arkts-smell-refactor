@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 
@@ -16,7 +17,8 @@ _STYLE_RULES = {
     "consistent-indexed-object-style", "consistent-type-definitions",
     "explicit-member-accessibility", "func-call-spacing", "indent",
     "keyword-spacing", "lines-between-class-members", "member-delimiter-style",
-    "naming-convention", "no-extra-semi", "object-curly-spacing", "quotes",
+    "naming-convention", "no-extra-semi", "object-curly-spacing", "object-property-newline", "quotes",
+    "foreach-args-check", "avoid-overusing-custom-component-check",
     "semi", "space-before-function-paren", "space-infix-ops",
     "type-annotation-spacing",
 }
@@ -87,6 +89,82 @@ def _members(tokens: list[str]) -> list[tuple[str, list[str]]]:
     return result
 
 
+def _inherited_rules(entries: list[tuple[str, list[str]]]) -> tuple[dict[str, list[str]], list[str]]:
+    """Read the installed tool's JSON catalogs, without executing its scripts."""
+    requested = []
+    for key, value in entries:
+        if key == "ruleSet":
+            requested.extend(token[1:-1] for token in value if token.startswith(('"', "'")))
+    launcher = shutil.which("codelinter") if requested else None
+    if not launcher:
+        return {}, []
+    parent = Path(launcher).resolve().parent.parent
+    roots = (parent / "codelinter" / "linter", parent / "linter")
+    catalogs = {}
+    for root in roots:
+        for path in sorted(root.glob("*/ruleSet.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeError, ValueError):
+                continue
+            if isinstance(data, dict):
+                for name, rules in data.items():
+                    if isinstance(rules, dict):
+                        catalogs[name] = (rules, path)
+    inherited, sources = {}, []
+    for name in requested:
+        if name not in catalogs:
+            continue
+        rules, path = catalogs[name]
+        for rule, options in rules.items():
+            if rule.rsplit("/", 1)[-1] in _STYLE_RULES:
+                inherited[rule] = _tokens(json.dumps(options, ensure_ascii=False))
+                source = f"{name} ← {path.parent.name}/ruleSet.json"
+                if source not in sources:
+                    sources.append(source)
+    return inherited, sources
+
+
+def _generation_checks(rules: dict[str, list[str]], conditional: bool) -> list[str]:
+    # Do not guess effective selectors when project overrides are present.
+    if conditional:
+        return []
+    checks = []
+    for name, options in rules.items():
+        level = options[1] if options and options[0] == "[" and len(options) > 1 else (options[0] if options else "0")
+        if level.strip("\"'").lower() in {"off", "0", "false"}:
+            continue
+        rule = name.rsplit("/", 1)[-1]
+        if rule == "semi":
+            mode = next((token.strip("\"'") for token in options if token.strip("\"'") in {"always", "never"}), None)
+            if mode == "never":
+                checks.append("semi=never：遵守省略分号配置，不机械补分号。")
+            else:
+                checks.append("semi 已启用：逐行核对新增字段、变量声明、赋值及 return 的语句结束；不要从原片段复制漏分号。显式 always/never 选项优先。")
+        elif rule == "naming-convention" and "require" in {token.strip("\"'") for token in options}:
+            # Interpret each selector separately: a filter or a conflicting
+            # selector makes a universal private-field example inappropriate.
+            selectors = []
+            depth, start = 0, 0
+            for i, token in enumerate(options):
+                if token == "{":
+                    if depth == 0: start = i
+                    depth += 1
+                elif token == "}":
+                    depth -= 1
+                    if depth == 0: selectors.append(dict(_members(options[start:i + 1])))
+            plain_private = [selector for selector in selectors
+                             if selector.get("leadingUnderscore", [""])[0].strip("\"'") == "require"
+                             and set(x.strip("\"'") for x in selector.get("selector", [])) & {"memberLike", "classProperty", "property"}
+                             and "private" in [x.strip("\"'") for x in selector.get("modifiers", [])]
+                             and not any(key in selector for key in ("filter", "types"))]
+            if plain_private:
+                checks.append("naming-convention：匹配下方 private 选择器的成员必须有前导下划线；UPPER_CASE 不豁免，例如 private static readonly STORE 应为 _STORE。仅调整本轮新增私有成员，不改公共名称；更具体选择器优先。")
+        elif rule == "avoid-overusing-custom-component-check":
+            checks.append("avoid-overusing-custom-component-check 已启用：纯展示、无独立状态/生命周期的共同 UI 优先提取 @Builder，避免先新增小型 @Component 再返修。原 Row/Button 容器、修饰符、ID 与回调留在原位置；不得在返回 void 的 Builder 调用上链式调用 .width/.height。需要独立状态或生命周期时不能强换 Builder。")
+    return checks
+
+
 def project_linter_guidance(target: Path, project_root: Path, linter_mode: str) -> str:
     if linter_mode == "skip":
         return ""
@@ -97,6 +175,8 @@ def project_linter_guidance(target: Path, project_root: Path, linter_mode: str) 
     try:
         entries = _members(_tokens(config.read_text(encoding="utf-8-sig")))
         lines = []
+        rules, sources = _inherited_rules(entries)
+        explicit = {}
         for key, value in entries:
             if key in {"files", "ignore", "ruleSet", "overrides"}:
                 lines.append(f"- {key}: {' '.join(value)}")
@@ -104,6 +184,11 @@ def project_linter_guidance(target: Path, project_root: Path, linter_mode: str) 
                 for rule, options in _members(value):
                     if rule.rsplit("/", 1)[-1] in _STYLE_RULES:
                         lines.append(f"- {rule}: {' '.join(options)}")
+                        explicit[rule] = options
+        inherited_lines = [f"- 继承 {rule}: {' '.join(options)}" for rule, options in rules.items() if rule not in explicit]
+        rules.update(explicit)
+        conditional = any(key == "overrides" and value != ["[", "]"] for key, value in entries)
+        checks = _generation_checks(rules, conditional)
     except (OSError, UnicodeError, ValueError):
         return (
             f"\n## 项目 Linter 配置\n\n配置来源：{location}。"
@@ -117,7 +202,8 @@ def project_linter_guidance(target: Path, project_root: Path, linter_mode: str) 
         "在生成新增或修改代码时遵守适用的显式配置，不复制原代码中已有的违规风格，不扩大为全文件整理。\n"
         "- 保留原规则选项和选择器：只对匹配 files 且未被 ignore 排除的文件应用，"
         "off/0 表示该项关闭；按 naming-convention 的 selector/modifiers/filter 和可见性的 overrides 区分适用对象。\n"
-        "- 这是显式风格规则摘录，ruleSet 继承规则及未写出的默认选项未展开；"
+        "- 仅展开下方有本机目录来源的继承项；其他 ruleSet 继承规则及未写出的默认选项未展开；"
         "未列出不代表禁用，以实际 Linter 为准。不要为风格要求改变公共 API、状态、ForEach 键或其他运行行为。\n"
-        + "\n".join(lines) + "\n"
+        + ("\n生成与交回前检查（仅适用于本配置 files/ignore 及选择器匹配的代码）：\n" + "\n".join(f"- {check}" for check in checks) + "\n" if checks else "")
+        + "\n".join(lines + [f"- 继承来源：{source}" for source in sources] + inherited_lines) + "\n"
     )

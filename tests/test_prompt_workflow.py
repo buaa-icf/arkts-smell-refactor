@@ -82,7 +82,9 @@ class PromptWorkflowTests(unittest.TestCase):
             self.assertIn("已有私有方法的前导下划线", prompt)
             self.assertIn("不为提取先清理原有空白行", prompt)
             self.assertIn("不反复猜测空白行数量", prompt)
-            self.assertIn("第一次通过即停止内部验证", prompt)
+            self.assertIn("完整门禁由平台统一执行", prompt)
+            self.assertIn("不调用 `build_project`、`arkts_check`", prompt)
+            self.assertIn("不调用 webfetch/websearch", prompt)
             self.assertIn("不得到原仓库、历史 runs 或快照中搜索或复制实现", prompt)
 
     def test_linter_skip_is_explicit_in_initial_prompt(self):

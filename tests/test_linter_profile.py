@@ -1,4 +1,5 @@
 import tempfile
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +11,54 @@ from arkts_smell_refactor.prompts import build_refactor_prompt, build_repair_pro
 
 
 class LinterProfileTests(unittest.TestCase):
+    def test_installed_performance_rules_are_expanded_and_explicit_off_wins(self):
+        catalog = self.workspace / "sdk/codelinter/linter/arkPerfCheck/ruleSet.json"
+        catalog.parent.mkdir(parents=True)
+        catalog.write_text(json.dumps({"plugin:@performance/recommended": {
+            "@performance/avoid-overusing-custom-component-check": 1,
+            "@performance/unrelated-heavy-rule": 1,
+        }}), encoding="utf-8")
+        launcher = self.workspace / "sdk/bin/codelinter.bat"
+        rule = "@performance/avoid-overusing-custom-component-check"
+        for override in (None, "off", 0, ["off"]):
+            data = {"files": ["**/*.ets"], "ruleSet": ["plugin:@performance/recommended"]}
+            if override is not None: data["rules"] = {rule: override}
+            self.config.write_text(json.dumps(data), encoding="utf-8")
+            with patch("arkts_smell_refactor.linter_profile.shutil.which", return_value=str(launcher)):
+                text = self.guidance()
+            self.assertIn("arkPerfCheck/ruleSet.json", text)
+            self.assertNotIn("unrelated-heavy-rule", text)
+            self.assertEqual(override is None, "共同 UI 优先提取 @Builder" in text)
+            self.assertEqual(override is None, f"继承 {rule}:" in text)
+
+    def test_missing_catalog_does_not_invent_inherited_rules(self):
+        self.config.write_text('{ruleSet:["plugin:@performance/recommended"]}', encoding="utf-8")
+        with patch("arkts_smell_refactor.linter_profile.shutil.which", return_value=None):
+            self.assertNotIn("avoid-overusing-custom-component-check 已启用", self.guidance())
+
+    def test_private_fields_and_semi_receive_actionable_but_scoped_checks(self):
+        rule = "@typescript-eslint/naming-convention"
+        data = {"rules": {rule: ["error", {"selector": "memberLike", "modifiers": ["private"],
+            "format": ["camelCase", "UPPER_CASE"], "leadingUnderscore": "require"}],
+            "@typescript-eslint/semi": "error"}}
+        self.config.write_text(json.dumps(data), encoding="utf-8")
+        text = self.guidance()
+        self.assertIn("STORE 应为 _STORE", text)
+        self.assertIn("不要从原片段复制漏分号", text)
+        data["rules"][rule][1]["filter"] = {"regex": "special", "match": True}
+        data["rules"]["@typescript-eslint/semi"] = ["error", "never"]
+        self.config.write_text(json.dumps(data), encoding="utf-8")
+        text = self.guidance()
+        self.assertNotIn("STORE 应为 _STORE", text)
+        self.assertIn("semi=never", text)
+
+    def test_conditional_overrides_do_not_become_unconditional_checks(self):
+        self.config.write_text('''{rules: {'@performance/avoid-overusing-custom-component-check': 'error'},
+          overrides: [{files:['**/Helper.ets'],rules:{'@performance/avoid-overusing-custom-component-check':'off'}}]}''', encoding="utf-8")
+        text = self.guidance()
+        self.assertIn("**/Helper.ets", text)
+        self.assertNotIn("共同 UI 优先提取 @Builder", text)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -50,6 +99,8 @@ class LinterProfileTests(unittest.TestCase):
             }],
             /* '@typescript-eslint/quotes': ['error', 'double'] */
             '@typescript-eslint/quotes': ['warn', 'single'],
+            '@hw-stylistic/object-property-newline': 'error',
+            '@performance/foreach-args-check': 'warn',
             '@security/no-commented-code': 'warn',
           },
         }''', encoding="utf-8-sig")
@@ -64,6 +115,8 @@ class LinterProfileTests(unittest.TestCase):
         self.assertNotIn("Fake example", prompt)
         self.assertNotIn("'double'", prompt)
         self.assertNotIn("@security/no-commented-code", prompt)
+        self.assertIn("@hw-stylistic/object-property-newline: 'error'", prompt)
+        self.assertIn("@performance/foreach-args-check: 'warn'", prompt)
         self.assertIn("ruleSet 继承规则及未写出的默认选项未展开", prompt)
 
     def test_disabled_rules_and_conditional_overrides_are_not_lost(self):

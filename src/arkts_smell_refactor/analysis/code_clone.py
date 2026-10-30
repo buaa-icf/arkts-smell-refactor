@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
 from ..models import RefactorTask
+from .literals import long_literal_segments, shared_literal_groups
 
 
 CLONE_KIND_RE = re.compile(r"Code\s+Clone\s+(Type-\d+)(?:\s*\(([^)]+)\))?", re.IGNORECASE)
 IDENTIFIER_RE = re.compile(r"\b[A-Za-z_$][\w$]*\b")
 NUMBER_RE = re.compile(r"\b(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?)\b")
 STRING_RE = re.compile(r"(['\"])(?:\\.|(?!\1)[^\\\r\n])*\1|`(?:\\.|[^`])*`")
-UI_ID_RE = re.compile(r"\.id\s*\(\s*(['\"])(.*?)\1\s*\)", re.DOTALL)
 THIS_REF_RE = re.compile(r"\bthis\.([A-Za-z_$][\w$]*)")
 THIS_WRITE_RE = re.compile(
     r"\bthis\.([A-Za-z_$][\w$]*)\s*(?:[+\-*/%]?=|\+\+|--)",
@@ -70,11 +71,20 @@ def analyze_code_clone(task: RefactorTask, target_text: str) -> dict[str, Any]:
         instance.pop("_shape", None)
     return {
         "groupId": f"clone-{group_id}",
+        "detectorRules": [
+            "已核对的 HomeCheck 默认规则使用源码 token 滑动窗口：minimumTokens=100，标识符和字面量均归一化，忽略日志，保留类型和装饰器。",
+            "默认 similarityThreshold=1.0；小于 1.0 才启用 Type-3 近似匹配。这里的词法形态相似度不是检测器的判定值。",
+            "检测窗口可以跨方法边界；保留的 import、字段、构造器、单例 getter 和委托方法也可能组成重复骨架。",
+            "改名、替换常量、改空白或只移动原样代码不能消除归一化克隆；需共享有意义的实现并显式保留实例差异。",
+            "数字是已核对版本的默认参数，不是消息中 tokens/lines 的推导值，也不保证自定义配置相同；最终以本轮 HomeCheck 为准。",
+            "先核对已知实例及相邻重复骨架；不要为查阈值搜索工作区或网络，也不要为凑小于 100 tokens 删除公共入口或制造无意义差异。",
+        ],
         "detectorCloneKind": clone_kind,
         "detectorContext": detector_context,
         "instanceCount": len(instances),
         "resolvedInstanceCount": len(available),
         "instances": instances,
+        "sharedLiteralGroups": shared_literal_groups(instances),
         "classification": classification,
         "similarity": similarity,
         "variationDimensions": dimensions,
@@ -90,7 +100,7 @@ def analyze_code_clone(task: RefactorTask, target_text: str) -> dict[str, Any]:
         "postConditions": [
             "逐项对照原文件的导出、类/组件/Builder 入口、构造方式和静态访问方式；旧调用形式必须继续有效。",
             "逐个核对所有实例仍保留各自的 UI ID、文案、资源、回调、状态读写和副作用顺序。",
-            "重构后由 HomeCheck 在完整 Harmony 工程中复检；若仍报告该克隆组，按剩余实例定向修复，而不是只改名、换行或移动原样代码。",
+            "重构后由平台 HomeCheck 复检目标及修改/新增生产文件；若仍报告该克隆组，按剩余实例定向修复，而不是只改名、换行或移动原样代码。",
         ],
         "limitations": [
             "这是词法级画像：不能证明跨文件类型、ArkUI 生命周期、闭包或资源引用的行为等价。",
@@ -198,6 +208,7 @@ def _instance(
     fragment = _range_text(text, start_line, end_line) if resolved else ""
     masked = _mask_non_code(fragment)
     shape = _shape(masked)
+    fragment_ids = _ui_id_evidence(fragment)
     return {
         "role": role,
         "filePath": file_path,
@@ -208,7 +219,15 @@ def _instance(
         "rawFingerprint": _digest(fragment),
         "shapeFingerprint": _digest(shape),
         "_shape": shape,
-        "uiIds": sorted(set(UI_ID_RE.findall(fragment) and [value for _, value in UI_ID_RE.findall(fragment)])),
+        "uiIds": sorted({
+            item["expression"][1:-1] for item in fragment_ids
+            if item["expression"].startswith(("'", '"')) and STRING_RE.fullmatch(item["expression"])
+        }),
+        # Report ranges can end before a chained .id() modifier. Include the
+        # whole file's call sites as preservation evidence, not an edit scope.
+        "uiIdEvidence": _ui_id_evidence(text) if resolved else [],
+        "sensitiveLiteralEvidence": _sensitive_literal_evidence(text) if resolved else [],
+        "longLiteralSegments": long_literal_segments(text, start_line, end_line) if resolved else [],
         "thisReferences": sorted(set(THIS_REF_RE.findall(masked))),
         "stateWrites": sorted(set(THIS_WRITE_RE.findall(masked))),
         "callbacks": sorted(set(CALLBACK_RE.findall(masked))),
@@ -217,6 +236,35 @@ def _instance(
         "stringLiterals": _string_literals(fragment),
         "entryPointHints": _entry_point_hints(text) if resolved else [],
     }
+
+
+def _ui_id_evidence(text: str) -> list[dict[str, Any]]:
+    masked = _mask_non_code(text)
+    evidence = []
+    for match in re.finditer(r"\.id\s*\(", masked):
+        depth = 1
+        end = match.end()
+        while end < len(masked) and depth:
+            if masked[end] == "(":
+                depth += 1
+            elif masked[end] == ")":
+                depth -= 1
+            end += 1
+        if depth:
+            continue
+        evidence.append({
+            "line": text.count("\n", 0, match.start()) + 1,
+            "expression": text[match.end():end - 1].strip(),
+        })
+    return evidence
+
+
+def _sensitive_literal_evidence(text: str) -> list[dict[str, Any]]:
+    return [
+        {"line": text.count("\n", 0, match.start()) + 1, "literal": match.group()}
+        for match in STRING_RE.finditer(text)
+        if any(unicodedata.category(char) in {"Co", "Cf"} for char in match.group())
+    ]
 
 
 def _entry_point_hints(text: str) -> list[dict[str, Any]]:
@@ -243,6 +291,7 @@ def _refactoring_policy(instances: list[dict[str, Any]]) -> dict[str, Any]:
             "以重构前生产代码为准，保留原文件路径下的具名/默认导出、类名、组件/Builder 名、构造方式及公共成员签名、可见性和读写能力；直接文件导入同样属于契约，不限于 Index.ets。测试不可见或已修改可见生产调用方，都不是删除旧入口的依据。",
             "保留原有 ClassName.instance 等静态方法/字段/getter/setter 的调用形式；不得仅以新导出常量或共享类替换原类。保持每个实例的独立状态、对象身份、原有惰性初始化和清理时机，不把多个单例合并或提前初始化。",
             "UI 抽取保留原 @Entry 页面、路由、组件/Builder 调用入口、宿主根节点和各实例 UI ID；不以整页/整组件替换代替局部提取。保持响应式状态所属组件、this 绑定及生命周期；依赖宿主的 Builder 调用与 CustomDialogController 构造优先留在原组件中，未经上下文等价性确认不得移入普通顶层工厂。",
+            "纯展示的共同 UI 优先抽取成员/顶层 @Builder；原 Row/Button 宿主容器、属性链、ID 和事件留在各入口，仅参数化必要差异。不要为短片段新造组件状态模型、泛型数据框架或搬迁整页。以重复长文案为主时先考虑共享常量，只有还存在实质共同 UI/逻辑才继续抽取；最终仍由 HomeCheck 复检。",
             "原入口可以变为薄委托；若兼容外壳仍被判克隆，继续抽取内部共同逻辑并保留实例差异，不删除入口、不只改名/换行，也不放宽检测规则。无法同时满足兼容和克隆消除时，明确报告具体冲突，不能以破坏调用契约换取 smell 通过。",
         ],
     }

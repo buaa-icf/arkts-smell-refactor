@@ -131,8 +131,8 @@ class Painter {
         self.assertIn("建议范围：inter-class", refactor_prompt)
         self.assertIn("默认修改边界：demo/TimelineVM.ets，demo/Info.ets", refactor_prompt)
         self.assertIn("建议构建模块：timeline", refactor_prompt)
-        self.assertIn("两者每轮合计最多 2 次", refactor_prompt)
-        self.assertIn("确认是本轮修改导致的编译错误", refactor_prompt)
+        self.assertIn("完整门禁由平台统一执行", refactor_prompt)
+        self.assertIn("失败时附诊断定向返修", refactor_prompt)
         self.assertIn("依恋是否只是被搬到新的方法或工具类", review_prompt)
 
 
