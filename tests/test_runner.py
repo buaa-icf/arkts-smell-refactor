@@ -2,12 +2,96 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from arkts_smell_refactor.models import CommandResult
 from arkts_smell_refactor.runner import _build_agent_failure_report, _build_failure_report, _extract_review_json, _task_from_file, execute_pipeline
 
 
 class RunnerTests(unittest.TestCase):
+    def test_format_retry_is_bounded_and_does_not_rerun_gates_or_edit_code(self):
+        good = json.dumps({"verdict": "PASS", "summary": 'verified "result"',
+                           "smellRemoved": True, "behaviorEquivalent": True,
+                           "riskChecks": [], "issues": []})
+        bad = good.replace('\\"', '"')
+        for formatted, expected, process_status in ((good, "PASS", "PASS"), (bad, "BLOCKED", "PASS"),
+                                    (good.replace("verified", "invented"), "BLOCKED", "PASS"),
+                                    (good, "BLOCKED", "FAIL")):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+                calls = []
+                def run(name, spec, context, cwd, task_dir, dry_run, **kwargs):
+                    calls.append((name, kwargs["task_deadline"]))
+                    path = task_dir / f"{name}.log"
+                    path.write_text(formatted if name.endswith("-format") else bad, encoding="utf-8")
+                    return CommandResult(name, process_status if name.endswith("-format") else "PASS", output_file=str(path))
+                gates = [CommandResult(name, "PASS") for name in ("smell", "build", "test", "linter")]
+                config = {"reviewAgent": {"command": ["review"]},
+                          "reviewFormatAgent": {"command": ["format"], "timeoutSeconds": 90},
+                          "repairAgent": {"command": ["must-not-run"]}}
+                with patch("arkts_smell_refactor.runner._run_spec", side_effect=run), patch(
+                    "arkts_smell_refactor.runner._run_gates_fail_fast", return_value=gates
+                ) as gate:
+                    result = execute_pipeline(root, config)
+                self.assertEqual(expected, result["verdict"])
+                self.assertEqual(0, result["repairAttempts"])
+                self.assertEqual(1, result["reviewFormatRetries"])
+                gate.assert_called_once()
+                self.assertEqual(["review-agent", "review-agent-format"], [item[0] for item in calls])
+                self.assertEqual(calls[0][1], calls[1][1])
+                self.assertEqual("BLOCKED", result["steps"][-2]["status"])
+
+    def test_format_retry_preserves_semantic_failure_for_code_repair(self):
+        good = json.dumps({"verdict": "FAIL", "summary": 'guard "changed"',
+                           "issues": [{"severity": "blocking", "reason": "lost guard"}]})
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+            (root / "risk-report.json").write_text("{}", encoding="utf-8")
+            def run(name, spec, context, cwd, task_dir, dry_run, **kwargs):
+                path = task_dir / f"{name}.log"
+                text = good if name.endswith("-format") else good.replace('\\"', '"')
+                if name == "review-agent-repair-1":
+                    text = '{"verdict":"PASS"}'
+                path.write_text(text, encoding="utf-8")
+                return CommandResult(name, "PASS", output_file=str(path))
+            def gates(*args, **kwargs):
+                suffix = args[6]
+                return [CommandResult(name + suffix, "PASS") for name in ("smell", "build", "test", "linter")]
+            config = {"reviewAgent": {"command": ["review"]}, "reviewFormatAgent": {"command": ["format"]},
+                      "repairAgent": {"command": ["repair"]}}
+            with patch("arkts_smell_refactor.runner._run_spec", side_effect=run), patch(
+                "arkts_smell_refactor.runner._run_gates_fail_fast", side_effect=gates
+            ):
+                result = execute_pipeline(root, config)
+            self.assertEqual("PASS", result["verdict"])
+            self.assertEqual(1, result["repairAttempts"])
+            self.assertEqual(1, result["reviewFormatRetries"])
+            failure = json.loads((root / "failure-report-1.json").read_text(encoding="utf-8"))
+            self.assertEqual("SEMANTIC_REVIEW_FAILURE", failure["classification"])
+            self.assertEqual("lost guard", failure["issues"][0]["reason"])
+
+    def test_format_retry_is_not_used_for_valid_uncertainty_or_expired_deadline(self):
+        for text, expired in (('{"verdict":"UNCERTAIN"}', False),
+                              ('{"verdict":"PASS","summary":"bad "quote""}', True)):
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root / "task.json").write_text(json.dumps(self._task(temp)), encoding="utf-8")
+                def run(name, *args, **kwargs):
+                    (root / f"{name}.log").write_text(text, encoding="utf-8")
+                    return CommandResult(name, "PASS")
+                gates = [CommandResult(name, "PASS") for name in ("smell", "build", "test", "linter")]
+                with patch("arkts_smell_refactor.runner._run_spec", side_effect=run) as command, patch(
+                    "arkts_smell_refactor.runner._run_gates_fail_fast", return_value=gates
+                ):
+                    result = execute_pipeline(root, {"reviewFormatAgent": {"command": ["format"]},
+                        "taskTimeoutSeconds": 1, "reviewAgent": {"command": ["review"]}},
+                        task_started_at=0 if expired else None)
+                self.assertEqual("BLOCKED", result["verdict"])
+                self.assertEqual(0, result["reviewFormatRetries"])
+                command.assert_called_once()
+
     def _task(self, temp):
         return {
             "schema_version": "1.0", "task_id": "x", "source_project": "demo",

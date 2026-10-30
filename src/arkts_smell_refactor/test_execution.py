@@ -13,6 +13,7 @@ from .utils import write_json
 
 TEST_TOOL_BLOCKERS = (
     r"Connect server failed|\[Empty\]|no (?:available |connected )?devices?\b|device not found|"
+    r"\[Fail\]\s*ExecuteCommand\s+need\s+connect-key\b|"
     r"device[^\r\n]*(?:offline|not connected)|\bFailed[^\r\n]*@SignHap\b|"
     r"Invalid storeFile value|(?:hap/hsp|hap|hsp) package is signed"
 )

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import CommandResult, RefactorTask
+from .review_output import final_review_text, format_retry_prompt, parse_review, preserves_review
 from .test_execution import failed_hypium_cases, is_test_host_unavailable, parse_hypium_cases
 from .utils import read_json, write_json, write_text
 
@@ -22,6 +23,7 @@ PLACEHOLDERS = {
     "risk_file",
     "prompt_file",
     "review_prompt_file",
+    "review_format_prompt_file",
     "repair_prompt_file",
     "project_root",
     "workspace_root",
@@ -84,6 +86,8 @@ def execute_pipeline(
         results.append(CommandResult("review-agent", "SKIPPED", reason=reason))
         result = _final_result(task.task_id, results, dry_run)
         result["validationPolicy"] = validation_policy
+        if "agentPolicy" in config:
+            result["agentPolicy"] = config["agentPolicy"]
         _add_timing(result, pipeline_started, task_timeout)
         write_json(task_dir / "result.json", result)
         return result
@@ -94,6 +98,7 @@ def execute_pipeline(
     terminal: list[CommandResult] = []
     repair_number = 0
     review_retries = 0
+    review_format_retries = 0
 
     while True:
         suffix = "" if repair_number == 0 else f"-repair-{repair_number}"
@@ -146,9 +151,40 @@ def execute_pipeline(
                     review_path = task_dir / f"{review_name}.log"
                     review_output = task_dir / f"review{suffix}{retry_suffix}.json"
                     review_json = _extract_review_json(review_path, review_output)
+                    format_spec = config.get("reviewFormatAgent")
+                    if review_json is None and format_spec and review_format_retries == 0:
+                        original_text = final_review_text(review_path)
+                        format_prompt = format_retry_prompt(original_text)
+                        if format_prompt and (task_deadline is None or time.monotonic() < task_deadline):
+                            review_result.status = "BLOCKED"
+                            review_result.reason = "评审已完成但 JSON 格式无效，尝试一次仅格式修复"
+                            results.append(review_result)
+                            review_format_retries += 1
+                            format_path = task_dir / f"review-format-prompt{suffix}.md"
+                            write_text(format_path, format_prompt)
+                            format_context = {**context, "review_format_prompt_file": str(format_path.resolve())}
+                            if progress: progress("评审 JSON 格式修复", "开始")
+                            format_name = review_name + "-format"
+                            review_result = _run_spec(
+                                format_name, format_spec, format_context,
+                                str(task_dir), task_dir, False, task_deadline=task_deadline,
+                            )
+                            if review_result.status != "PASS":
+                                review_result.status = "BLOCKED"
+                                review_result.reason = review_result.reason or "评审 JSON 格式修复进程未成功"
+                            if review_result.status == "PASS":
+                                formatted = final_review_text(task_dir / f"{format_name}.log")
+                                if preserves_review(original_text, formatted):
+                                    review_json = parse_review(formatted)
+                                    write_json(review_output, review_json)
+                                    write_json(task_dir / f"review{suffix}{retry_suffix}-format.json", review_json)
+                                else:
+                                    review_result.status = "BLOCKED"
+                                    review_result.reason = "格式修复仍无效、改变原评审内容或结论不自洽"
                     verdict = str((review_json or {}).get("verdict", "UNCERTAIN")).upper()
-                    review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
-                    review_result.reason = None if verdict in {"PASS", "FAIL"} else "评审输出为 UNCERTAIN 或缺少有效 verdict JSON"
+                    if review_result.status == "PASS":
+                        review_result.status = verdict if verdict in {"PASS", "FAIL"} else "BLOCKED"
+                        review_result.reason = None if verdict in {"PASS", "FAIL"} else "评审输出为 UNCERTAIN 或缺少有效 verdict JSON"
                 results.append(review_result)
                 terminal = [*gate_results, review_result]
                 if progress: progress("评审 Agent", review_result.status)
@@ -210,8 +246,11 @@ def execute_pipeline(
     ]
     result = _final_result(task.task_id, results, dry_run, required_terminal)
     result["validationPolicy"] = validation_policy
+    if "agentPolicy" in config:
+        result["agentPolicy"] = config["agentPolicy"]
     result["repairAttempts"] = repair_number
     result["reviewRetries"] = review_retries
+    result["reviewFormatRetries"] = review_format_retries
     result["attempts"] = attempts
     _add_timing(result, pipeline_started, task_timeout)
     write_json(task_dir / "result.json", result)
@@ -296,7 +335,7 @@ def _run_gates_fail_fast(
 
 
 def _build_failure_report(task_dir: Path, task: RefactorTask, failed: CommandResult, next_attempt: int) -> dict[str, Any]:
-    logical_stage = re.sub(r"-retry-\d+$", "", failed.name).split("-repair-", 1)[0]
+    logical_stage = re.sub(r"-retry-\d+$", "", failed.name.removesuffix("-format")).split("-repair-", 1)[0]
     review_suffix = failed.name.removeprefix("review-agent")
     review_path = task_dir / ("review.json" if not review_suffix else f"review{review_suffix}.json")
     review = read_json(review_path) if logical_stage == "review-agent" and review_path.exists() else {}
@@ -725,6 +764,7 @@ def _context(task_dir: Path, task: RefactorTask) -> dict[str, str]:
         "risk_file": str((task_dir / "risk-report.json").resolve()),
         "prompt_file": str((task_dir / "refactor-prompt.md").resolve()),
         "review_prompt_file": str((task_dir / "review-prompt.md").resolve()),
+        "review_format_prompt_file": str((task_dir / "review-format-prompt.md").resolve()),
         "repair_prompt_file": str((task_dir / "repair-prompt.md").resolve()),
         "project_root": task.project_root,
         "workspace_root": task.workspace_root,
@@ -752,38 +792,10 @@ def _task_from_file(path: Path) -> RefactorTask:
 
 
 def _extract_review_json(log_path: Path, output_path: Path) -> dict[str, Any] | None:
-    text = log_path.read_text(encoding="utf-8")
-    candidates: list[dict[str, Any]] = []
-
-    def collect(value: Any) -> None:
-        if isinstance(value, dict):
-            if "verdict" in value:
-                candidates.append(value)
-            for nested in value.values():
-                collect(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                collect(nested)
-        elif isinstance(value, str) and "verdict" in value:
-            collect_json_text(value)
-
-    def collect_json_text(value: str) -> None:
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(value):
-            if char != "{":
-                continue
-            try:
-                data, _ = decoder.raw_decode(value[index:])
-            except json.JSONDecodeError:
-                continue
-            collect(data)
-
-    # Scan the full text to support both multiline verdicts and JSONL text events.
-    collect_json_text(text)
-    if not candidates:
+    data = parse_review(final_review_text(log_path))
+    if data is None:
         output_path.unlink(missing_ok=True)
         return None
-    data = candidates[-1]
     write_json(output_path, data)
     return data
 

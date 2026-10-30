@@ -269,7 +269,10 @@ class TestGateTests(unittest.TestCase):
     def test_device_and_missing_signed_package_errors_block(self):
         self.suite("instrument")
         plan = self.plan()
-        for output in ("Connect server failed", "no connected device", "Check whether the hap/hsp package is signed."):
+        for output in (
+            "Connect server failed", "no connected device", "Check whether the hap/hsp package is signed.",
+            "ErrorCode: 00507013\nDescription: Error: [Fail]ExecuteCommand need connect-key? please confirm a device by help info",
+        ):
             with self.subTest(output=output):
                 code, _ = self.execute(plan, lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, output, ""))
                 self.assertEqual(3, code)

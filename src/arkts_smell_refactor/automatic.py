@@ -17,6 +17,7 @@ from .runtime_smoke import prepare_runtime_smoke
 from .runner import execute_pipeline
 from .test_execution import TEST_TOOL_BLOCKERS
 from .utils import write_json, write_text
+from .agent_runtime import DISABLED_AGENT_PROVIDERS, DISABLED_AGENT_TOOLS, POLICY_VERSION, resolve_agent_model
 
 
 def read_pasted_json() -> list[dict[str, Any]]:
@@ -54,7 +55,13 @@ def _normalize_pasted_data(data: Any) -> list[dict[str, Any]]:
     raise ValueError("请输入一条异味 JSON 对象 {...} 或阳性数据集 JSON 数组 [{...}]")
 
 
-def run_interactive(base_dir: Path, workspace_hint: Path | None = None, *, linter_mode: str = "required") -> dict[str, Any]:
+def run_interactive(
+    base_dir: Path, workspace_hint: Path | None = None, *, linter_mode: str = "required",
+    refactor_model: str | None = None, refactor_variant: str | None = None,
+    review_model: str | None = None, review_variant: str | None = None,
+) -> dict[str, Any]:
+    refactor_model = resolve_agent_model(refactor_model)
+    review_model = resolve_agent_model(review_model)
     data = read_pasted_json()
     session_started = time.monotonic()
     session = base_dir / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -67,6 +74,14 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None, *, linte
     tools = _discover_tools(workspace)
     print("工具发现：" + "，".join(f"{k}={'已找到' if v else '未找到'}" for k, v in tools.items()))
     print(f"Linter 模式：{linter_mode}（skip 表示不执行、不触发返修）")
+    agent_policy = {
+        "policyVersion": POLICY_VERSION,
+        "refactor": {"requestedModel": refactor_model, "requestedVariant": refactor_variant},
+        "review": {"requestedModel": review_model, "requestedVariant": review_variant},
+        "disabledTools": list(DISABLED_AGENT_TOOLS), "validationOwner": "platform",
+        "disabledProviders": list(DISABLED_AGENT_PROVIDERS),
+    }
+    print("Agent 配置（显式模型请求值；未设置 variant 时沿用提供者默认）：" + json.dumps(agent_policy, ensure_ascii=False))
 
     tasks = load_dataset_tasks(dataset_path, workspace)
     summary: list[dict[str, Any]] = []
@@ -87,7 +102,11 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None, *, linte
         write_text(task_dir / "review-prompt.md", review_prompt)
         print(f"\n[{number}/{len(tasks)}] {task.target.symbol or task.target.file_path}")
         print(f"  静态风险：{risk['riskLevel']}；Refactor Agent 仅接收生产代码与重构规范")
-        config = _auto_config(task, task_dir, risk, tools, smoke_plan, contract_plan, linter_mode=linter_mode)
+        config = _auto_config(
+            task, task_dir, risk, tools, smoke_plan, contract_plan, linter_mode=linter_mode,
+            refactor_model=refactor_model, refactor_variant=refactor_variant,
+            review_model=review_model, review_variant=review_variant,
+        )
         result = execute_pipeline(
             task_dir, config,
             progress=lambda name, status: print(f"  {name}: {status}"),
@@ -110,6 +129,7 @@ def run_interactive(base_dir: Path, workspace_hint: Path | None = None, *, linte
         "sessionDir": str(session), "workspace": str(workspace), "counts": counts,
         "durationSeconds": session_duration, "tasks": summary,
         "validationPolicy": {"linterMode": linter_mode},
+        "agentPolicy": agent_policy,
     }
     write_json(session / "summary.json", final)
     print(f"\n完成：PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']} INCOMPLETE={counts['INCOMPLETE']}")
@@ -165,7 +185,12 @@ def _auto_config(
     task, task_dir: Path, risk: dict[str, Any], tools: dict[str, str | None],
     smoke_plan: dict[str, Any] | None = None, contract_plan: dict[str, Any] | None = None,
     *, linter_mode: str = "required",
+    refactor_model: str | None = None, refactor_variant: str | None = None,
+    review_model: str | None = None, review_variant: str | None = None,
 ) -> dict[str, Any]:
+    refactor_model = resolve_agent_model(refactor_model)
+    review_model = resolve_agent_model(review_model)
+
     def missing(name: str) -> dict[str, Any]:
         return {"enabled": False, "reason": f"未找到 {name}"}
 
@@ -178,7 +203,7 @@ def _auto_config(
         r"network[^\r\n]*unavailable"
     )
     agent_blockers = (
-        "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|"
+        "REVIEW_PACKET_BLOCKED|model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|"
     ) + network_blockers
     refactor = {
         "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "refactor", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--deveco", tools["deveco"]],
@@ -195,7 +220,7 @@ def _auto_config(
         "timeoutSeconds": 3600,
     } if tools["deveco"] and harmony_root else None
     review = {
-        "command": [tools["deveco"], "run", "严格执行附件中的只读评审任务，只输出要求的 JSON。", "-f", "{review_prompt_file}", "--dir", "{task_dir}", "--format", "json", "--dangerously-skip-permissions"],
+        "command": [sys.executable, "-m", "arkts_smell_refactor.gate", "review", "--task-dir", "{task_dir}", "--deveco", tools["deveco"], "--prompt-file", "{review_prompt_file}"],
         "cwd": "{task_dir}",
         "blockedOutputRegex": agent_blockers,
         "blockedOutputScope": "agent-errors",
@@ -203,6 +228,16 @@ def _auto_config(
         "retryDelaySeconds": 2,
         "timeoutSeconds": 3600,
     } if tools["deveco"] else None
+    for spec, model, variant in (
+        (refactor, refactor_model, refactor_variant),
+        (repair, refactor_model, refactor_variant),
+        (review, review_model, review_variant),
+    ):
+        if spec is not None:
+            if model:
+                spec["command"].extend(["--model", model])
+            if variant:
+                spec["command"].extend(["--variant", variant])
     smell = {"command": [sys.executable, "-m", "arkts_smell_refactor.gate", "smell", "--task-dir", "{task_dir}", "--source-root", str(harmony_root), "--homecheck-root", tools["homecheck"]], "blockedOutputRegex": "SMELL_GATE_BLOCKED", "timeoutSeconds": 1800} if tools["homecheck"] and harmony_root else missing("HomeCheck 或 Harmony 工程根目录")
     environment_blockers = network_blockers + (
         r"|Invalid project path|Permissions Error|\bFailed[^\r\n]*@SignHap\b|"
@@ -246,6 +281,13 @@ def _auto_config(
         linter = {"command": linter_command, "cwd": "{task_dir}", "timeoutSeconds": 1200}
     else:
         linter = missing("codelinter 或 Harmony 工程根目录")
+    review_format = None
+    if review:
+        review_format = {
+            "command": [part.replace("{review_prompt_file}", "{review_format_prompt_file}") for part in review["command"]] + ["--format-only"],
+            "cwd": "{task_dir}", "timeoutSeconds": 90,
+            "blockedOutputRegex": agent_blockers, "blockedOutputScope": "agent-errors",
+        }
     gates = {"smell": smell, "build": build, "test": test, "linter": linter}
     if contract:
         gates["contract"] = contract
@@ -254,11 +296,19 @@ def _auto_config(
     return {
         "taskTimeoutSeconds": 1200,
         "linterMode": linter_mode,
+        "agentPolicy": {
+            "policyVersion": POLICY_VERSION,
+            "refactor": {"requestedModel": refactor_model, "requestedVariant": refactor_variant},
+            "review": {"requestedModel": review_model, "requestedVariant": review_variant},
+            "disabledTools": list(DISABLED_AGENT_TOOLS), "validationOwner": "platform",
+            "disabledProviders": list(DISABLED_AGENT_PROVIDERS),
+        },
         "refactorAgent": refactor,
         "repairAgent": repair,
         "maxRepairAttempts": 3,
         "gates": gates,
         "reviewAgent": review,
+        "reviewFormatAgent": review_format,
     }
 
 

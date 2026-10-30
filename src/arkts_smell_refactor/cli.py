@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from .agent_runtime import DEFAULT_AGENT_MODEL
 from .dataset import load_dataset_tasks
 from .prompts import build_refactor_prompt, build_review_prompt
 from .public_contract import prepare_public_contract
@@ -40,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--workspace", type=Path, help="可选；通常会根据 sourceProject 自动定位")
     start.add_argument("--linter-mode", choices=("required", "skip"), default="required",
                        help="required: Linter 参与门禁；skip: 不执行 Linter，不因它返修")
+    for role in ("refactor", "review"):
+        for setting in ("model", "variant"):
+            variable = f"ARKTS_{role.upper()}_{setting.upper()}"
+            fallback = DEFAULT_AGENT_MODEL if setting == "model" else None
+            description = f"未设置时使用 {DEFAULT_AGENT_MODEL}，禁止 deveco/ 提供者" if setting == "model" else "未设置时不传档位；必须由所选模型支持"
+            start.add_argument(f"--{role}-{setting}", default=os.environ.get(variable) or fallback,
+                               help=f"DevEco {setting} 请求值；默认读取 {variable}；{description}")
     return parser
 
 
@@ -138,7 +146,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "run":
             return run(args)
         from .automatic import run_interactive
-        run_interactive(Path(__file__).resolve().parents[2], default_workspace(args.workspace), linter_mode=args.linter_mode)
+        run_interactive(
+            Path(__file__).resolve().parents[2], default_workspace(args.workspace), linter_mode=args.linter_mode,
+            refactor_model=args.refactor_model, refactor_variant=args.refactor_variant,
+            review_model=args.review_model, review_variant=args.review_variant,
+        )
         return 0
     except (OSError, ValueError, KeyError) as error:
         print(f"error: {error}", file=sys.stderr)

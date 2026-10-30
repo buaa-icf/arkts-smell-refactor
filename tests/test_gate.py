@@ -119,11 +119,16 @@ class GateTests(unittest.TestCase):
                         source,
                         Path("deveco"),
                         model="provider/model",
+                        variant="low",
                     ),
                 )
 
             command = run.call_args.args[0]
             self.assertIn("provider/model", command)
+            self.assertEqual("low", command[command.index("--variant") + 1])
+            overlay = json.loads(run.call_args.kwargs["env"]["DEVECO_CONFIG_CONTENT"])
+            self.assertEqual("deny", overlay["permission"]["webfetch"])
+            self.assertFalse(overlay["tools"]["build_project"])
             self.assertNotIn(long_prompt, command)
             prompt_argument = Path(command[command.index("-f") + 1])
             self.assertEqual(
@@ -348,6 +353,7 @@ class OrderVM {
             resource.write_bytes(b"png-data")
             self.assertEqual(0, _sync_production_changes(mirror, source))
             self.assertEqual(b"png-data", (source / "common/src/main/resources/base/media/icon.png").read_bytes())
+            self.assertEqual(b"png-data", (mirror.parent / "current-production/common/src/main/resources/base/media/icon.png").read_bytes())
             changes = __import__("json").loads((mirror.parent / "refactor-changes.json").read_text(encoding="utf-8"))
             self.assertEqual(["common/src/main/resources/base/media/icon.png"], changes["changedProductionResources"])
             self.assertEqual(64, len(changes["productionResourceManifest"][0]["sha256"]))

@@ -20,6 +20,9 @@ from .public_contract import compare_public_contract, snapshot_public_contract
 from .utils import read_json, write_json
 from .test_plan import build_test_plan
 from .test_execution import run_test_plan
+from .agent_runtime import run_agent
+from .review_packet import prepare_review_prompt
+from .source_format import preserve_source_format
 
 
 IGNORED_DIRS = {".git", ".hvigor", ".cache", ".test", "build", "coverage", "oh_modules", "node_modules"}
@@ -32,7 +35,7 @@ DISPOSABLE_VALIDATION_FILES = {
 
 def refactor_gate(
     task_dir: Path, source_root: Path, deveco: Path,
-    prompt_file: Path | None = None, model: str | None = None,
+    prompt_file: Path | None = None, model: str | None = None, variant: str | None = None,
 ) -> int:
     """Run the refactor agent in a production-only mirror, then copy back code only."""
     task = read_json(task_dir / "task.json")
@@ -49,19 +52,14 @@ def refactor_gate(
     prompt = _normalize_agent_prompt_paths(prompt, task, source_root)
     agent_prompt = task_dir / "refactor-agent-prompt.md"
     agent_prompt.write_text(prompt, encoding="utf-8")
-    command = [str(deveco), "run"]
-    if model:
-        command.extend(["-m", model])
-    command.extend([
-        "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。",
-        "-f", str(agent_prompt.resolve()),
-        "--dir", str(workspace), "--format", "json",
-        "--title", str(task.get("task_id", task.get("taskId", "refactor"))),
-        "--dangerously-skip-permissions",
-    ])
-    completed = subprocess.run(command, cwd=workspace)
-    if completed.returncode != 0:
-        return completed.returncode
+    exit_code = run_agent(
+        deveco, task_dir, workspace, agent_prompt,
+        role="refactor" if prompt_file is None else prompt_file.stem,
+        model=model, variant=variant,
+        title=str(task.get("task_id", task.get("taskId", "refactor"))),
+    )
+    if exit_code != 0:
+        return exit_code
     return _sync_production_changes(workspace, source_root)
 
 
@@ -396,6 +394,7 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
     combined = list(dict.fromkeys([*previous_files, *[x[2].as_posix() for x in allowed_changes]]))
     combined_resources = list(dict.fromkeys([*previous_resources, *[x[2].as_posix() for x in allowed_resources]]))
     resource_manifest: list[dict[str, object]] = []
+    format_preserved: list[str] = []
     for mirror_file, source_file, relative in [*allowed_changes, *allowed_resources]:
         existed = source_file.exists()
         baseline_file = mirror.parent / "baseline-production" / relative
@@ -403,7 +402,15 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
             baseline_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, baseline_file)
         source_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = mirror_file.read_bytes()
+        if existed and (mirror_file, source_file, relative) not in allowed_resources:
+            normalized = preserve_source_format(source_file.read_bytes(), payload)
+            if normalized != payload:
+                format_preserved.append(relative.as_posix())
+            payload = normalized
         shutil.copy2(mirror_file, source_file)
+        if relative.as_posix() in format_preserved:
+            source_file.write_bytes(payload)
         changed.append(relative.as_posix())
         if (mirror_file, source_file, relative) in allowed_resources:
             resource_manifest.append({
@@ -419,10 +426,11 @@ def _sync_production_changes(mirror: Path, source: Path) -> int:
         "changedProductionFiles": combined,
         "changedProductionResources": combined_resources,
         "productionResourceManifest": resource_manifest,
+        "sourceFormatsPreserved": format_preserved,
         "discardedValidationFiles": discarded,
         "rejectedFiles": [],
     })
-    _prepare_review_materials(mirror.parent, source, combined)
+    _prepare_review_materials(mirror.parent, source, combined, combined_resources)
     print("已同步生产代码修改：" + ", ".join(changed))
     return 0
 
@@ -455,7 +463,9 @@ def _parse_linter_issues(output: str, fallback_file: str) -> list[dict[str, obje
     return issues
 
 
-def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) -> None:
+def _prepare_review_materials(
+    task_dir: Path, source: Path, changes: list[str], resources: list[str] | None = None,
+) -> None:
     """Materialize a review-only evidence pack so the reviewer never needs project access."""
     current_root = task_dir / "current-production"
     context_root = task_dir / "review-context-production"
@@ -486,6 +496,14 @@ def _prepare_review_materials(task_dir: Path, source: Path, changes: list[str]) 
         patch_parts.extend(current_diff)
         added_text.extend(line[1:] for line in current_diff if line.startswith("+") and not line.startswith("+++"))
     (task_dir / "review-diff.patch").write_text("\n".join(patch_parts) + "\n", encoding="utf-8")
+    # Resources are reviewed via the change manifest and raw snapshots. Do not
+    # decode binary files into a misleading textual diff.
+    for relative_text in resources or []:
+        current = source / relative_text
+        if current.is_file():
+            destination = current_root / relative_text
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(current, destination)
     _collect_review_dependencies(source, changed_current_files, "\n".join(added_text), context_root)
 
 
@@ -850,6 +868,14 @@ def main(argv: list[str] | None = None) -> int:
     refactor.add_argument("--deveco", required=True, type=Path)
     refactor.add_argument("--prompt-file", type=Path)
     refactor.add_argument("--model")
+    refactor.add_argument("--variant")
+    review = sub.add_parser("review")
+    review.add_argument("--task-dir", required=True, type=Path)
+    review.add_argument("--deveco", required=True, type=Path)
+    review.add_argument("--prompt-file", required=True, type=Path)
+    review.add_argument("--model")
+    review.add_argument("--variant")
+    review.add_argument("--format-only", action="store_true")
     hvigor = sub.add_parser("hvigor")
     hvigor.add_argument("--task-dir", required=True, type=Path)
     hvigor.add_argument("--source-root", required=True, type=Path)
@@ -876,7 +902,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "refactor":
         return refactor_gate(
             args.task_dir.resolve(), args.source_root.resolve(), args.deveco.resolve(),
-            args.prompt_file.resolve() if args.prompt_file else None, args.model,
+            args.prompt_file.resolve() if args.prompt_file else None, args.model, args.variant,
+        )
+    if args.command == "review":
+        prompt_file = args.prompt_file.resolve()
+        if not args.format_only:
+            try:
+                prompt_file = prepare_review_prompt(args.task_dir.resolve(), prompt_file)
+            except (OSError, ValueError, TypeError, AttributeError, KeyError) as error:
+                print(json.dumps({"type": "error", "error": {
+                    "name": "ReviewPacketError",
+                    "data": {"message": f"REVIEW_PACKET_BLOCKED: {error}"},
+                }}, ensure_ascii=False))
+                return 3
+        return run_agent(
+            args.deveco.resolve(), args.task_dir.resolve(), args.task_dir.resolve(),
+            prompt_file, role="review-format" if args.format_only else "review",
+            model=args.model, variant=args.variant, format_only=args.format_only,
+            prompt_via_stdin=not args.format_only,
         )
     if args.command == "linter":
         return linter_gate(args.task_dir.resolve(), args.source_root.resolve(), args.codelinter.resolve(), args.config.resolve() if args.config else None)

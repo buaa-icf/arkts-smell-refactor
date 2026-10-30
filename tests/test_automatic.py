@@ -7,6 +7,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
 
+from arkts_smell_refactor.agent_runtime import DEFAULT_AGENT_MODEL
 from arkts_smell_refactor.automatic import _auto_config, run_interactive
 from arkts_smell_refactor.models import RefactorTask, Target
 from arkts_smell_refactor.public_contract import prepare_public_contract
@@ -14,6 +15,31 @@ from arkts_smell_refactor.runner import _context, _run_spec, execute_pipeline
 
 
 class AutomaticConfigTests(unittest.TestCase):
+    def test_default_model_is_explicit_for_refactor_repair_review_and_format(self):
+        for role in ("refactorAgent", "repairAgent", "reviewAgent", "reviewFormatAgent"):
+            command = self.config[role]["command"]
+            self.assertEqual(DEFAULT_AGENT_MODEL, command[command.index("--model") + 1])
+            self.assertNotIn("--variant", command)
+        for role in ("refactor", "review"):
+            self.assertEqual(DEFAULT_AGENT_MODEL, self.config["agentPolicy"][role]["requestedModel"])
+        self.assertEqual(["deveco"], self.config["agentPolicy"]["disabledProviders"])
+
+    def test_refactor_variant_applies_to_repairs_but_not_review_or_gates(self):
+        config = _auto_config(self.task, self.root / "task", {}, {
+            "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
+            "homecheck": str(self.root / "homecheck"), "codelinter": "codelinter",
+        }, refactor_model=DEFAULT_AGENT_MODEL, refactor_variant="high")
+        for role in ("refactorAgent", "repairAgent"):
+            command = config[role]["command"]
+            self.assertEqual("high", command[command.index("--variant") + 1])
+            self.assertEqual(DEFAULT_AGENT_MODEL, command[command.index("--model") + 1])
+        self.assertNotIn("--variant", config["reviewAgent"]["command"])
+        self.assertNotIn("--variant", config["reviewFormatAgent"]["command"])
+        self.assertIn("--format-only", config["reviewFormatAgent"]["command"])
+        self.assertEqual(90, config["reviewFormatAgent"]["timeoutSeconds"])
+        self.assertEqual("required", config["linterMode"])
+        self.assertEqual({"smell", "build", "test", "linter"}, set(config["gates"]))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -82,6 +108,8 @@ class AutomaticConfigTests(unittest.TestCase):
         self.assertIn("auto-test", config["gates"]["test"]["command"])
         self.assertIn("task_started_at", pipeline.call_args.kwargs)
         self.assertEqual({"linterMode": "skip"}, summary["validationPolicy"])
+        self.assertEqual(config["agentPolicy"], summary["agentPolicy"])
+        self.assertEqual(DEFAULT_AGENT_MODEL, summary["agentPolicy"]["review"]["requestedModel"])
         self.assertEqual(12.5, summary["tasks"][0]["durationSeconds"])
 
     def test_auto_test_selection_and_missing_execution_evidence_block_without_repair(self):
@@ -110,6 +138,23 @@ class AutomaticConfigTests(unittest.TestCase):
         self.assertTrue(all(steps[name] in {"PASS", "SKIPPED"} for name in ("build", "linter")))
         self.assertFalse((self.task_dir / "failure-report-1.json").exists())
 
+    def test_connect_key_error_blocks_without_running_repair_or_review(self):
+        config = self.config
+        config["refactorAgent"] = self._output_spec(config["refactorAgent"], "", 0)
+        config["repairAgent"]["command"] = ["must-not-run"]
+        config["reviewAgent"]["command"] = ["must-not-run"]
+        for name in ("smell", "build", "linter"):
+            config["gates"][name] = self._output_spec(config["gates"][name], "", 0)
+        config["gates"]["test"] = self._output_spec(config["gates"]["test"],
+            "ErrorCode: 00507013\nDescription: Error: [Fail]ExecuteCommand need connect-key? please confirm a device by help info", 1)
+        result = execute_pipeline(self.task_dir, config)
+        self.assertEqual("BLOCKED", result["verdict"])
+        self.assertEqual(0, result["repairAttempts"])
+        steps = {step["name"]: step["status"] for step in result["steps"]}
+        self.assertEqual("BLOCKED", steps["test"])
+        self.assertEqual("SKIPPED", steps["review-agent"])
+        self.assertFalse((self.task_dir / "failure-report-1.json").exists())
+
     def test_explicit_linter_skip_preserves_core_gates_without_codelinter(self):
         config = _auto_config(self.task, self.task_dir, {}, {
             "deveco": "deveco", "hvigorw": "hvigorw", "ohpm": None,
@@ -130,6 +175,7 @@ class AutomaticConfigTests(unittest.TestCase):
 
     def test_compile_errors_with_process_libs_are_failures(self):
         diagnostics = (
+            "ArkTS Compiler Error: Cannot find name 'connect-key'. At File: entry/src/main/ets/Page.ets:5:1",
             "No overload matches this call.\n"
             "Argument of type 'string | undefined' is not assignable to parameter of type "
             "'string | number | Date'. At File: entry/src/main/ets/ScheduleForm.ets:419:44",
@@ -187,6 +233,20 @@ class AutomaticConfigTests(unittest.TestCase):
             with self.subTest(agent=name):
                 result = self._run_output(name, self.config[name], output, 5)
                 self.assertEqual("FAIL", result.status)
+
+    def test_missing_review_packet_does_not_start_code_repair(self):
+        config = self.config
+        config["refactorAgent"] = self._output_spec(config["refactorAgent"], "", 0)
+        config["repairAgent"]["command"] = ["must-not-run"]
+        for name, spec in config["gates"].items():
+            config["gates"][name] = self._output_spec(spec, "", 0)
+        config["reviewAgent"] = self._output_spec(config["reviewAgent"], json.dumps({"type": "error", "error": {
+            "name": "ReviewPacketError", "data": {"message": "REVIEW_PACKET_BLOCKED: missing snapshot"},
+        }}), 3)
+        result = execute_pipeline(self.task_dir, config)
+        self.assertEqual("BLOCKED", result["verdict"])
+        self.assertEqual(0, result["repairAttempts"])
+        self.assertFalse(any(step["name"].startswith("repair-agent") for step in result["steps"]))
 
     def test_standalone_unauthorized_agent_error_remains_blocked(self):
         for name in ("refactorAgent", "repairAgent", "reviewAgent"):
