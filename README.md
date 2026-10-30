@@ -476,6 +476,19 @@ python -m arkts_smell_refactor start --workspace D:\arktsProgram --linter-mode s
 
 通用 CLI 默认为 `--linter-mode required`；高级 `run --config` 用配置顶层 `"linterMode": "skip"` 表达相同策略。仅删除 Linter 配置或设置 `enabled: false` 不构成豁免，默认仍判 INCOMPLETE。跳过时不执行 Linter、不触发其返修，`gates.json` 和 `result.json` 保存 `validationPolicy.linterMode` 与 `linter: SKIPPED`；构建、测试、异味、已配置的契约/runtime 门禁和语义评审仍需通过。新批次需注明该策略，与历史完整门禁结果分别报告。
 
+本地实验批跑按异味和数据集类型提供四个入口；这些 PowerShell 辅助脚本保存在本机 `tools/` 中，由 Git 忽略，不随仓库分发。已有本地脚本时可参考以下说明；新克隆仓库请使用上文的 Python CLI。
+
+| 脚本（`tools/`） | 数据集（`dataset/positive/`） | 当前展开样本数 |
+|---|---|---:|
+| `run_long_method_local.ps1` | `local-test/long-method.json` | 8 |
+| `run_code_clone_local.ps1` | `local-test/code-clone.json` | 3 |
+| `run_long_method_instrument.ps1` | `instrument-test/long-method.json` | 17 |
+| `run_code_clone_instrument.ps1` | `instrument-test/code-clone.json` | 27 |
+
+四个本地入口共用 `run_refactor_experiment.ps1` 和 `task_source_rollback.ps1`；默认从第 1 条跑到数据集末尾，保留 `-StartOrdinal`、`-EndOrdinal`、`-ListOnly` 和 `-LinterMode required|skip`。Linter 默认仍为 `skip`；完整门禁实验显式传 `required`。`-LogDirectory` 可将终端输出同时写入指定目录的 `output<日期时间>.log`，脚本自动设置 Python/终端 UTF-8 编码。每条结束或异常退出时执行源码快照回滚，正常结果目录另存 `experiment.json` 记录数据集类型及原序号。
+
+`local/instrument` 表示样例来源，不强制覆盖 `auto-test` 的测试类型选择；目标同时具有两类可达测试时仍会全部运行。四个脚本共用源码和设备，应串行执行。完整命令、单条重跑、日志和路径配置见 [实验脚本使用说明](docs/experiment-scripts.md)。
+
 required 模式会把目标 ArkTS 项目 `code-linter.json5` 中明确配置的命名、可见性、分号、尾逗号、引号等风格规则摘录到首轮和返修 Prompt。摘要与自动门禁共用配置定位逻辑，保留文件范围、原始选项、关闭项和例外；不执行配置中的文本。`ruleSet` 的继承规则及未写出的默认选项尚未展开，因此摘要不能代替实际 Linter，也不保证消除全部返修。skip 模式不读取或注入此摘要。恢复 Linter 的实际耗时收益需重新实验确认。
 
 对于包含普通构造和 `getContext/resourceManager` 风险的 God Class，框架会按风险自动生成公开 runtime smoke。它只检查目标类是否能构造、一个保守选择的无参读取入口是否立即抛错，并用重构前生产基线运行同一检查。该 gate 启用时位于 build 与项目 test 之间；未触发风险时不改变原四层门禁。详细设计和 `analysisContext` 格式见 [`docs/risk-aware-architecture-refactoring.md`](docs/risk-aware-architecture-refactoring.md)。

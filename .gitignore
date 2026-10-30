@@ -30,9 +30,12 @@ v/
 
 # Local experiment helpers and reports
 reports/
-tools/run_code_clone_series.ps1
-tools/run_long_method_series.ps1
-tools/task_source_rollback.ps1
+/tools/*.ps1
+/.codex_tmp/
+/dist-tests/
+/node_modules/
+# This local regression suite depends on the untracked PowerShell helpers.
+/tests/test_experiment_scripts.py
 
 # Editors and operating systems
 .idea/

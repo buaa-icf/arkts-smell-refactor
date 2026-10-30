@@ -81,7 +81,7 @@ Long Method 首轮 Agent 合计 2991.584 秒，占端到端 30.9%；修复 Agent
 甲方已确认 Linter 属于加分项，返修严重时可以跳过。两份报告中 CC 有 4 条首次失败于 Linter，LM 的 3 条返修任务也都首次失败于 Linter，满足优先尝试跳过的依据。主要收益来自避免其触发的修复和重跑门禁，单纯少运行一次 Linter 通常只省几秒到二十秒。
 
 - 通用 `start` 新增 `--linter-mode required|skip`，默认 required，保持既有行为。
-- 本机两份实验脚本默认 `-LinterMode skip`，传 required 可恢复。它们原本被 `.gitignore` 忽略，本轮仅在本机修改；可复用实现仍在受版本控制的 CLI/runner 中。
+- 实验脚本默认 `-LinterMode skip`，传 required 可恢复。2026-10-12 已按 Local/Instrument 数据集统一为四个可随仓库提交的入口，共用批跑和回滚逻辑，见 [实验脚本说明](experiment-scripts.md)。
 - 手动 pipeline 配置支持顶层 `"linterMode": "skip"`。仅缺失或禁用 Linter 配置仍保留原来的 INCOMPLETE 行为，避免把环境缺失误当作豁免。
 - skip 模式下不调用 Linter、不生成其失败报告或修复轮；步骤记录 SKIPPED 而非 PASS。`gates.json`、`result.json` 及自动运行的 `summary.json` 记录 `validationPolicy.linterMode`。
 - 首轮与修复 Agent 得到明确跳过说明，语义评审读取实际策略，不因纯格式/命名问题重新引入 Linter 返修；真实行为变化仍阻断。
@@ -128,8 +128,8 @@ LM-011（629.202s）作为“避免命名返修”的备选收益样本；LM-014
 本机整批验收命令（各自按预运行快照回滚生产源码）：
 
 ```powershell
-.\tools\run_code_clone_series.ps1 -StartOrdinal 1 -EndOrdinal 27 -LinterMode skip
-.\tools\run_long_method_series.ps1 -StartOrdinal 1 -EndOrdinal 17 -LinterMode skip
+.\tools\run_code_clone_instrument.ps1 -StartOrdinal 1 -EndOrdinal 27 -LinterMode skip
+.\tools\run_long_method_instrument.ps1 -StartOrdinal 1 -EndOrdinal 17 -LinterMode skip
 ```
 
 每条至少记录：最终 verdict、totalSeconds、首轮 Agent 秒数、修复轮数、首次失败门禁、内部 build/check 调用数。首改延迟和 token 只用于解释原因；统计写入时需要覆盖 shell 文件写入、失败工具调用等情况，不能继续把“没有 edit 事件”等同于“没有改动”。
