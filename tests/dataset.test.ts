@@ -7,6 +7,7 @@ import {
   relatedTargets,
 } from "../src/dataset.js";
 import { autoConfig, findHomecheck } from "../src/automatic.js";
+import { executePipeline } from "../src/runner.js";
 import {
   buildRefactorPrompt,
   buildRepairPrompt,
@@ -132,6 +133,32 @@ test("自动命令使用 Node 而非 Python，保留并行验证和返修配置"
   );
   assert(!JSON.stringify(config).includes("python"));
   assert(config.gates!.test.command!.includes("auto-test"));
+  assert(config.reviewAgent!.command!.includes("--auto"));
+  assert(!JSON.stringify(config).includes("--dangerously-skip-permissions"));
+});
+test("DevEco Code 未确认产品协议是环境阻塞，不进入代码修复", async (t) => {
+  const root = fixture(t),
+    p = makeProject(root);
+  writeText(path.join(p.source, "hvigor/hvigor-config.json5"), "{}");
+  const config = autoConfig(
+    readJson(path.join(p.taskDir, "task.json")) as any,
+    p.taskDir,
+    { deveco: "deveco" },
+  );
+  const message =
+    "Review the product agreements in DevEco Code or run `deveco auth consent` on the server before continuing.";
+  for (const agent of [config.refactorAgent, config.repairAgent, config.reviewAgent])
+    assert(new RegExp(agent!.blockedOutputRegex!, "i").test(message));
+  config.refactorAgent!.command = [
+    process.execPath,
+    "-e",
+    `console.log(JSON.stringify({type:'error',error:{name:'UnknownError',data:{message:${JSON.stringify(message)}}}}));process.exit(1)`,
+  ];
+  const result = await executePipeline(p.taskDir, config);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.repairAttempts, 0);
+  assert.equal(result.steps[0].status, "BLOCKED");
+  assert(result.steps.slice(1).every((step: any) => step.status === "SKIPPED"));
 });
 test("首轮和返修保留验证限制、类型和键语义保护", (t) => {
   const root = fixture(t),
@@ -142,6 +169,8 @@ test("首轮和返修保留验证限制、类型和键语义保护", (t) => {
   ]) {
     for (const fragment of [
       "两者每轮合计最多 2 次",
+      "devecocli build",
+      "devecocli check arkts",
       "第一次通过即停止内部验证",
       "包括原来未提供的情况",
       "擅自新增 index-only key",

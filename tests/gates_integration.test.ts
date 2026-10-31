@@ -170,6 +170,8 @@ test("真实 Agent 启动协议：附件位于隔离工作区，隐藏测试，�
   );
   const captured = readJson(capture);
   assert(captured.args.includes("provider/model"));
+  assert(captured.args.includes("--auto"));
+  assert(!captured.args.includes("--dangerously-skip-permissions"));
   assert(captured.prompt.includes("生产重构提示词"));
   assert(!fs.existsSync(captured.args[captured.args.indexOf("-f") + 1]));
   assert(readText(p.target).includes("return 9"));

@@ -25,7 +25,7 @@ import {
   freshCopy,
   syncProductionChanges,
 } from "./workspace.js";
-import { buildTestPlan } from "./test_plan.js";
+import { buildTestPlan, freezeTestPlan } from "./test_plan.js";
 import { resultEvidence, runTestPlan } from "./test_execution.js";
 import {
   comparePublicContract,
@@ -82,6 +82,7 @@ export async function refactorGate(
     console.error("目标文件不在 Harmony 工程内");
     return 3;
   }
+  freezeTestPlan(taskDir, source);
   freshCopy(source, workspace, true);
   const prompt = normalizeAgentPromptPaths(
     readText(promptFile ?? path.join(taskDir, "refactor-prompt.md")),
@@ -108,7 +109,7 @@ export async function refactorGate(
     "json",
     "--title",
     task.task_id,
-    "--dangerously-skip-permissions",
+    "--auto",
   ];
   try {
     const result = await runCommand(command, { cwd: workspace, stream: true });

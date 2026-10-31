@@ -16,7 +16,7 @@
     "batch": "node dist/cli.js batch",
     "package:homecheck": "node scripts/package-homecheck.mjs",
     "cli": "node dist/cli.js",
-    "test": "npm run build && node --test dist-tests/tests",
+    "test": "npm run build && node scripts/run-tests.mjs",
     "pretest": "tsc -p tsconfig.test.json"
   },
   "dependencies": {

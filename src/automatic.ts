@@ -23,6 +23,7 @@ import {
 import { which } from "./process.js";
 import { TEST_TOOL_BLOCKERS } from "./test_execution.js";
 import { bundledHomecheck } from "./homecheck_runtime.js";
+import { freezeTestPlan } from "./test_plan.js";
 export async function readPastedJson(
   input: NodeJS.ReadableStream = process.stdin,
 ): Promise<Json[]> {
@@ -123,7 +124,7 @@ export function autoConfig(
   const network =
     "certificate verification|unable to verify[^\\r\\n]*certificate|self[- ]signed certificate|\\b(?:SSL|TLS)(?:Error\\b|_[A-Z0-9_]+\\b|\\b)|\\b(?:CERT_[A-Z0-9_]+|CERTIFICATE_VERIFY_FAILED)\\b|authentication failed|\\bunauthorized\\b(?![-_])|\\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\\b|network[^\\r\\n]*unavailable";
   const agentBlockers =
-      "model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|" +
+      "product agreements|deveco auth consent|model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|" +
       network,
     environment =
       network +
@@ -267,7 +268,7 @@ export function autoConfig(
             "{task_dir}",
             "--format",
             "json",
-            "--dangerously-skip-permissions",
+            "--auto",
           ],
           cwd: "{task_dir}",
           blockedOutputRegex: agentBlockers,
@@ -287,6 +288,8 @@ export function prepareTask(
   fs.mkdirSync(taskDir, { recursive: true });
   const risk = analyzeRisks(task);
   writeJson(path.join(taskDir, "task.json"), task);
+  const harmonyRoot = findHarmonyRoot(targetPath(task), task.project_root);
+  if (harmonyRoot) freezeTestPlan(taskDir, harmonyRoot);
   writeJson(path.join(taskDir, "risk-report.json"), risk);
   writeJson(path.join(taskDir, "review-risk.json"), reviewRisk(risk));
   const smoke = prepareRuntimeSmoke(task, risk, taskDir),
@@ -372,6 +375,7 @@ export async function runTasks(
   console.log(
     "工具发现：" +
       Object.entries(tools)
+        .filter(([name]) => name !== "homecheck")
         .map(([k, v]) => `${k}=${v ? "已找到" : "未找到"}`)
         .join("，"),
   );

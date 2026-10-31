@@ -38,6 +38,10 @@ npm run batch -- --workspace "D:\ROG\Documents\harmonyos\test_supplement"
 
 本工具调用本机已安装的 DevEco Code（`deveco`）、Hvigor（`hvigorw`）、ohpm 和 CodeLinter（`codelinter`），这些命令按当前进程的 PATH 查找；本项目本身无需加入 PATH。`doctor` 只检查路径，不能代替 Agent 登录、SDK、签名、网络或设备的实际验证。
 
+DevEco Code 测试版 `@deveco-test/deveco-code@0.1.0-TD.52`（以及正式版 0.2.5）的重构、修复和评审调用使用 `deveco run ... --format json --auto`；`--auto` 自动批准未被明确拒绝的权限，不覆盖用户配置中的拒绝规则。TD.52 的部分依赖要求 Node.js ≥22，使用该测试版时请使用 Node.js 22 或更高的受支持版本。升级后若提示 `Review the product agreements`，请先自行打开 DevEco Code 阅读并确认协议，或运行 `deveco auth consent` 交互确认；本工具不会代替用户接受协议，未确认时记为 BLOCKED，而非重构 FAIL。自定义旧配置中的 `--dangerously-skip-permissions` 也需要改为 `--auto`。后端修改后运行 `npm run build` 再启动。
+
+TD.52 自动生成的 `.homegraph/` 数据库、锁和日志作为运行缓存处理：不复制到隔离/验证副本，不参与生产变更比较，也不回写原仓库；这不放宽测试、构建配置等文件的修改边界。如果 Agent 内部命令报 `@deveco/deveco-cli-common` 缺失，切换到 Node.js ≥22 后执行 `npm install -g @deveco-test/deveco-code@0.1.0-TD.52 --include=optional` 补齐官方可选依赖。仅升级 Node 并不会自动修复先前的全局包安装。
+
 **HomeCheck 固定使用本仓库自带的 npm 包** `@arkts-refactor/homecheck-runtime@1.0.0`。制品保存在 `vendor/arkts-refactor-homecheck-runtime-1.0.0.tgz`，约 9 MB；安装后位于 `node_modules/@arkts-refactor/homecheck-runtime/`。其中包含 HomeCheck 0.9.9-rc.26、ArkAnalyzer 1.0.92、ArkTS 解析器、编译后的自定义规则、既有补丁、范围外告警过滤和全部运行依赖。
 
 命令行、DevEco Studio 桥接后端和 OpenCode 桥接后端均使用该包，不再查找工作区、当前目录或 PATH 中的 HomeCheck。旧的 `ARKTS_REFACTOR_HOMECHECK` 和插件 `homecheck` 路径设置不再参与选择，避免误用另一台电脑或旧版本的扫描器。
@@ -100,7 +104,9 @@ Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工
 
 五层验收仍是：**异味消除、编译、测试、Linter、语义 Review**。公共契约和按风险触发的 Runtime Smoke 是额外验证，不是替代测试。
 
-自动测试选择会优先匹配目标和新增跨模块源码的测试。仅当整个文件可确认为 SDK 原始字符串断言模板时，才从自动计划中排除；同名但含业务逻辑的测试不会排除。其他无法精准匹配的业务测试仍保守执行模块测试，两种类型均保留，不凭数据集 `testKind` 跳过设备测试。排除记录和附加模块缺少独立业务测试的情况写入 `test-plan.json`，不声称这些模块已独立覆盖。显式指定测试任务不应用模板排除。设备安装 ABI 不匹配会记为 `BLOCKED / DEVICE_ABI_MISMATCH`，不进入代码修复 Loop；真实断言失败仍为 FAIL。
+自动测试选择在重构前按“原文件 + 所属 class/struct + 方法名及参数签名”保存接口身份，通过测试导入、别名/重导出、接收对象类型和方法调用，以及可解析的辅助函数调用，关联实际注册的 suite。同一生产文件的不同方法、不同 Local Test 文件或不同 suite 可以分别选择；同一个 suite 内的全部用例仍一起运行，不只选单个 `it`。如果本地和设备测试都有明确接口关联，则两者都运行，不能为了避免签名而跳过设备测试；同名但没有原接口关联证据的测试记入排除记录，不声称已证明不存在间接覆盖。这是有界静态匹配，不是完整跨语言/UI 事件调用图；没有明确匹配时仍回退到同文件/模块的可用测试，不凭数据集 `testKind` 跳过设备测试。
+
+原计划保存在 Agent 工作区之外的 `baseline-test-plan.json`，包含接口身份、匹配依据及测试文件哈希；重构和每轮 Loop 后沿用，不根据改名/提取后的代码重新猜测测试。新增跨模块源码仍补充相应测试。原任务、已选测试内容或注册关系变化时记为 `TEST_PLAN_STALE`，不能复用旧证据。每轮实际计划、排除记录和覆盖缺口写入 `test-plan.json`。仅完整 SDK 原始字符串断言模板会按模板规则排除，显式指定测试任务不应用自动选择与模板排除。设备安装 ABI 不匹配记为 `BLOCKED / DEVICE_ABI_MISMATCH`，不进入代码修复 Loop；真实断言失败仍为 FAIL。
 
 每条异味默认总执行上限 **1200 秒**，包含 Agent、门禁、修复和 Review；达到上限终止当前进程树并记录超时。每轮 Agent 内部的 `build_project` 和 `arkts_check` 合计最多两次是提示词约束，不是对 DevEco 内部工具的强制拦截。
 
@@ -109,7 +115,7 @@ Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工
 - **异味**：当前 Node.js 调用内置包的 `scan.cjs`，只扫描当前目标和本任务修改/新增的生产文件；使用独立本轮报告。判断原符号（含 `%AM序号$外层方法` 匿名名称）及本次变更方法的异味，不能直接复用数据集旧行号去判断别的方法。扫描工具错误是 BLOCKED，实际异味残留是 FAIL。
 - **构建**：在 `v/` 下的验证副本执行 Hvigor；必要时由平台先调用 ohpm。Agent 不得自行修改签名、wrapper 或依赖配置。
 - **公共契约**：保存模块导出和公开成员签名，比较是否删除或不兼容变更。
-- **测试**：解析 `build-profile.json5` 的模块配置和 `List.test.*` 注册链。优先匹配目标文件同名 suite，也能查找别的宿主模块；无法精确匹配则保守执行受影响模块中可用的 Local/Instrument 测试。每次先清除副本旧报告，必须有新生成的 Hypium 用例和完整汇总，Instrument 还要求设备完成标记。beforeAll 找不到测试宿主属于 BLOCKED，不冒充业务断言失败。
+- **测试**：解析 `build-profile.json5` 和 `List.test.*` 注册链；优先沿用重构前原接口关联的 suite，也能查找别的宿主模块；无法精确匹配时保守回退。每次先清除副本旧报告，必须有新生成的 Hypium 用例和完整汇总，Instrument 还要求设备完成标记。beforeAll 找不到测试宿主属于 BLOCKED，不冒充业务断言失败。
 - **Linter**：仅判断本任务变更行引入/触及的诊断，不因文件里别的既有诊断判失败。提示词读取最近的项目风格配置。
 - **Review**：只读取本任务的前后生产代码、diff、风险、门禁结果和传递依赖材料；不访问原项目、不读测试、不重复运行工具。UNCERTAIN/无有效 JSON 记为 BLOCKED，不能借用旧评审 PASS。
 

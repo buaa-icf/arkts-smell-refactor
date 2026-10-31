@@ -5,6 +5,7 @@ dist-tests/
 .test-tmp/
 .test-tmp-homecheck-package-*/
 .npm-cache/
+.homegraph/
 *.tsbuildinfo
 
 # Legacy/plugin Python caches

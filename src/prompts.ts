@@ -20,7 +20,7 @@ export const SMELL_GUIDANCE: Record<string, string> = {
 export const EXTRACTION_TYPE_CONSTRAINT =
   "新增辅助方法的参数必须接纳各调用处的真实类型，包括可选属性和 string | undefined；不要仅按期望值把它收窄成 string。提取 Date 构造、重载调用或回调时，核对原来的上下文类型和收窄条件；可保留联合类型或调整抽取边界，使运行行为保持不变。任何默认值、提前返回或类型断言都必须有原代码依据。";
 export const AGENT_VERIFICATION_CONSTRAINTS =
-  "- 内部验证只能调用 DevEco Code 内置的 `build_project` 与 `arkts_check`，两者每轮合计最多 2 次。完成编辑后按改动选择一种必要验证；第一次通过即停止内部验证，不为重复确认再调用另一工具。只有第一次失败且确认是本轮修改导致的编译错误或静态检查缺陷，才在修复后追加一次验证；第二次后交由平台 loop 处理。\n- 任一次验证若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止内部验证。禁止手工运行 hvigor、npm、pnpm 或 ohpm，禁止创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。完整门禁由平台统一执行，不在 Agent 内重复运行。";
+  "- 内部验证只能调用 DevEco Code 内置的 `build_project` 与 `arkts_check`（新版分别对应官方 `devecocli build` 与 `devecocli check arkts`，只能在当前隔离工作区执行），两者每轮合计最多 2 次。完成编辑后按改动选择一种必要验证；第一次通过即停止内部验证，不为重复确认再调用另一工具。只有第一次失败且确认是本轮修改导致的编译错误或静态检查缺陷，才在修复后追加一次验证；第二次后交由平台 loop 处理。\n- 任一次验证若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止内部验证。禁止手工运行 hvigor、npm、pnpm 或 ohpm，禁止创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。完整门禁由平台统一执行，不在 Agent 内重复运行。";
 export const EXTRACTION_QUALITY_CONSTRAINTS =
   "- 新增方法和成员优先遵守下方项目 Linter 摘要中的适用显式规则；未明确时沿用目标文件的可见性、命名及格式约定（如已有私有方法的前导下划线、分号、尾逗号和对象属性换行）；只调整本轮新增或修改的代码。\n- 不为提取先清理原有空白行或转换整个文件的 CRLF/LF；编辑优先使用唯一的非空代码锚点。若 oldString 匹配失败，从当前文件重新取得实际文本并缩小替换范围，不反复猜测空白行数量；保留原编码和换行格式。\n- 保留 `ForEach`/`LazyForEach` 原有 keyGenerator，包括原来未提供的情况；不要为消除 Linter 提示擅自新增 index-only key 或改变键值语义。若诊断要求调整，先核对数据更新与组件复用行为，无法证明等价则保留原行为并报告冲突。\n- 新增共享实现时：无默认值的 `@Param` 需配合 `@Require`，不得为过编译随意补默认值；组件调用点传入的属性须符合当前组件状态模型的初始化规则，不能把普通成员直接当作输入；聚合出口使用显式具名导出，避免新增 `export *` 引入 Linter 缺陷。";
 export function projectRelativePath(task: RefactorTask, file: string): string {
