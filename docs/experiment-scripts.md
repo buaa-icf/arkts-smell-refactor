@@ -24,7 +24,7 @@ Local 长方法 JSON 有 7 个文件记录、8 条异味；序号按每条 `mess
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 $repo = 'C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor'
-$logDir = 'C:\Users\RoyCai\Desktop\group_project\TestResult1008'
+$logDir = 'C:\Users\RoyCai\Desktop\group_project\TestResult1028'
 Set-Location -LiteralPath $repo
 $env:ARKTS_REFACTOR_MODEL = 'zhipu-coding/glm-5'
 $env:ARKTS_REVIEW_MODEL = 'zhipu-coding/glm-5'
@@ -35,6 +35,22 @@ Remove-Item Env:ARKTS_REVIEW_VARIANT -ErrorAction SilentlyContinue
 项目默认使用用户 `deveco.jsonc` 中的自定义模型 `zhipu-coding/glm-5`，流水线子进程禁用 DevEco 自带提供者。上述设置覆盖旧终端遗留的模型变量并清除 low/high/max；不能沿用历史文档中的 `deveco/GLM-5.3` 命令。配置优先级与核查依据见 [1012 基线模型与路由修复](baseline-1012-model-audit-20261029.md)。
 
 需要测试 Coding Plan 的增强推理时，单独设置 `$env:ARKTS_REFACTOR_VARIANT = 'high'`，首轮与返修均生效，评审保持独立。当前已接通 low/high/max 到实际 HTTP `reasoning_effort` 的映射；不传档位时保持服务端默认（官方 GLM-5.3 为 max）。完整对照命令见 [Coding Plan high/max 试验](coding-plan-high-trial-20261030.md)。
+
+2026-11-02 合并修复后的首轮复测固定重构档位为 `max`，评审使用服务端默认，开启 Linter，执行 Instrument Code Clone 第 1～10 条。终端运行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+Set-Location -LiteralPath 'C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor'
+$env:ARKTS_REFACTOR_MODEL = 'zhipu-coding/glm-5'
+$env:ARKTS_REVIEW_MODEL = 'zhipu-coding/glm-5'
+$env:ARKTS_REFACTOR_VARIANT = 'max'
+Remove-Item Env:ARKTS_REVIEW_VARIANT -ErrorAction SilentlyContinue
+npm.cmd run build
+if ($LASTEXITCODE -ne 0) { throw 'TypeScript build failed.' }
+.\tools\run_code_clone_instrument.ps1 -StartOrdinal 1 -EndOrdinal 10 -LinterMode required -LogDirectory 'C:\Users\RoyCai\Desktop\group_project\TestResult1028'
+```
+
+本轮仍按 `RESULT totalSeconds <= 420` 且最终 PASS 统计限时成功；后端 1200 秒执行上限不替代 7 分钟指标。十条中至少七条限时成功才达到本批 70% 目标。
 
 脚本自动设置原生进程输入/输出所需的 UTF-8 编码，运行结束后恢复原目录与控制台编码。`-LogDirectory` 同时显示终端输出并保存日志，每次脚本调用生成一个 `outputyyyyMMdd-HHmmss-fff.log`。PowerShell 5.1 的 Tee-Object 默认保存 UTF-16 LE，PowerShell 7 默认保存 UTF-8；日志读取程序应按 BOM/实际编码读取。
 
@@ -116,4 +132,4 @@ foreach ($ordinal in @(1, 3)) {
 
 每条正常完成仍输出 `RESULT ordinal=... verdict=... pipelineExit=... totalSeconds=... task=...`、`ROLLBACK_SNAPSHOT=...` 和 `END ordinal=...`，结果保存在本工具仓库 `runs/` 下。任务目录新增 `experiment.json`，记录 `dataset`、`datasetKind`、`smellType`、`ordinal`、`linterMode`，用于区分不同数据集的同名任务与序号。端到端 `totalSeconds` 口径与旧脚本一致，源码回滚在计时之后。
 
-有有效结果的 FAIL/BLOCKED 样例回滚后可继续下一条；子进程异常退出、结果缺失或任务身份不符则回滚并停止当前批次，避免误用其他运行的结果。恢复的是运行前源码快照，不等于自动重置至 Git HEAD。正常异常处理会尝试回滚；强制结束整个终端/进程后仍需检查日志末尾是否出现回滚与 END。
+TS CLI 以退出码 0 表示 PASS，2 表示未通过。脚本核对本次新增运行的 result.json、退出码与任务身份后，FAIL/BLOCKED/INCOMPLETE 样例输出 RESULT、回滚并继续下一条；其他退出码、结果缺失、结果与退出码矛盾或任务身份不符则回滚并停止当前批次，避免误用其他运行的结果。恢复的是运行前源码快照，不等于自动重置至 Git HEAD。正常异常处理会尝试回滚；强制结束整个终端/进程后仍需检查日志末尾是否出现回滚与 END。
