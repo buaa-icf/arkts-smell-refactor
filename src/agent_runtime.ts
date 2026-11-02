@@ -71,7 +71,7 @@ export async function runAgent(
   if (options.formatOnly) command.push("--agent", "arkts-review-format");
   command.push(options.role.startsWith("review") ? "严格执行输入中的只读评审任务，只输出要求的 JSON。" : "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。");
   if (!options.promptViaStdin) command.push("-f", path.resolve(promptFile));
-  command.push("--dir", cwd, "--format", "json", "--dangerously-skip-permissions");
+  command.push("--dir", cwd, "--format", "json", "--auto");
   if (options.title) command.push("--title", options.title);
   writeJson(path.join(taskDir, `${options.role}-execution-policy.json`), {
     policyVersion: POLICY_VERSION, role: options.role, requestedModel: model, requestedVariant: options.variant ?? null,

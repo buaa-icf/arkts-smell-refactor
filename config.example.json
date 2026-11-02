@@ -117,7 +117,7 @@
       "{task_dir}",
       "--format",
       "json",
-      "--dangerously-skip-permissions"
+      "--auto"
     ],
     "cwd": "{task_dir}",
     "timeoutSeconds": 1200

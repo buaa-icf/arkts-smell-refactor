@@ -47,14 +47,41 @@ test("重构副本排除测试、依赖与缓存；验证副本保留测试", (t
     "feature/src/ohosTest/Foo.test.ets",
     "node_modules/foo/index.ts",
     ".git/config",
+    ".homegraph/homegraph.db",
   ])
     writeText(path.join(source, r), "data");
   freshCopy(source, mirror, true);
   assert(fs.existsSync(path.join(mirror, "feature/src/main/ets/Foo.ets")));
   assert(!fs.existsSync(path.join(mirror, "feature/src/test/Foo.test.ets")));
   assert(!fs.existsSync(path.join(mirror, "node_modules")));
+  assert(!fs.existsSync(path.join(mirror, ".homegraph")));
   freshCopy(source, mirror, false);
   assert(fs.existsSync(path.join(mirror, "feature/src/test/Foo.test.ets")));
+  assert(!fs.existsSync(path.join(mirror, ".homegraph")));
+});
+
+test("TD.52 HomeGraph 缓存不参与回写和删除判定，其他配置边界仍严格", (t) => {
+  const p = makeProject(fixture(t)),
+    mirror = path.join(p.taskDir, "refactor-workspace"),
+    originalCache = path.join(p.source, ".homegraph/existing.db");
+  writeText(originalCache, "original runtime state");
+  freshCopy(p.source, mirror, true);
+  writeText(path.join(mirror, "feature/src/main/ets/Page.ets"), "modified");
+  for (const name of [".gitignore", "daemon.log", "homegraph.db", "homegraph.lock", "homegraph.db-shm", "homegraph.db-wal"])
+    writeText(path.join(mirror, ".homegraph", name), "live runtime state");
+  assert.equal(syncProductionChanges(mirror, p.source), 0);
+  assert.equal(readText(p.target).trimEnd(), "modified");
+  assert.equal(readText(originalCache).trimEnd(), "original runtime state");
+  assert(!fs.existsSync(path.join(p.source, ".homegraph/homegraph.db")));
+  assert.deepEqual(
+    readJson(path.join(p.taskDir, "refactor-changes.json")).changedProductionFiles,
+    ["feature/src/main/ets/Page.ets"],
+  );
+  // An exact cache-directory exemption must not authorize neighboring files/configs.
+  writeText(path.join(mirror, ".homegraph-config.json"), "unauthorized");
+  writeText(path.join(mirror, "feature/src/main/ets/Page.ets"), "must not sync");
+  assert.equal(syncProductionChanges(mirror, p.source), 4);
+  assert.equal(readText(p.target).trimEnd(), "modified");
 });
 test("拒绝副本嵌套在原工程，避免递归复制或删除", (t) => {
   const root = fixture(t),

@@ -55,6 +55,9 @@ export const stamp = () =>
 export const IGNORED = new Set([
   ".git",
   ".hvigor",
+  // DevEco Code TD.52 generates its own database, locks and logs here.
+  // Never copy, hash, review or synchronize live agent runtime state.
+  ".homegraph",
   ".cache",
   ".test",
   "build",
