@@ -108,18 +108,37 @@
   },
   "reviewAgent": {
     "command": [
-      "deveco",
-      "run",
-      "严格执行附件中的只读评审任务，只输出要求的 JSON。",
-      "-f",
-      "{review_prompt_file}",
-      "--dir",
+      "node",
+      "{backend_root}/dist/gate.js",
+      "review",
+      "--task-dir",
       "{task_dir}",
-      "--format",
-      "json",
-      "--auto"
+      "--deveco",
+      "deveco",
+      "--prompt-file",
+      "{review_prompt_file}"
     ],
     "cwd": "{task_dir}",
+    "blockedOutputRegex": "REVIEW_PACKET_BLOCKED|GATE_BLOCKED|product agreements|deveco auth consent|rate limit|service.*overloaded",
+    "blockedOutputScope": "agent-errors",
     "timeoutSeconds": 1200
+  },
+  "reviewFormatAgent": {
+    "command": [
+      "node",
+      "{backend_root}/dist/gate.js",
+      "review",
+      "--task-dir",
+      "{task_dir}",
+      "--deveco",
+      "deveco",
+      "--prompt-file",
+      "{review_format_prompt_file}",
+      "--format-only"
+    ],
+    "cwd": "{task_dir}",
+    "blockedOutputRegex": "GATE_BLOCKED|product agreements|deveco auth consent|rate limit|service.*overloaded",
+    "blockedOutputScope": "agent-errors",
+    "timeoutSeconds": 90
   }
 }

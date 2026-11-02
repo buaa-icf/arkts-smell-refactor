@@ -10,7 +10,7 @@ import {
   agentErrorOutput,
 } from "../src/runner.js";
 import { taskFromJson } from "../src/models.js";
-import { readJson, writeJson, writeText, now } from "../src/utils.js";
+import { readJson, readText, writeJson, writeText, now } from "../src/utils.js";
 import { fixture, setupTask, goodConfig, spec } from "./helpers.js";
 test("Dry Run 渲染六个步骤且不运行不存在的命令", async (t) => {
   const dir = setupTask(fixture(t)),
@@ -87,6 +87,71 @@ test("语义 Review 失败进入定向修复，随后重新验证通过", async 
     "SEMANTIC_REVIEW_FAILURE",
   );
   assert(fs.existsSync(path.join(dir, "repair-prompt-1.md")));
+});
+
+test("格式修复后的语义 FAIL 保留问题并进入代码返修", async (t) => {
+  const dir = setupTask(fixture(t)), c = goodConfig();
+  const review = JSON.stringify({
+    verdict: "FAIL", summary: 'guard "changed"',
+    issues: [{ severity: "blocking", filePath: "entry/src/main/ets/Page.ets", reason: "lost guard", requiredFix: "Restore guard" }],
+  });
+  const malformed = review.replaceAll('\\"', '"');
+  c.reviewAgent = spec(
+    `console.log(require('node:fs').existsSync('repaired') ? '{"verdict":"PASS","issues":[]}' : ${JSON.stringify(malformed)})`,
+    { cwd: "{task_dir}" },
+  );
+  c.reviewFormatAgent = spec(`console.log(${JSON.stringify(review)})`);
+  c.repairAgent = spec("require('node:fs').writeFileSync('repaired','yes')", { cwd: "{task_dir}" });
+  const result = await executePipeline(dir, c);
+  assert.equal(result.verdict, "PASS");
+  assert.equal(result.repairAttempts, 1);
+  assert.equal(result.reviewFormatRetries, 1);
+  const failure = readJson(path.join(dir, "failure-report-1.json"));
+  assert.equal(failure.stage, "review-agent");
+  assert.equal(failure.classification, "SEMANTIC_REVIEW_FAILURE");
+  assert.equal(failure.repairable, true);
+  assert.equal(failure.issues[0].reason, "lost guard");
+  assert.equal(failure.issues[0].requiredFix, "Restore guard");
+  assert.match(readText(path.join(dir, "repair-prompt-1.md")), /Restore guard/);
+});
+
+test("格式修复识别正确的返修和环境重试评审轮次", (t) => {
+  const dir = setupTask(fixture(t)), task = taskFromJson(readJson(path.join(dir, "task.json")));
+  for (const suffix of ["", "-retry-1", "-repair-1", "-repair-2-retry-1"]) {
+    const summary = "current round " + suffix;
+    writeJson(path.join(dir, `review${suffix}.json`), {
+      verdict: "FAIL", summary, issues: [{ reason: summary }],
+    });
+    // A leftover format file must never replace the accepted review for this round.
+    writeJson(path.join(dir, `review${suffix}-format.json`), { summary: "stale", issues: [] });
+    const failure = buildFailureReport(dir, task, {
+      name: `review-agent${suffix}-format`, status: "FAIL", duration_seconds: 0,
+    }, 3);
+    assert.equal(failure.stage, "review-agent");
+    assert.equal(failure.repairable, true);
+    assert.equal(failure.summary, summary);
+    assert.equal(failure.issues[0].reason, summary);
+  }
+});
+
+test("格式修复通过不重跑门禁，改写评审内容时仍阻塞", async (t) => {
+  const review = JSON.stringify({
+    verdict: "PASS", summary: 'verified "result"', smellRemoved: true,
+    behaviorEquivalent: true, riskChecks: [], issues: [],
+  });
+  for (const changed of [false, true]) {
+    const dir = setupTask(fixture(t)), c = goodConfig();
+    c.gates!.smell = spec("require('node:fs').appendFileSync('gate-count','x')", { cwd: "{task_dir}" });
+    c.reviewAgent = spec(`console.log(${JSON.stringify(review.replaceAll('\\"', '"'))})`);
+    c.reviewFormatAgent = spec(`console.log(${JSON.stringify(changed ? review.replace("verified", "invented") : review)})`);
+    c.repairAgent = spec("require('node:fs').writeFileSync('unexpected-repair','x')", { cwd: "{task_dir}" });
+    const result = await executePipeline(dir, c);
+    assert.equal(result.verdict, changed ? "BLOCKED" : "PASS");
+    assert.equal(result.reviewFormatRetries, 1);
+    assert.equal(result.repairAttempts, 0);
+    assert.equal(readText(path.join(dir, "gate-count")), "x");
+    assert(!fs.existsSync(path.join(dir, "unexpected-repair")));
+  }
 });
 test("异味持续失败最多三轮修复，修复基于已有修改继续", async (t) => {
   const dir = setupTask(fixture(t)),

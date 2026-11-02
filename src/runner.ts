@@ -255,8 +255,10 @@ export function buildFailureReport(
   failed: CommandResult,
   attempt: number,
 ): Json {
-  const stage = failed.name.replace(/-retry-\d+$/, "").split("-repair-")[0],
-    suffix = failed.name.replace(/^review-agent/, ""),
+  // Formatting changes the transport step name, not the semantic review round.
+  const logicalName = failed.name.replace(/-format$/, ""),
+    stage = logicalName.replace(/-retry-\d+$/, "").split("-repair-")[0],
+    suffix = logicalName.replace(/^review-agent/, ""),
     reviewFile = path.join(taskDir, `review${suffix}.json`),
     review =
       stage === "review-agent" && isFile(reviewFile)
