@@ -2,8 +2,9 @@ import path from "node:path";
 import type { Json } from "./models.js";
 import { readText, writeJson } from "./utils.js";
 import { runCommand } from "./process.js";
+import { validationHandoff, FINAL_CHECK_DESCRIPTION } from "./validation_handoff.js";
 
-export const POLICY_VERSION = "2026-11-03-bounded-agent-validation";
+export const POLICY_VERSION = "2026-11-03-final-check-handoff";
 export const DEFAULT_AGENT_MODEL = "zhipu-coding/glm-5";
 export const DISABLED_AGENT_TOOLS = ["webfetch", "websearch", "skill"];
 export const INTERNAL_VALIDATION_TOOLS = ["build_project", "arkts_check"];
@@ -92,13 +93,27 @@ export async function runAgent(
       enabled: internalValidationAllowed(options.role, options.formatOnly),
       tools: internalValidationAllowed(options.role, options.formatOnly) ? INTERNAL_VALIDATION_TOOLS : [],
       maxAttempts: internalValidationAllowed(options.role, options.formatOnly) ? MAX_INTERNAL_VALIDATION_ATTEMPTS : 0,
+      finalCheckDescription: internalValidationAllowed(options.role, options.formatOnly) ? FINAL_CHECK_DESCRIPTION : null,
     },
     providerSettingsVerified: false, formatOnly: !!options.formatOnly,
     externalSkillsDisabled: true, skillToolDisabled: true, gitCeilingDirectory: env.GIT_CEILING_DIRECTORIES,
     reviewPacketAttached: options.role === "review" && path.basename(promptFile) === "review-agent-prompt.md",
     promptTransport: options.promptViaStdin ? "stdin" : "file",
   });
-  const result = await runCommand(command, { cwd, env, stream: true, input: options.promptViaStdin ? readText(promptFile) : undefined });
+  const observe = internalValidationAllowed(options.role, options.formatOnly) ? validationHandoff(path.resolve(cwd)) : null;
+  const handoff = new AbortController();
+  const result = await runCommand(command, {
+    cwd, env, stream: true, input: options.promptViaStdin ? readText(promptFile) : undefined,
+    signal: handoff.signal,
+    onStdoutLine: observe ? line => {
+      const check = observe(line);
+      if (check) handoff.abort(check);
+    } : undefined,
+  });
+  if (result.cancelled && handoff.signal.aborted && !result.error) {
+    console.log(JSON.stringify({ type: "internal_validation_handoff", role: options.role, check: handoff.signal.reason }));
+    return 0;
+  }
   if (result.error) console.error(result.error);
   return result.code ?? 3;
 }

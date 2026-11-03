@@ -4,6 +4,8 @@ import { targetPath } from "./models.js";
 import { slash, unique, within } from "./utils.js";
 import { projectLinterGuidance } from "./linter_profile.js";
 import { analyzeLongMethod } from "./analysis/long_method.js";
+import { FINAL_CHECK_DESCRIPTION } from "./validation_handoff.js";
+const FINAL_VALIDATION_STEP = `全部生产编辑和源码自查完成后，优先用 bash 工具单独执行一次 devecocli build 或 devecocli check arkts <改动的源码路径>。workdir 指定当前隔离工程根目录，description 精确填写 ${FINAL_CHECK_DESCRIPTION}。这个标记表示你已准备交回，成功后运行器直接接手；本步不要并行编辑或附加其他命令。若检查发现本轮代码错误，修复并自查后再用同一标记复验。仅有旧版原生验证工具时正常验证并简短交回。`;
 export const SMELL_GUIDANCE: Record<string, string> = {
   "feature-envy":
     "结合源码确认静态画像给出的职责归属；不得只改名、挪行、按检测阈值拆小方法，或把依恋整体复制到无关工具类。",
@@ -334,6 +336,7 @@ ${linterPolicy(mode)}
 - 不把原条件分支内的操作无条件移到分支外；提取前后必须保持条件和副作用边界。
 - 不要把“检测器不再命中”当作行为等价的证明。
 ${AGENT_VERIFICATION_CONSTRAINTS}
+${FINAL_VALIDATION_STEP}
 ${AGENT_FOCUS_CONSTRAINTS}
 - ${explorationScope(risk, task)}
 - 先完成全部实例的编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
@@ -431,6 +434,7 @@ ${linterPolicy(mode)}
 - ${EXTRACTION_TYPE_CONSTRAINT}
 - 不读取或修改测试、构建配置、依赖及无关生产文件，不通过改名、挪行或按阈值拆分逃避检测。
 ${AGENT_VERIFICATION_CONSTRAINTS}
+${FINAL_VALIDATION_STEP}
 ${AGENT_FOCUS_CONSTRAINTS}
 - ${explorationScope(risk, task, failure)}
 - 先完成本轮全部编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。

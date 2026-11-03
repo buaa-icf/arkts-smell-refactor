@@ -2,6 +2,7 @@ import spawn from "cross-spawn";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { createInterface } from "node:readline";
 export interface ProcessOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -9,6 +10,7 @@ export interface ProcessOptions {
   timeoutSeconds?: number;
   stream?: boolean;
   onOutput?: (text: string) => void;
+  onStdoutLine?: (line: string) => void;
   input?: string;
 }
 export interface ProcessOutput {
@@ -117,6 +119,8 @@ export async function runCommand(
     };
     child.stdout?.on("data", collectText);
     child.stderr?.on("data", collectText);
+    if (options.onStdoutLine && child.stdout)
+      createInterface({ input: child.stdout, crlfDelay: Infinity }).on("line", options.onStdoutLine);
     let hardStop: NodeJS.Timeout | undefined;
     const kill = () => {
       terminateTree(child);
