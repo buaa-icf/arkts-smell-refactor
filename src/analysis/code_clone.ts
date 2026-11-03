@@ -157,7 +157,15 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
       const end = matching(body, brace);
       if (end < 0) continue;
       const declaration = method.index! + method[0].search(/\S/);
-      members.push({ name: method[2], start: lineAt(code, open + declaration), end: lineAt(code, open + end),
+      let start = lineAt(code, open + declaration);
+      // Detector ranges may start on a blank line or the member decorator.
+      // Extend ownership only. Never alter the fragment used for comparison.
+      while (start > first + 1) {
+        const previous = lines[start - 2].trim();
+        if (previous && !/^@[\w$]+(?:\([^()\r\n]*\))?$/.test(previous)) break;
+        start--;
+      }
+      members.push({ name: method[2], start, end: lineAt(code, open + end),
         ui: owner[1] === 'struct' && (method[2] === 'build' || /@(?:Local)?Builder\s*$/.test(body.slice(0, declaration))) });
     }
     const located = instances.map(i => members.filter(m => m.start <= i.startLine && i.endLine <= m.end));

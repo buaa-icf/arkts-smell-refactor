@@ -8,6 +8,26 @@ import { buildRefactorPrompt } from "../src/prompts.js";
 import { writeText } from "../src/utils.js";
 import { fixture, task } from "./helpers.js";
 const LONG = "'" + "协议".repeat(110) + "'";
+test("成员归属容纳前置空行和 Builder 装饰器，保留检测范围且不跨越上一成员", (t) => {
+  const root = fixture(t), current = task(root, "code-clone"), file = current.target.file_path;
+  const source = [
+    "struct GridPanel {", "  build() {", "    Row() {", "      Text(this.title)", "    }", "  }",
+    "", "  @LocalBuilder", "  grid() {", "    Row() {", "      Text(this.title)", "    }", "  }", "}",
+  ].join("\n");
+  writeText(path.join(root, file), source);
+  current.target.range = { start_line: 2, end_line: 5, column: 1 };
+  for (const start of [7, 8, 9, 6]) {
+    current.target.related_targets = [{ filePath: file, range: { startLine: start, endLine: 12 } }];
+    const profile = analyzeCodeClone(current, source);
+    assert.equal(profile.instances[1].startLine, start);
+    const hints = profile.refactoringPolicy.sameHostExtraction;
+    if (start === 6) assert.equal(hints, undefined);
+    else {
+      assert(hints[0].includes("grid（实例 L" + start + "–12）"));
+      assert.match(hints[1], /@Builder/);
+    }
+  }
+});
 test("专属画像按同一宿主和成员范围给出可回查的共同行与差异行", (t) => {
   const root = fixture(t), current = task(root, "code-clone"), file = current.target.file_path;
   const source = [
