@@ -133,8 +133,23 @@ test("自动命令使用 Node 而非 Python，保留并行验证和返修配置"
   );
   assert(!JSON.stringify(config).includes("python"));
   assert(config.gates!.test.command!.includes("auto-test"));
+  assert(config.gates!.build.command!.includes("--deveco"));
+  assert(!config.gates!.build.command!.includes("--hvigorw"));
+  assert(config.gates!.linter.command!.includes("--deveco"));
+  assert(!config.gates!.linter.command!.includes("--codelinter"));
   assert(config.reviewAgent!.command!.includes("--auto"));
   assert(!JSON.stringify(config).includes("--dangerously-skip-permissions"));
+});
+test("build 只依赖 DevEco Code，不因 hvigorw/ohpm 未在 PATH 而被禁用", (t) => {
+  const p = makeProject(fixture(t));
+  writeText(path.join(p.source, "hvigor/hvigor-config.json5"), "{}");
+  const config = autoConfig(
+    readJson(path.join(p.taskDir, "task.json")) as any,
+    p.taskDir,
+    { deveco: "deveco", hvigorw: null, ohpm: null },
+  );
+  assert(config.gates!.build.command!.includes("--deveco"));
+  assert.equal(config.gates!.test.enabled, false);
 });
 test("DevEco Code 未确认产品协议是环境阻塞，不进入代码修复", async (t) => {
   const root = fixture(t),
@@ -147,7 +162,11 @@ test("DevEco Code 未确认产品协议是环境阻塞，不进入代码修复",
   );
   const message =
     "Review the product agreements in DevEco Code or run `deveco auth consent` on the server before continuing.";
-  for (const agent of [config.refactorAgent, config.repairAgent, config.reviewAgent])
+  for (const agent of [
+    config.refactorAgent,
+    config.repairAgent,
+    config.reviewAgent,
+  ])
     assert(new RegExp(agent!.blockedOutputRegex!, "i").test(message));
   config.refactorAgent!.command = [
     process.execPath,

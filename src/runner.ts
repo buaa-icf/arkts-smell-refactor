@@ -311,6 +311,35 @@ export function buildFailureReport(
       failed.output_file && isFile(failed.output_file)
         ? readText(failed.output_file).slice(-12000)
         : "";
+  if (stage === "build" && isFile(path.join(taskDir, "build-evidence.json"))) {
+    const evidence = readJson(path.join(taskDir, "build-evidence.json"));
+    if (evidence.engine === "devecocli") {
+      const introduced =
+        typeof evidence.runId === "string" &&
+        evidence.runId.length > 0 &&
+        evidence.status === "FAIL" &&
+        evidence.classification === "INTRODUCED_BUILD_FAILURE" &&
+        evidence.baseline?.status === "PASS" &&
+        evidence.baseline?.runId === evidence.runId;
+      return {
+        schemaVersion: "1.0",
+        attempt,
+        stage,
+        classification: introduced
+          ? "INTRODUCED_BUILD_FAILURE"
+          : (evidence.classification ?? "BUILD_ATTRIBUTION_UNAVAILABLE"),
+        repairable: introduced,
+        summary: introduced
+          ? "相同模块参数下：重构前基线通过，重构后失败，允许定向修复"
+          : (evidence.reason ??
+            "没有可证明本次引入构建失败的基线证据，不进入代码修复"),
+        changedProductionFiles: changes,
+        issues: [],
+        logTail: log,
+        buildEvidence: evidence,
+      };
+    }
+  }
   if (stage === "smell" && isFile(path.join(taskDir, "smell-after.json")))
     issues = (
       readJson(path.join(taskDir, "smell-after.json")) as unknown as Json[]
@@ -530,7 +559,9 @@ export async function runGates(
   await Promise.all(
     parallel.map(async (name) => {
       if (name === "linter" && config.linterMode === "skip") {
-        byName[name] = result(name + suffix, "SKIPPED", { reason: "按 linterMode=skip 跳过，不参与验收或返修" });
+        byName[name] = result(name + suffix, "SKIPPED", {
+          reason: "按 linterMode=skip 跳过，不参与验收或返修",
+        });
         return;
       }
       const spec = gates[name];
@@ -618,7 +649,8 @@ export async function executePipeline(
 ): Promise<Json> {
   taskDir = path.resolve(taskDir);
   const mode = config.linterMode ?? "required";
-  if (!["required", "skip"].includes(mode)) throw new Error("linterMode 必须为 required 或 skip");
+  if (!["required", "skip"].includes(mode))
+    throw new Error("linterMode 必须为 required 或 skip");
   const started = taskStartedAt ?? now(),
     timeout = config.taskTimeoutSeconds ?? 1200,
     deadline = dry || timeout <= 0 ? undefined : started + timeout,
@@ -632,20 +664,27 @@ export async function executePipeline(
     repairs: number,
     retries: number,
   ) => {
-    const filtered = terminal.filter(i => !(mode === "skip" && i.name.split("-repair-")[0] === "linter" && i.status === "SKIPPED"));
-    const output = {
-        ...finalResult(task.task_id, results, dry, filtered),
-        validationPolicy: policy,
-        repairAttempts: repairs,
-        reviewRetries: retries,
-        attempts,
-        durationSeconds: round(now() - started),
-        timeoutSeconds: timeout,
-        timedOut: results.some(
-          (s) =>
-            s.status === "BLOCKED" && s.reason?.includes("总执行时间超过限制"),
+    const filtered = terminal.filter(
+      (i) =>
+        !(
+          mode === "skip" &&
+          i.name.split("-repair-")[0] === "linter" &&
+          i.status === "SKIPPED"
         ),
-      };
+    );
+    const output = {
+      ...finalResult(task.task_id, results, dry, filtered),
+      validationPolicy: policy,
+      repairAttempts: repairs,
+      reviewRetries: retries,
+      attempts,
+      durationSeconds: round(now() - started),
+      timeoutSeconds: timeout,
+      timedOut: results.some(
+        (s) =>
+          s.status === "BLOCKED" && s.reason?.includes("总执行时间超过限制"),
+      ),
+    };
     writeJson(path.join(taskDir, "result.json"), output);
     return output;
   };
@@ -721,9 +760,9 @@ export async function executePipeline(
       attempt: repairs,
       gates,
     });
-    const gatesPass = gates.filter(s => !(mode === "skip" && s.name === "linter" + suffix)).every(
-        (s) => s.status === "PASS" || (dry && s.status === "DRY_RUN"),
-      );
+    const gatesPass = gates
+      .filter((s) => !(mode === "skip" && s.name === "linter" + suffix))
+      .every((s) => s.status === "PASS" || (dry && s.status === "DRY_RUN"));
     let reviewResult: CommandResult;
     if (gatesPass && config.reviewAgent) {
       const spec = config.reviewAgent,
@@ -791,6 +830,19 @@ export async function executePipeline(
     const failed =
       terminal.find((s) => s.status === "BLOCKED") ??
       terminal.find((s) => s.status === "FAIL");
+    if (
+      !dry &&
+      failed?.status === "BLOCKED" &&
+      failed.name.split("-repair-")[0] === "build" &&
+      isFile(path.join(taskDir, "build-evidence.json"))
+    )
+      saveFailure(
+        {
+          ...buildFailureReport(taskDir, task, failed, repairs + 1),
+          repairable: false,
+        },
+        repairs + 1,
+      );
     if (
       dry ||
       !failed ||

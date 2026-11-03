@@ -219,12 +219,11 @@ export function discoverTools(
     deveco: resolve(config.deveco, "deveco"),
     hvigorw: resolve(config.hvigor, "hvigorw"),
     ohpm: resolve(config.ohpm, "ohpm"),
-    codelinter: resolve(config.linter, "codelinter"),
     homecheck: bundledHomecheck(),
   };
 }
 export function configureEnvironment(config: BridgeConfig): void {
-  const additions = ["node", "deveco", "hvigor", "ohpm", "linter"].flatMap(
+  const additions = ["node", "deveco", "hvigor", "ohpm"].flatMap(
     (k) =>
       typeof config[k] === "string" && isFile(config[k])
         ? [path.dirname(config[k])]
@@ -252,9 +251,7 @@ export function inspectEnvironment(config: BridgeConfig): Json {
       name: "Node",
       path: config.node ?? process.execPath,
       available:
-        (Number(process.versions.node.split(".")[0]) > 20 ||
-          (Number(process.versions.node.split(".")[0]) === 20 &&
-            Number(process.versions.node.split(".")[1]) >= 19)) &&
+        Number(process.versions.node.split(".")[0]) >= 22 &&
         !!which(config.node ?? process.execPath),
     },
     {
@@ -291,7 +288,7 @@ export function inspectEnvironment(config: BridgeConfig): Json {
       })),
   ];
   rows.forEach((row) => {
-    row.required = row.name !== "codelinter" || config.linterMode !== "skip";
+    row.required = true;
   });
   return {
     tools: rows,

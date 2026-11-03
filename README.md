@@ -4,7 +4,7 @@
 
 ## 1. 安装和启动
 
-需要 Node.js **20.19 或更高版本**。
+需要 Node.js **22 或更高版本**（官方构建 CLI 的运行要求）。
 
 在本工具仓库根目录执行：
 
@@ -36,7 +36,9 @@ npm run batch -- --workspace "D:\ROG\Documents\harmonyos\test_supplement"
 
 ## 2. 外部工具和工作区
 
-本工具调用本机已安装的 DevEco Code（`deveco`）、Hvigor（`hvigorw`）、ohpm 和 CodeLinter（`codelinter`），这些命令按当前进程的 PATH 查找；本项目本身无需加入 PATH。`doctor` 只检查路径，不能代替 Agent 登录、SDK、签名、网络或设备的实际验证。
+重构/评审使用本机 DevEco Code（`deveco`）。**build 门禁使用该 DevEco Code 安装中自带的官方 `@deveco/deveco-cli` 执行 `devecocli build`**，通过所选 DevEco Code 的 npm 安装位置解析 CLI，不单独搜索 `devecocli`、`hvigorw` 或 `ohpm` 的 PATH，不回退旧构建入口；没有完整 CLI/平台实现包时明确 BLOCKED。其底层 SDK、Java 和官方构建工具仍需安装，由官方 CLI 定位，不表示这些工具已经内置到 refactor。
+
+Build 和 Linter 均复用所选 DevEco Code 安装中的官方 CLI，不需要额外配置检查器命令或路径。测试/Runtime Smoke 仍使用 `hvigorw` 和 ohpm，这两个入口目前按当前进程 PATH 查找（插件也可显式配置）。当前 CLI 1.3.4 没有独立的 `devecocli test` 命令，不能用 build/run 冒充测试。`doctor` 只显示官方 CLI 和仍需独立定位的测试工具；不输出 HomeCheck 条目或外部检查器路径，内置检测包缺失时才提示重新 `npm ci`。它是安装完整性检查，不能代替实际登录、SDK、签名、网络或设备验证。本项目本身无需加入 PATH。
 
 DevEco Code 测试版 `@deveco-test/deveco-code@0.1.0-TD.52`（以及正式版 0.2.5）的重构、修复和评审调用使用 `deveco run ... --format json --auto`；`--auto` 自动批准未被明确拒绝的权限，不覆盖用户配置中的拒绝规则。TD.52 的部分依赖要求 Node.js ≥22，使用该测试版时请使用 Node.js 22 或更高的受支持版本。升级后若提示 `Review the product agreements`，请先自行打开 DevEco Code 阅读并确认协议，或运行 `deveco auth consent` 交互确认；本工具不会代替用户接受协议，未确认时记为 BLOCKED，而非重构 FAIL。自定义旧配置中的 `--dangerously-skip-permissions` 也需要改为 `--auto`。后端修改后运行 `npm run build` 再启动。
 
@@ -113,13 +115,27 @@ Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工
 ## 5. 各层如何判断
 
 - **异味**：当前 Node.js 调用内置包的 `scan.cjs`，只扫描当前目标和本任务修改/新增的生产文件；使用独立本轮报告。判断原符号（含 `%AM序号$外层方法` 匿名名称）及本次变更方法的异味，不能直接复用数据集旧行号去判断别的方法。扫描工具错误是 BLOCKED，实际异味残留是 FAIL。
-- **构建**：在 `v/` 下的验证副本执行 Hvigor；必要时由平台先调用 ohpm。Agent 不得自行修改签名、wrapper 或依赖配置。
+- **构建**：在 `v/` 下的验证副本调用所选 DevEco Code 自带的官方 CLI，显式指定模块，例如 `devecocli build --product default --modules entry@default hotel@default`。选择当前 product 对应的全部 HAP 入口/特性模块，并补充本次涉及的库模块；纯库工程构建库模块产物。根据 `src/main/module.json5` 和 targets/applyToProducts 解析，不靠模块名猜类型。**不能只传 `--product default`**：那会切到 `assembleApp`，额外校验整个应用包的卡片截图等资源，扩大原 HAP/模块编译验收范围。本门禁不声称已完成整包发布校验。依赖安装、同步和底层构建由 CLI 管理，不另找 hvigorw/ohpm。product、模块类型或 target 无法可靠确定时明确阻塞。必须同时有退出码 0 和官方 `Build completed successfully` 标记，帮助输出或缺少证据不能算 PASS。`build-evidence.json` 记录版本、命令、模块范围、工作区及判定。Agent 不得自行修改签名、wrapper 或依赖配置。
 - **公共契约**：保存模块导出和公开成员签名，比较是否删除或不兼容变更。
 - **测试**：解析 `build-profile.json5` 和 `List.test.*` 注册链；优先沿用重构前原接口关联的 suite，也能查找别的宿主模块；无法精确匹配时保守回退。每次先清除副本旧报告，必须有新生成的 Hypium 用例和完整汇总，Instrument 还要求设备完成标记。beforeAll 找不到测试宿主属于 BLOCKED，不冒充业务断言失败。
-- **Linter**：仅判断本任务变更行引入/触及的诊断，不因文件里别的既有诊断判失败。提示词读取最近的项目风格配置。
+- **Linter**：官方 CLI 执行 `devecocli check lint <本次变更文件> --config-path <项目配置> --format json --output-path <本轮唯一报告>`，不使用 `--fix` 或 Git 增量模式，不再搜索独立检查器 PATH。为避免与并行 build 的缓存互相影响，使用独立隔离副本。优先保留项目配置；项目没有配置时，仅在副本里使用当前官方 CLI 自带的应用模板规则，并包含 `.ets`/`.ts` 文件，不修改原仓库配置。必须生成格式和计数有效的新 JSON 报告，工具错误/报告缺失为 BLOCKED；退出码 0 不代表没有诊断。只判断本任务变更行引入/触及的诊断，已有文件的其他诊断不会使本任务失败，新增文件检查全部行。`linter-evidence.json` 记录命令、报告、配置来源和过滤结果，提示词仍读取项目风格配置。
 - **Review**：只读取本任务的前后生产代码、diff、风险、门禁结果和传递依赖材料；不访问原项目、不读测试、不重复运行工具。UNCERTAIN/无有效 JSON 记为 BLOCKED，不能借用旧评审 PASS。
 
+测试的实际子进程命令格式如下，模块和 suite 由原接口测试计划自动生成，在隔离副本执行，并不是让使用者手动运行：
+
+```sh
+# Local Test；以下为 RechargePage 的实际参数示例
+hvigorw --no-daemon test -p module=book_person -p coverage=true -p scope=RechargePageTest
+
+# Instrument Test；模块名和套件名由计划替换
+hvigorw --no-daemon onDeviceTest -p module=模块名@ohosTest -p coverage=true -p scope=套件名 -p ohos-debug-asan=true
+```
+
+副本依赖尚未准备时会先执行 `ohpm install`。没有可精确指定的 suite 时，保守回退会省略 `scope` 参数并记录原因；本地测试要求本轮 Hypium 用例/汇总，设备测试还要求本轮设备执行完成证据，不能只凭 `BUILD SUCCESSFUL` 判定通过。
+
 设备、签名、下载、网络、工具缺失或总超时通常不能通过修改生产代码解决，不进入代码返修。失败分析保留阶段、分类、归因证据、具体文件/位置和可否修复。
+
+构建成功不会额外跑基线。只有当前构建出现非环境类失败时，才在另一个隔离副本中根据本任务 `baseline-production/` 和变更清单恢复原代码/资源、移除本任务新增文件；保留其他既有修改，不使用 Git HEAD 替代任务开始时的代码。使用完全相同的 CLI、product 和模块参数验证基线。仅“基线 PASS、当前 FAIL”可归因为 `INTRODUCED_BUILD_FAILURE` 并进入修复；基线也失败记为 `BLOCKED / BASELINE_BUILD_FAILURE`，快照缺失、路径异常或基线证据不全记为 `BLOCKED / BUILD_BASELINE_UNAVAILABLE`。不能因为警告里出现变更文件名，就把无关打包错误归因于重构。`build-baseline-evidence.json`、带运行标识的基线日志及 `failure-report.json` 保留归因依据；基线验证也计入单例总时限。不会通过删除无关资源来让门禁通过。
 
 ## 6. 输出和结果含义
 

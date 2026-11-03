@@ -5,7 +5,7 @@
   "description": "Dataset-driven ArkTS refactoring and evidence-based validation",
   "type": "module",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22"
   },
   "bin": {
     "arkts-refactor": "dist/cli.js"
