@@ -31,7 +31,7 @@ test("显式配置优先于环境变量，档位可清空", () => {
   const selection = resolveSelection({ refactor: { variant: "max" } }, env as NodeJS.ProcessEnv);
   assert.deepEqual(selection.refactor, { model: DEFAULT_AGENT_MODEL, variant: "max" });
   assert.deepEqual(selection.review, { model: DEFAULT_AGENT_MODEL, variant: "high" });
-  assert.equal(POLICY_VERSION, "2026-11-03-final-check-handoff");
+  assert.equal(POLICY_VERSION, "2026-11-03-readonly-check-handoff");
 });
 test("档位映射为服务端 reasoning_effort，且不覆盖其他设置", () => {
   const env = agentEnvironment(

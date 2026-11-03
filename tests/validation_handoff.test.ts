@@ -25,6 +25,20 @@ function check(command = 'devecocli check arkts "' + page + '"', exit = 0, descr
     metadata: { exit, devecoCliEvents: [{ ...cli, exitCode: exit }] } } };
 }
 const tool = (data: object) => event("tool_use", "check", data);
+test("一次成功验证可伴随已完成的只读查询，写入、未知工具和重复验证仍拒绝收尾", () => {
+  const inspect = (name: string, status = "completed") => tool({tool: name, state: {status}});
+  for (const name of ["glob", "grep", "read"]) {
+    for (const step of [[inspect(name), tool(check())], [tool(check()), inspect(name)]]) {
+      assert.equal([...edit, start, ...step, finish].map(validationHandoff(cwd)).at(-1), "check");
+    }
+  }
+  for (const extra of [inspect("glob", "error"), inspect("read", "running"), inspect("edit"),
+    inspect("bash"), inspect("unknown"), tool(check())]) {
+    for (const step of [[extra, tool(check())], [tool(check()), extra]]) {
+      assert.equal([...edit, start, ...step, finish].map(validationHandoff(cwd)).at(-1), null);
+    }
+  }
+});
 test("收尾只接受本会话的单独、显式验证，且必须有真实 CLI 成功元数据", () => {
   const observe = () => validationHandoff(cwd);
   for (const lines of [

@@ -34,7 +34,7 @@ function validationCommand(input: Json, cwd: string, edits: Set<string>): "build
 /** Observe DevEco's own stdout JSONL. Tool output text is never an exit status. */
 export function validationHandoff(cwd: string) {
   let session: string | undefined, step: string | undefined;
-  let edited = false, toolsInStep = 0, candidate: "build" | "check" | null = null;
+  let edited = false, nonReadOnlyTools = 0, candidate: "build" | "check" | null = null;
   const edits = new Set<string>();
   return (line: string): "build" | "check" | null => {
     let event: Json;
@@ -51,15 +51,17 @@ export function validationHandoff(cwd: string) {
       session ??= event.sessionID;
       if (session === event.sessionID) {
         step = part.messageID;
-        toolsInStep = 0;
+        nonReadOnlyTools = 0;
         candidate = null;
       }
       return null;
     }
     if (session !== event.sessionID || step !== part.messageID) return null;
     if (event.type === "tool_use") {
-      toolsInStep++;
       const state = part.state;
+      // Only completed, built-in read-only queries may accompany the check.
+      if (state?.status === "completed" && ["glob", "grep", "read"].includes(part.tool)) return null;
+      nonReadOnlyTools++;
       if (state?.status !== "completed") return null;
       if (["write", "edit"].includes(part.tool) && typeof state.input?.filePath === "string") {
         const file = path.resolve(cwd, state.input.filePath);
@@ -80,7 +82,7 @@ export function validationHandoff(cwd: string) {
     }
     if (event.type === "step_finish") {
       step = undefined;
-      return toolsInStep === 1 && part.reason === "tool-calls" ? candidate : null;
+      return nonReadOnlyTools === 1 && part.reason === "tool-calls" ? candidate : null;
     }
     return null;
   };

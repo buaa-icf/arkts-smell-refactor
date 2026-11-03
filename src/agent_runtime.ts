@@ -4,7 +4,7 @@ import { readText, writeJson } from "./utils.js";
 import { runCommand } from "./process.js";
 import { validationHandoff, FINAL_CHECK_DESCRIPTION } from "./validation_handoff.js";
 
-export const POLICY_VERSION = "2026-11-03-final-check-handoff";
+export const POLICY_VERSION = "2026-11-03-readonly-check-handoff";
 export const DEFAULT_AGENT_MODEL = "zhipu-coding/glm-5";
 export const DISABLED_AGENT_TOOLS = ["webfetch", "websearch", "skill"];
 export const INTERNAL_VALIDATION_TOOLS = ["build_project", "arkts_check"];
