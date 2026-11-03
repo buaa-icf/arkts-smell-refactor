@@ -89,6 +89,7 @@ function suites(
   for (const m of visible.matchAll(
     /\bdescribe\s*\(\s*['"]([^'"\r\n]+)['"]\s*,/g,
   )) {
+    if (!code.startsWith("describe", m.index!)) continue;
     const open = code.indexOf("(", m.index!),
       end = matching(code, open, "(", ")");
     if (end >= 0)
@@ -103,6 +104,27 @@ function suites(
 }
 
 type Binding = { local: string; exported: string; file: string };
+
+/** UI tests often reach components through gestures. A registered, same-module
+ * device suite can declare that intent in an it() name without importing the page.
+ * Report that signal separately from a proven receiver call. */
+export function declaredDeviceCases(file: string, targets: Json[]): Json[] {
+  const text = readText(file), visible = mask(text, false), result: Json[] = [];
+  for (const suite of suites(text)) {
+    const names: string[] = [];
+    for (const call of suite.code.matchAll(/(?<![\w$.])it\s*\(/g)) {
+      const args = visible.slice(suite.start + call.index! + call[0].length);
+      const name = /^\s*(['"])([^'"\\\r\n]+)\1\s*,/.exec(args)?.[2];
+      if (name) names.push(name);
+    }
+    for (const target of targets) {
+      const caseName = names.find(name => name === target.method || name.startsWith(target.method + "_"));
+      if (caseName) result.push({ file, suite: suite.name, evidence: "declared-device-case", caseName, target });
+    }
+  }
+  return result;
+}
+
 function imports(file: string, root: string): Binding[] {
   const result: Binding[] = [],
     text = mask(readText(file), false);

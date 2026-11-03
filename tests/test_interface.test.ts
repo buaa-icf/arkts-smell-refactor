@@ -71,6 +71,36 @@ test("同一生产文件的两份 Local Test 按方法区分，测试文件不�
   assert(jobs[0].testFiles[0].endsWith("BalanceCases.test.ets"));
 });
 
+test("同文件克隆组保留各成员的直接测试及声明对应交互场景的已注册设备套件", t => {
+  const p = setup(t), taskFile = path.join(p.taskDir, "task.json"), task = readJson(taskFile);
+  task.smell_type = "code-clone";
+  task.target.symbol = "work";
+  task.target.related_targets = [{filePath: task.target.file_path, symbol: "other", range: {startLine: 3, endLine: 3}}];
+  writeJson(taskFile, task);
+  local(p.source, "WorkCases", coins);
+  local(p.source, "OtherCases", coins.replaceAll("Coins", "Other").replace("page.work()", "page.other()"));
+  const device = path.join(p.source, "feature/src/ohosTest/ets/test");
+  writeText(path.join(device, "List.test.ets"), "import run from './Page.test'; run();");
+  writeText(path.join(device, "Page.test.ets"), [
+    "describe('Gesture', () => {it('work_swipe', 0, () => {driver.swipe();});});",
+    "describe('Unrelated', () => {",
+    "  // it('work_fake', 0, () => {});",
+    "  const example = \"it('other_fake', 0, () => {})\";",
+    "  it('workaround_swipe', 0, () => {driver.swipe();});",
+    "});",
+  ].join("\n"));
+  freezeTestPlan(p.taskDir, p.source);
+  const plan = buildTestPlan(p.taskDir, p.source);
+  assert.deepEqual(plan.jobs.map((j: any) => [j.kind, j.scope, j.reason]), [
+    ["local", "Coins", "original-interface-call"], ["local", "Other", "original-interface-call"],
+    ["instrument", "Gesture", "declared-device-case"],
+  ]);
+  assert.deepEqual(plan.selectionEvidence.filter((e: any) => e.evidence === "import-and-receiver-call")
+    .map((e: any) => e.target.method).sort(), ["other", "work"]);
+  assert.equal(plan.selectionEvidence.find((e: any) => e.evidence === "declared-device-case").caseName, "work_swipe");
+  assert(plan.jobs.every((j: any) => j.frozenBeforeRefactor));
+});
+
 test("一个测试文件的两个 suite 可区分；同一 suite 内仍完整运行", (t) => {
   const p = setup(t);
   local(
