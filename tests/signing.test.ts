@@ -257,6 +257,33 @@ test("真实 CMS：修复 release/default 引用不一致；配置及密码仅�
     "com.example.signing",
   );
 });
+
+test("真实 CMS：开发证书不在 .cer 首位时仍匹配，并拒绝确实缺失的证书", async (t) => {
+  const p = await signedFixture(t);
+  if (!p) return;
+  const leaf = fs.readFileSync(p.cert, "utf8"), fingerprint = new X509Certificate(leaf).fingerprint256;
+  const unrelated = rootCertificates.filter(pem => {
+    const cert = new X509Certificate(pem), now = Date.now();
+    return cert.fingerprint256 !== fingerprint && Date.parse(cert.validFrom) <= now && now <= Date.parse(cert.validTo);
+  }).slice(0, 2);
+  assert.equal(unrelated.length, 2);
+  assert.equal(profileMatches(p.content, "com.example.signing", new X509Certificate(leaf).raw), null);
+  const originalConfig = fs.readFileSync(path.join(p.source, "build-profile.json5"));
+  for (const bundle of [unrelated[0] + "\n" + unrelated[1] + "\n" + leaf, leaf + "\n" + unrelated.join("\n")]) {
+    fs.writeFileSync(p.cert, bundle);
+    assert.equal(profileMatches(p.content, "com.example.signing", Buffer.from(bundle)), null);
+    const result = await prepareSigning({ ...p, required: true });
+    assert.equal(result.ready, true, JSON.stringify(result.report));
+    assert.equal(result.report.candidates[0].certificateFingerprint, fingerprint);
+    assert.deepEqual(fs.readFileSync(path.join(p.source, "build-profile.json5")), originalConfig);
+  }
+  const wrongBundle = unrelated.join("\n");
+  fs.writeFileSync(p.cert, wrongBundle);
+  assert.equal(profileMatches(p.content, "com.example.signing", Buffer.from(wrongBundle)), "PROFILE_CERTIFICATE_MISMATCH");
+  const rejected = await prepareSigning({ ...p, required: true });
+  assert.equal(rejected.ready, false);
+  assert.equal(rejected.report.candidates[0].reason, "PROFILE_CERTIFICATE_MISMATCH");
+});
 test("真实 CMS：过期、应用不匹配和未经授权的 debug 设备均拒绝自动接入", async (t) => {
   const p = await signedFixture(t);
   if (!p) return;

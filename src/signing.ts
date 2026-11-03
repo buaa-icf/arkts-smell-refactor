@@ -100,14 +100,32 @@ const certificate = (input: string | Buffer) =>
       ? Buffer.from(input.replace(/\s/g, ""), "base64")
       : input,
   );
+function certificateForProfile(bytes: Buffer, profile: Json): X509Certificate {
+  const blocks = bytes.toString("utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g),
+    chain = blocks?.length ? blocks.map(certificate) : [certificate(bytes)],
+    info = profile["bundle-info"],
+    embedded = profile.type === "debug" ? info?.["development-certificate"]
+      : profile.type === "release" ? info?.["distribution-certificate"] : null;
+  // DevEco .cer files can contain root/intermediate/developer certificates in
+  // any order. Select the profile's exact certificate; profileMatches below
+  // still checks application identity, validity and mismatched/invalid profiles.
+  if (embedded) {
+    try {
+      const fingerprint = certificate(embedded).fingerprint256;
+      return chain.find(cert => cert.fingerprint256 === fingerprint) ?? chain[0];
+    } catch { /* preserve profileMatches' invalid-profile diagnosis */ }
+  }
+  return chain[0];
+}
 const activeCertificate = (cert: X509Certificate, time: number) =>
   Date.parse(cert.validFrom) <= time && time <= Date.parse(cert.validTo);
 export function profileMatches(
   profile: Json,
   bundle: string,
-  cert: X509Certificate,
+  cert: X509Certificate | Buffer,
   time = Date.now(),
 ): string | null {
+  if (Buffer.isBuffer(cert)) cert = certificateForProfile(cert, profile);
   const info = profile["bundle-info"],
     validity = profile.validity;
   if (info?.["bundle-name"] !== bundle) return "BUNDLE_MISMATCH";
@@ -376,8 +394,8 @@ export async function prepareSigning(
         const stat = fs.statSync(p7b);
         if (stat.size > 2 * 1024 * 1024) throw Error("PROFILE_TOO_LARGE");
         const bytes = fs.readFileSync(p7b),
-          cert = new X509Certificate(fs.readFileSync(certFile));
-        const content = profileContent(bytes);
+          content = profileContent(bytes),
+          cert = certificateForProfile(fs.readFileSync(certFile), content);
         const rejection = profileMatches(content, bundle, cert);
         if (rejection) {
           audit.reason = rejection;
