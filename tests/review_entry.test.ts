@@ -49,6 +49,8 @@ process.stdin.on('data', c=>chunks.push(c)); process.stdin.on('end', ()=>{
   assert(captured.disabledProviders.includes("deveco"));
   assert.equal(captured.tools.skill, false);
   assert.equal(captured.tools.websearch, false);
+  assert.equal(captured.tools.build_project, false);
+  assert.equal(captured.tools.arkts_check, false);
   assert.equal(readJson(path.join(dir, "review-execution-policy.json")).promptTransport, "stdin");
 
   writeText(path.join(dir, "format-input.md"), "completed review JSON");

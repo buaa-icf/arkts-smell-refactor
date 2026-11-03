@@ -5,6 +5,8 @@ import type { Json } from "../src/models.js";
 import {
   DEFAULT_AGENT_MODEL,
   DISABLED_AGENT_TOOLS,
+  INTERNAL_VALIDATION_TOOLS,
+  MAX_INTERNAL_VALIDATION_ATTEMPTS,
   POLICY_VERSION,
   agentEnvironment,
   resolveAgentModel,
@@ -29,7 +31,7 @@ test("显式配置优先于环境变量，档位可清空", () => {
   const selection = resolveSelection({ refactor: { variant: "max" } }, env as NodeJS.ProcessEnv);
   assert.deepEqual(selection.refactor, { model: DEFAULT_AGENT_MODEL, variant: "max" });
   assert.deepEqual(selection.review, { model: DEFAULT_AGENT_MODEL, variant: "high" });
-  assert.equal(POLICY_VERSION.startsWith("2026-10-30"), true);
+  assert.equal(POLICY_VERSION, "2026-11-03-bounded-agent-validation");
 });
 test("档位映射为服务端 reasoning_effort，且不覆盖其他设置", () => {
   const env = agentEnvironment(
@@ -87,7 +89,32 @@ test("禁用提供者、工具与内置技能入口", () => {
   assert.equal(agent.permission.skill, "deny");
   assert.equal(agent.tools.skill, false);
   assert(DISABLED_AGENT_TOOLS.includes("skill"));
-  assert(DISABLED_AGENT_TOOLS.includes("build_project"));
+  assert(!DISABLED_AGENT_TOOLS.includes("build_project"));
+});
+
+test("重构与返修恢复内部构建/ArkTS 检查，评审继续禁止", () => {
+  const original = { DEVECO_CONFIG_CONTENT: JSON.stringify({
+    permission: { build_project: "deny", arkts_check: "deny" },
+    tools: { build_project: false, arkts_check: false, read: true },
+    agent: { custom: { permission: { build_project: "deny" }, tools: { build_project: false } } },
+  }) } as NodeJS.ProcessEnv;
+  for (const role of ["refactor", "repair", "review", "review-format"]) {
+    const allowed = role === "refactor" || role === "repair";
+    const data = config(agentEnvironment(original, { role }));
+    for (const tool of INTERNAL_VALIDATION_TOOLS) {
+      assert.equal(data.tools[tool], allowed, `${role}: ${tool}`);
+      assert.equal(data.permission[tool], allowed ? "allow" : "deny");
+      assert.equal(data.agent.custom.tools[tool], allowed);
+      assert.equal(data.agent.custom.permission[tool], allowed ? "allow" : "deny");
+    }
+    assert.equal(data.tools.read, true);
+    assert.equal(data.tools.skill, false);
+    assert.equal(data.tools.websearch, false);
+  }
+  assert.equal(MAX_INTERNAL_VALIDATION_ATTEMPTS, 2);
+  const format = config(agentEnvironment(original, { role: "refactor", formatOnly: true }));
+  assert.equal(format.tools.build_project, false);
+  assert.deepEqual(format.agent["arkts-review-format"].tools, { "*": false });
 });
 test("隔离副本设置 Git 上界，仅格式修复使用全禁工具的独立 agent", (t) => {
   const root = fixture(t),

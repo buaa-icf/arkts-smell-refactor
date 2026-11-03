@@ -23,7 +23,7 @@ import {
 import { which } from "./process.js";
 import { TEST_TOOL_BLOCKERS } from "./test_execution.js";
 import { bundledHomecheck } from "./homecheck_runtime.js";
-import { resolveSelection, POLICY_VERSION, DISABLED_AGENT_TOOLS, type AgentSelection } from "./agent_runtime.js";
+import { resolveSelection, POLICY_VERSION, DISABLED_AGENT_TOOLS, INTERNAL_VALIDATION_TOOLS, MAX_INTERNAL_VALIDATION_ATTEMPTS, type AgentSelection } from "./agent_runtime.js";
 import { freezeTestPlan } from "./test_plan.js";
 export async function readPastedJson(
   input: NodeJS.ReadableStream = process.stdin,
@@ -255,7 +255,7 @@ export function autoConfig(
       timeoutSeconds: 3600,
     };
   return {
-    agentPolicy: { policyVersion: POLICY_VERSION, refactor: { requestedModel: agents.refactor!.model, requestedVariant: agents.refactor!.variant ?? null }, review: { requestedModel: agents.review!.model, requestedVariant: agents.review!.variant ?? null }, disabledTools: DISABLED_AGENT_TOOLS, disabledProviders: ["deveco"], validationOwner: "platform" },
+    agentPolicy: { policyVersion: POLICY_VERSION, refactor: { requestedModel: agents.refactor!.model, requestedVariant: agents.refactor!.variant ?? null }, review: { requestedModel: agents.review!.model, requestedVariant: agents.review!.variant ?? null }, disabledTools: DISABLED_AGENT_TOOLS, disabledProviders: ["deveco"], validationOwner: "agent-and-platform", internalValidation: { tools: INTERNAL_VALIDATION_TOOLS, maxAttempts: MAX_INTERNAL_VALIDATION_ATTEMPTS } },
     taskTimeoutSeconds: 1200,
     linterMode: mode,
     refactorAgent: agent(),

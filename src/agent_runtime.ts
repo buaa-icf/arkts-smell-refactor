@@ -3,9 +3,17 @@ import type { Json } from "./models.js";
 import { readText, writeJson } from "./utils.js";
 import { runCommand } from "./process.js";
 
-export const POLICY_VERSION = "2026-10-30-ts-agent-focus";
+export const POLICY_VERSION = "2026-11-03-bounded-agent-validation";
 export const DEFAULT_AGENT_MODEL = "zhipu-coding/glm-5";
-export const DISABLED_AGENT_TOOLS = ["webfetch", "websearch", "build_project", "arkts_check", "skill"];
+export const DISABLED_AGENT_TOOLS = ["webfetch", "websearch", "skill"];
+export const INTERNAL_VALIDATION_TOOLS = ["build_project", "arkts_check"];
+export const MAX_INTERNAL_VALIDATION_ATTEMPTS = 2;
+export function internalValidationAllowed(role = "refactor", formatOnly = false): boolean {
+  return !formatOnly && ["refactor", "repair"].includes(role);
+}
+export function disabledAgentTools(role = "refactor", formatOnly = false): string[] {
+  return [...DISABLED_AGENT_TOOLS, ...(!internalValidationAllowed(role, formatOnly) ? INTERNAL_VALIDATION_TOOLS : [])];
+}
 export interface AgentOptions { model?: string; variant?: string }
 export interface AgentSelection { refactor?: AgentOptions; review?: AgentOptions }
 export function resolveAgentModel(model?: string): string {
@@ -26,7 +34,7 @@ export function resolveSelection(selection: AgentSelection = {}, env = process.e
 }
 export function agentEnvironment(
   original: NodeJS.ProcessEnv = process.env,
-  options: AgentOptions & { cwd?: string; formatOnly?: boolean } = {},
+  options: AgentOptions & { cwd?: string; formatOnly?: boolean; role?: string } = {},
 ): NodeJS.ProcessEnv {
   const env = { ...original, DEVECO_DISABLE_EXTERNAL_SKILLS: "1" } as NodeJS.ProcessEnv;
   if (options.cwd) {
@@ -46,10 +54,12 @@ export function agentEnvironment(
   const disabled = config.disabled_providers ?? [];
   if (!Array.isArray(disabled) || !disabled.every(x => typeof x === "string")) throw new Error("disabled_providers 必须是字符串数组");
   config.disabled_providers = [...new Set([...disabled, "deveco"])];
+  const disabledTools = disabledAgentTools(options.role, options.formatOnly),
+    enabledTools = internalValidationAllowed(options.role, options.formatOnly) ? INTERNAL_VALIDATION_TOOLS : [];
   function restrict(settings: Json) {
     const permission = typeof settings.permission === "string" ? { "*": settings.permission } : object(settings.permission ?? {}, "permission");
-    settings.permission = { ...permission, ...Object.fromEntries(DISABLED_AGENT_TOOLS.map(t => [t, "deny"])) };
-    settings.tools = { ...object(settings.tools ?? {}, "tools"), ...Object.fromEntries(DISABLED_AGENT_TOOLS.map(t => [t, false])) };
+    settings.permission = { ...permission, ...Object.fromEntries(enabledTools.map(t => [t, "allow"])), ...Object.fromEntries(disabledTools.map(t => [t, "deny"])) };
+    settings.tools = { ...object(settings.tools ?? {}, "tools"), ...Object.fromEntries(enabledTools.map(t => [t, true])), ...Object.fromEntries(disabledTools.map(t => [t, false])) };
   }
   restrict(config);
   const agents = object(config.agent ?? {}, "agent");
@@ -76,8 +86,14 @@ export async function runAgent(
   writeJson(path.join(taskDir, `${options.role}-execution-policy.json`), {
     policyVersion: POLICY_VERSION, role: options.role, requestedModel: model, requestedVariant: options.variant ?? null,
     requestedReasoningEffort: model === DEFAULT_AGENT_MODEL ? options.variant ?? null : null,
-    disabledTools: DISABLED_AGENT_TOOLS, disabledProviders: JSON.parse(env.DEVECO_CONFIG_CONTENT!).disabled_providers,
-    validationOwner: "platform", providerSettingsVerified: false, formatOnly: !!options.formatOnly,
+    disabledTools: disabledAgentTools(options.role, options.formatOnly), disabledProviders: JSON.parse(env.DEVECO_CONFIG_CONTENT!).disabled_providers,
+    validationOwner: internalValidationAllowed(options.role, options.formatOnly) ? "agent-and-platform" : "platform",
+    internalValidation: {
+      enabled: internalValidationAllowed(options.role, options.formatOnly),
+      tools: internalValidationAllowed(options.role, options.formatOnly) ? INTERNAL_VALIDATION_TOOLS : [],
+      maxAttempts: internalValidationAllowed(options.role, options.formatOnly) ? MAX_INTERNAL_VALIDATION_ATTEMPTS : 0,
+    },
+    providerSettingsVerified: false, formatOnly: !!options.formatOnly,
     externalSkillsDisabled: true, skillToolDisabled: true, gitCeilingDirectory: env.GIT_CEILING_DIRECTORIES,
     reviewPacketAttached: options.role === "review" && path.basename(promptFile) === "review-agent-prompt.md",
     promptTransport: options.promptViaStdin ? "stdin" : "file",

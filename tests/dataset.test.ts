@@ -169,7 +169,11 @@ test("首轮和返修保留验证限制、类型和键语义保护", (t) => {
     buildRepairPrompt(current, {}, { stage: "linter" }, 1),
   ]) {
     for (const fragment of [
-      "不调用 `build_project`、`arkts_check`",
+      "`build_project` 或 `arkts_check`",
+      "两者每轮合计最多 2 次",
+      "第一次通过即停止内部验证",
+      "devecocli build",
+      "devecocli check arkts",
       "平台会执行 HomeCheck、构建、公共契约、测试",
       "包括原来未提供的情况",
       "擅自新增 index-only key",
@@ -212,4 +216,17 @@ test("Review 只读、完整依赖及 Linter skip 约定", (t) => {
   assert(review.includes("禁止读取或搜索原项目目录"));
   assert(review.includes("UNCERTAIN"));
   assert(review.includes("validationPolicy.linterMode=skip"));
+});
+
+test("跳过附加 Linter 时仍保留内部编译检查和平台测试", (t) => {
+  const current = task(fixture(t));
+  for (const prompt of [
+    buildRefactorPrompt(current, {}, "skip"),
+    buildRepairPrompt(current, {}, { stage: "build" }, 1, "skip"),
+  ]) {
+    assert(prompt.includes("本轮 Linter 已明确跳过，不参与验收或返修"));
+    assert(prompt.includes("内部构建和 ArkTS 类型/语法检查仍可执行"));
+    assert(prompt.includes("两者每轮合计最多 2 次"));
+    assert(!prompt.includes("Agent 完成编辑和源码差异自查后立即交回"));
+  }
 });
