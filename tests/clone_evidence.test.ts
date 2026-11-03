@@ -8,6 +8,31 @@ import { buildRefactorPrompt } from "../src/prompts.js";
 import { writeText } from "../src/utils.js";
 import { fixture, task } from "./helpers.js";
 const LONG = "'" + "协议".repeat(110) + "'";
+test("专属画像按同一宿主和成员范围给出可回查的共同行与差异行", (t) => {
+  const root = fixture(t), current = task(root, "code-clone"), file = current.target.file_path;
+  const source = [
+    "// struct Fake {", "struct Panel {", "  @Builder", "  first() {",
+    "    Row() {", "      Text(this.label)", "        .id('left')", "    }", "  }",
+    "  @Builder", "  second() {", "    Row() {", "      Text(this.label)", "        .id('right')",
+    "    }", "  }", "}", "struct Another {", "  build() {", "    Row() {",
+    "      Text(this.label)", "        .id('right')", "    }", "  }", "}",
+    "@Builder function outside() {", "  Row() {", "    Text(this.label)", "  }", "}",
+  ].join("\r\n");
+  writeText(path.join(root, file), source);
+  current.target.range = { start_line: 5, end_line: 8, column: 1 };
+  const profile = (start: number, end: number) => {
+    current.target.related_targets = [{ filePath: file, range: { startLine: start, endLine: end } }];
+    return analyzeCodeClone(current, source);
+  };
+  const prompt = buildRefactorPrompt(current, { codeCloneAnalysis: profile(12, 15) });
+  assert.match(prompt, /struct Panel.*first.*L5–8.*second.*L12–15/);
+  assert.match(prompt, /当前宿主内提取成员 @Builder/);
+  assert.match(prompt, /L5–6 ↔ L12–13/);
+  assert.match(prompt, /L7 \.id\('left'\) ↔ L14 \.id\('right'\)/);
+  for (const range of [[20, 23], [27, 29], [15, 20], [12, 300]]) {
+    assert.equal(profile(range[0], range[1]).refactoringPolicy.sameHostExtraction, undefined);
+  }
+});
 const panel = (prefix: string) =>
   `@Component
 export struct Panel {

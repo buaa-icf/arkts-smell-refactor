@@ -173,7 +173,9 @@ function analysisSection(task: RefactorTask, risk: Json): string {
       `- 必须处理文件：${(clone.modificationBoundary?.requiredFiles ?? []).map((p: string) => projectRelativePath(task, p)).join("，")}；跨文件：${clone.modificationBoundary?.crossFile ?? false}`,
       "- 必须保持：" +
         ((clone.mustPreserve ?? []).join("；") || "逐实例核对原行为"),
-      ...(policy.preferredApproach
+      ...(policy.sameHostExtraction?.length
+        ? policy.sameHostExtraction.map((hint: string) => "- 同一宿主抽取依据：" + hint)
+        : policy.preferredApproach
         ? ["- 优先抽取方式（约束上述建议形态）：" + policy.preferredApproach]
         : []),
       ...(policy.constraints ?? []).map(

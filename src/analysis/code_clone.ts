@@ -1,11 +1,12 @@
 import path from "node:path";
 import crypto from "node:crypto";
-import { diffChars } from "diff";
+import { diffArrays, diffChars } from "diff";
 import type { RefactorTask, Json } from "../models.js";
 import { isFile, readText, slash, unique } from "../utils.js";
 import { CLONE_DETECTOR_RULES } from "./detector_rules.js";
 import { longLiteralSegments, sharedLiteralGroups } from "./literals.js";
-import { lineAt, mask, rangeText } from "./source.js";
+import { lineAt, mask, matching, rangeText } from "./source.js";
+import { METHOD, braceDepths } from "./god_class.js";
 const STRING_LITERAL =
   /^(?:"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*'|`(?:\\[\s\S]|[^`\\])*`)$/;
 const STRINGS = /(['"])(?:\\.|(?!\1)[^\\\r\n])*\1|`(?:\\.|[^`])*`/g;
@@ -111,6 +112,71 @@ function instance(
       ),
   };
 }
+/** Compare trimmed source lines for navigation only. Keep both original coordinates. */
+function alignedLines(lines: string[], first: Json, other: Json): string[] {
+  const extract = (instance: Json) =>
+    lines.slice(instance.startLine - 1, instance.endLine).map(line => line.trim());
+  const changes = diffArrays(extract(first), extract(other), { maxEditLength: 300 }) ?? [];
+  let left = first.startLine, right = other.startLine;
+  const shared: { count: number; hint: string }[] = [], differences: string[] = [], changedBlocks: string[] = [];
+  for (const [index, part] of changes.entries()) {
+    if (!part.added && !part.removed && part.count >= 2 && part.value.some(line => /\w/.test(line))) {
+      shared.push({ count: part.count, hint: '连续相同行（忽略行首尾空白）L' + left + '–' + (left + part.count - 1) +
+        ' ↔ L' + right + '–' + (right + part.count - 1) });
+    }
+    const next = changes[index + 1];
+    if (part.removed && part.count === 1 && next?.added && next.count === 1 &&
+        part.value[0].length <= 140 && next.value[0].length <= 140) {
+      differences.push('差异行 L' + left + ' ' + part.value[0] + ' ↔ L' + right + ' ' + next.value[0]);
+    } else if (part.removed && next?.added) {
+      changedBlocks.push('差异块 L' + left + '–' + (left + part.count - 1) + ' ↔ L' + right + '–' +
+        (right + next.count - 1) + '，分别从 ' + part.value[0].slice(0, 80) + ' / ' + next.value[0].slice(0, 80) + ' 开始');
+    }
+    if (!part.added) left += part.count;
+    if (!part.removed) right += part.count;
+  }
+  return [...shared.sort((a, b) => b.count - a.count).slice(0, 2).map(s => s.hint), ...[...differences, ...changedBlocks].slice(0, 4)];
+}
+
+function sameHostExtraction(source: string, instances: Json[]): string[] {
+  const code = mask(source), lines = source.split(/\r?\n/);
+  if (instances.some(i => !Number.isInteger(i.startLine) || !Number.isInteger(i.endLine) ||
+    i.startLine < 1 || i.endLine < i.startLine || i.endLine > lines.length)) return [];
+  for (const owner of code.matchAll(/\b(class|struct)\s+([\w$]+)(?:\s+[^{};]+)?\s*\{/g)) {
+    const open = owner.index! + owner[0].length - 1, close = matching(code, open);
+    if (close < 0) continue;
+    const first = lineAt(code, open), last = lineAt(code, close);
+    if (!instances.every(i => first <= i.startLine && i.endLine <= last)) continue;
+    const body = code.slice(open, close + 1);
+    if (/\b(?:class|struct)\s+[\w$]+/.test(body)) continue;
+    const depths = braceDepths(body);
+    const members: { name: string; start: number; end: number; ui: boolean }[] = [];
+    for (const method of body.matchAll(METHOD)) {
+      const brace = method.index! + method[0].length - 1;
+      if (depths[brace] !== 1) continue;
+      const end = matching(body, brace);
+      if (end < 0) continue;
+      const declaration = method.index! + method[0].search(/\S/);
+      members.push({ name: method[2], start: lineAt(code, open + declaration), end: lineAt(code, open + end),
+        ui: owner[1] === 'struct' && (method[2] === 'build' || /@(?:Local)?Builder\s*$/.test(body.slice(0, declaration))) });
+    }
+    const located = instances.map(i => members.filter(m => m.start <= i.startLine && i.endLine <= m.end));
+    // Ambiguous/incomplete ownership keeps the existing generic recommendation.
+    if (located.some(matches => matches.length !== 1)) continue;
+    const [head, ...others] = instances;
+    return [
+      owner[1] + ' ' + owner[2] + ' 内的成员：' + located.map(([m], index) =>
+        m.name + '（实例 L' + instances[index].startLine + '–' + instances[index].endLine + '）').join('；'),
+      located.every(([m]) => m.ui)
+        ? '先在当前宿主内提取成员 @Builder，沿用原 this、响应式读取与事件时机。'
+        : '先检查是否可提取当前类内的方法，保留调用点的静态/实例上下文、副作用与控制流。',
+      '在源码中确认完整表达式和链式修饰符边界，仅参数化已核实的差异。以下为部分行级线索。',
+      ...others.slice(0, 3).flatMap(other => alignedLines(lines, head, other)),
+    ];
+  }
+  return [];
+}
+
 export function analyzeCodeClone(task: RefactorTask, source: string): Json {
   const instances = [
     instance(
@@ -250,6 +316,8 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     .map((i) => `${i.filePath}:${i.startLine}-${i.endLine}`)
     .sort()
     .join("|");
+  const localHints = sameFile && available.length === instances.length && instances.length >= 2 &&
+    result[0] !== "DIVERGENT_OR_STALE" ? sameHostExtraction(source, instances) : [];
   instances.forEach((i) => delete i._shape);
   return {
     groupId: "clone-" + digest(key).slice(0, 12),
@@ -269,6 +337,7 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     recommendedPattern: result[1],
     recommendationReason: result[2],
     refactoringPolicy: {
+      ...(localHints.length ? { sameHostExtraction: localHints } : {}),
       preferredApproach: sameFile
         ? "同文件优先局部抽取：同一 class/struct 内提取私有方法或成员 @Builder；不同所属类型或顶层 Builder 保留各自入口并委托文件内共享实现。"
         : "跨文件优先保留各原类/组件及其入口，用组合或委托共用内部 Helper；确认类型、状态所有权和生命周期再考虑共享基类或组件。",
