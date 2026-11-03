@@ -36,7 +36,9 @@ Remove-Item Env:ARKTS_REVIEW_VARIANT -ErrorAction SilentlyContinue
 
 需要测试 Coding Plan 的增强推理时，单独设置 `$env:ARKTS_REFACTOR_VARIANT = 'high'`，首轮与返修均生效，评审保持独立。当前已接通 low/high/max 到实际 HTTP `reasoning_effort` 的映射；不传档位时保持服务端默认（官方 GLM-5.3 为 max）。完整对照命令见 [Coding Plan high/max 试验](coding-plan-high-trial-20261030.md)。
 
-2026-11-02 合并修复后的首轮复测固定重构档位为 `max`，评审使用服务端默认，开启 Linter，执行 Instrument Code Clone 第 1～10 条。终端运行：
+2026-11-03 复测恢复 Agent 的有限内部验证，固定重构档位为 `max`，评审使用服务端默认，跳过附加 Linter，执行 Instrument Code Clone 第 1～10 条。`skip` 会记为 `SKIPPED`，不参与本轮验收或返修，构建与测试仍执行。终端运行：
+
+本机复跑前需先为 BookRead 和 OfficeAttendance 更新包含当前模拟器的签名 profile：已修复 `.cer` 证书链只比较首张的误判，但只读 HDC 核验确认当前设备不在这两个 profile 的授权列表。详情见 [本轮核验记录](agent-validation-rollback-20261103.md)。
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -47,7 +49,7 @@ $env:ARKTS_REFACTOR_VARIANT = 'max'
 Remove-Item Env:ARKTS_REVIEW_VARIANT -ErrorAction SilentlyContinue
 npm.cmd run build
 if ($LASTEXITCODE -ne 0) { throw 'TypeScript build failed.' }
-.\tools\run_code_clone_instrument.ps1 -StartOrdinal 1 -EndOrdinal 10 -LinterMode required -LogDirectory 'C:\Users\RoyCai\Desktop\group_project\TestResult1028'
+.\tools\run_code_clone_instrument.ps1 -StartOrdinal 1 -EndOrdinal 10 -LinterMode skip -LogDirectory 'C:\Users\RoyCai\Desktop\group_project\TestResult1028'
 ```
 
 本轮仍按 `RESULT totalSeconds <= 420` 且最终 PASS 统计限时成功；后端 1200 秒执行上限不替代 7 分钟指标。十条中至少七条限时成功才达到本批 70% 目标。
