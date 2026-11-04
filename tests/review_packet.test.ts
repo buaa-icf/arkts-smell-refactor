@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_LIMITS, PACKET_VERSION, prepareReviewPrompt } from "../src/review_packet.js";
+import { buildReviewPrompt } from "../src/prompts.js";
 import { readJson, readText, writeJson, writeText } from "../src/utils.js";
-import { fixture } from "./helpers.js";
+import { fixture, task } from "./helpers.js";
 function taskDir(root: string, options: { gates?: unknown; files?: string[] } = {}): string {
   const dir = path.join(root, "task"),
     files = options.files ?? ["entry/src/main/ets/Page.ets"];
@@ -57,6 +58,7 @@ test("集中材料内联完整源码、diff 与门禁摘要并记录版本", (t)
   assert.match(prompt, /review-packet\.json（清单）/);
   assert.match(prompt, /2: +work\(\) \{ return 2; \}/, "源码带原文件行号");
   assert.match(prompt, /review-diff\.patch（完整）/);
+  assert.match(buildReviewPrompt(task(root), {}), /只使用[^\n]*review-literals\.json/);
 });
 test("超出上限的源码与 diff 不截断内联，改为定向补读", (t) => {
   const root = fixture(t),
@@ -146,4 +148,31 @@ test("返修后重新生成材料反映当前源码", (t) => {
   assert.match(text, /return 3;/);
   assert.doesNotMatch(text, /return 2;/);
   assert.ok(fs.existsSync(path.join(dir, "review-packet.json")));
+});
+
+test("评审附真实短文案码点差异，等值转义修复后清除旧差异", (t) => {
+  const dir = taskDir(fixture(t)), relative = "entry/src/main/ets/Page.ets", prompt = path.join(dir, "review-prompt.md");
+  writeText(path.join(dir, "baseline-production", relative), "Text('鍑哄彂鍩庡競');");
+  writeText(path.join(dir, "current-production", relative), "helper('鍑哄彂鍩庡兢');");
+  const generated = prepareReviewPrompt(dir, prompt);
+  let report = readJson(path.join(dir, "review-literals.json"));
+  assert.equal(report.files[0].missingValueCount, 1);
+  assert.match(readText(generated), /U\+7AF6/);
+  assert.match(readText(generated), /U\+5162/);
+  writeText(path.join(dir, "current-production", relative), 'helper("\\u9351\\u54c4\\u5f42\\u9369\\u5ea1\\u7af6");');
+  prepareReviewPrompt(dir, prompt);
+  report = readJson(path.join(dir, "review-literals.json"));
+  assert.equal(report.files[0].missingValueCount, 0);
+  assert.equal(report.files[0].newValueCount, 0);
+  assert.doesNotMatch(readText(generated), /U\+5162/);
+});
+
+test("短文案报告超出附件限制时保存真实文件供定向读取", (t) => {
+  const dir = taskDir(fixture(t)), relative = "entry/src/main/ets/Page.ets";
+  writeText(path.join(dir, "baseline-production", relative), "Text('城市');");
+  writeText(path.join(dir, "current-production", relative), "Text('城池');");
+  prepareReviewPrompt(dir, path.join(dir, "review-prompt.md"), { ...DEFAULT_LIMITS, json: 50 });
+  const entry = readJson(path.join(dir, "review-packet.json")).evidence.find((e: any) => e.path === "review-literals.json");
+  assert.equal(entry.inline, false);
+  assert.equal(readJson(path.join(dir, entry.path)).files[0].missingValueCount, 1);
 });
