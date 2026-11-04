@@ -27,6 +27,11 @@ test("成员归属容纳前置空行和 Builder 装饰器，保留检测范围�
       assert.match(hints[1], /@Builder/);
     }
   }
+  current.target.range = { start_line: 7, end_line: 8, column: 1 };
+  current.target.related_targets = [{ filePath: file, range: { startLine: 8, endLine: 8 } }];
+  const decoratorsOnly = analyzeCodeClone(current, source);
+  assert.notEqual(decoratorsOnly.classification, "DIVERGENT_OR_STALE");
+  assert.equal(decoratorsOnly.refactoringPolicy.sameHostExtraction, undefined);
 });
 test("专属画像按同一宿主和成员范围给出可回查的共同行与差异行", (t) => {
   const root = fixture(t), current = task(root, "code-clone"), file = current.target.file_path;

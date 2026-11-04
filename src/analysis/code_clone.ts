@@ -150,14 +150,15 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
     const body = code.slice(open, close + 1);
     if (/\b(?:class|struct)\s+[\w$]+/.test(body)) continue;
     const depths = braceDepths(body);
-    const members: { name: string; start: number; end: number; ui: boolean }[] = [];
+    const members: { name: string; start: number; declarationLine: number; end: number; ui: boolean }[] = [];
     for (const method of body.matchAll(METHOD)) {
       const brace = method.index! + method[0].length - 1;
       if (depths[brace] !== 1) continue;
       const end = matching(body, brace);
       if (end < 0) continue;
       const declaration = method.index! + method[0].search(/\S/);
-      let start = lineAt(code, open + declaration);
+      const declarationLine = lineAt(code, open + declaration);
+      let start = declarationLine;
       // Detector ranges may start on a blank line or the member decorator.
       // Extend ownership only. Never alter the fragment used for comparison.
       while (start > first + 1) {
@@ -165,10 +166,11 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
         if (previous && !/^@[\w$]+(?:\([^()\r\n]*\))?$/.test(previous)) break;
         start--;
       }
-      members.push({ name: method[2], start, end: lineAt(code, open + end),
+      members.push({ name: method[2], start, declarationLine, end: lineAt(code, open + end),
         ui: owner[1] === 'struct' && (method[2] === 'build' || /@(?:Local)?Builder\s*$/.test(body.slice(0, declaration))) });
     }
-    const located = instances.map(i => members.filter(m => m.start <= i.startLine && i.endLine <= m.end));
+    const located = instances.map(i => members.filter(m =>
+      m.start <= i.startLine && m.declarationLine <= i.endLine && i.endLine <= m.end));
     // Ambiguous/incomplete ownership keeps the existing generic recommendation.
     if (located.some(matches => matches.length !== 1)) continue;
     const [head, ...others] = instances;
