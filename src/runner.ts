@@ -28,6 +28,7 @@ import {
 import { displayCommand, runCommand } from "./process.js";
 import { interruptTestResults } from "./test_progress.js";
 import { buildRepairPrompt } from "./prompts.js";
+import { frozenUiFailureEvidence } from "./test_ui.js";
 import { finalReviewText, parseReview, formatRetryPrompt, preservesReview } from "./review_output.js";
 import {
   failedHypiumCases,
@@ -336,6 +337,7 @@ export function buildFailureReport(
   let attributable = mentionsChanged(log, changes),
     unavailable = false,
     hasCaseEvidence = false;
+  const testAttribution: Json[] = [];
   if (stage === "test") {
     const jobs = currentTestFailures(taskDir);
     if (jobs !== null) {
@@ -347,6 +349,7 @@ export function buildFailureReport(
           ))
             cases.push({
               ...c,
+              uiEvidence: frozenUiFailureEvidence(taskDir, job, c, changes),
               targeted:
                 job.selectionReason === "target-named-suite" &&
                 (job.expectedSuites ?? []).includes(c.suite),
@@ -356,9 +359,12 @@ export function buildFailureReport(
         const formatted = (c: Json) =>
           `class=${c.suite}\ntest=${c.name}\n${c.details}\nresult=${c.result}`;
         log = cases.map(formatted).join("\n\n");
+        for (const c of cases)
+          if (c.uiEvidence.length) testAttribution.push({ suite: c.suite, caseName: c.name, evidence: c.uiEvidence });
         attributable = cases.every(
           (c) =>
             c.targeted ||
+            c.uiEvidence.length > 0 ||
             mentionsChanged(formatted(c), changes) ||
             changes.some((f) =>
               new RegExp(
@@ -418,6 +424,7 @@ export function buildFailureReport(
       ? "目标测试在 beforeAll 找不到测试宿主，未执行生产断言，不能归因于本次修改"
       : (review.summary ?? failed.reason ?? `${stage} 未通过`),
     changedProductionFiles: changes,
+    ...(stage === "test" ? { testAttribution } : {}),
     issues,
     logTail: log,
   };

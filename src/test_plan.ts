@@ -15,6 +15,7 @@ import {
   writeJson,
 } from "./utils.js";
 import { mask } from "./analysis/source.js";
+import { freezeUiCaseEvidence } from "./test_ui.js";
 import {
   declaredDeviceCases,
   sourceInterface,
@@ -51,6 +52,7 @@ export function freezeTestPlan(taskDir: string, root: string): void {
       testHashes: Object.fromEntries(
         unique(support).map((f) => [relative(f, root), hash(f)]),
       ),
+      uiCaseEvidence: freezeUiCaseEvidence(root, readJson(path.join(taskDir, "task.json")), plan.jobs),
       plan,
     });
   } catch (e) {
