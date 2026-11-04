@@ -5,6 +5,7 @@ import { slash, unique, within } from "./utils.js";
 import { projectLinterGuidance } from "./linter_profile.js";
 import { analyzeLongMethod } from "./analysis/long_method.js";
 import { cloneReactiveHints } from "./analysis/clone_reactivity.js";
+import { cloneEventHints } from "./analysis/clone_boundaries.js";
 import { FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
 const FINAL_VALIDATION_STEP = FINAL_CHECK_INSTRUCTION + "使用 bash 工具，workdir 指定隔离工程根目录；本步不要并行编辑或附加其他命令。标记表示已准备交回，成功后运行器直接接手；不要为验证标记另加一次构建。仅有旧版原生验证工具时正常验证并简短交回。";
 export const SMELL_GUIDANCE: Record<string, string> = {
@@ -157,7 +158,7 @@ function analysisSection(task: RefactorTask, risk: Json): string {
   if (clone) {
     const instances = clone.instances ?? [],
       policy = clone.refactoringPolicy ?? {},
-      seen = new Set<string>();
+      seen = new Set<string>(), seenLiterals = new Set<string>();
     const lines = [
       `- 克隆组：${clone.groupId}；检测器类型：${clone.detectorCloneKind ?? "未解析"} ${clone.detectorContext ?? ""}`,
       "- 实例：" +
@@ -185,6 +186,7 @@ function analysisSection(task: RefactorTask, risk: Json): string {
         (c: string) => "- 入口与抽取约束：" + c,
       ),
       ...(clone.reactiveExtraction ? cloneReactiveHints(clone.reactiveExtraction).map(hint => "- 响应式抽取：" + hint) : []),
+      ...(clone.eventExtraction ? cloneEventHints(clone.eventExtraction).map(hint => "- 事件抽取：" + hint) : []),
       ...((clone.sharedLiteralGroups ?? []) as Json[]).length
         ? [
             "- 平台已比较重构前长字符串 token 序列（不含连接空白/注释）：下列同指纹片段逐 token 相同，无须自行写脚本再次证明；这只证明所列字面量片段，不证明外部表达式或整个重构等价。指纹不同不能推出值不同。",
@@ -214,6 +216,17 @@ function analysisSection(task: RefactorTask, risk: Json): string {
           );
         if (segments.length > 4)
           lines.push(`- ${relative} 另有 ${segments.length - 4} 个长字面量片段未展示。`);
+        const short = i.shortLiteralEvidence;
+        if (short?.entries?.length) {
+          lines.push(`- 完整 UI 候选范围 ${relative}:L${short.startLine}–${short.endLine}（含相关修饰符/事件，仅供定位，不扩大必须修改范围）。下列非 ASCII 短文案已从原文件解码，可直接复制等值源码转义；保留每个调用点的值，不重打或修正原有乱码，也无须另查文件编码。`);
+          for (const literal of short.entries) {
+            const key = `${i.filePath}:${literal.line}:${literal.column}`;
+            if (seenLiterals.has(key)) continue;
+            seenLiterals.add(key);
+            lines.push(`- 原短文案 ${relative}:L${literal.line}:${literal.column}；等值源码：${literal.escapedValue}`);
+          }
+          if (short.omitted) lines.push(`- 此范围另有 ${short.omitted} 处短文案未展示，需核对原文。`);
+        }
         if (seen.has(i.filePath)) continue;
         seen.add(i.filePath);
         if (i.entryPointHints?.length)
@@ -361,7 +374,7 @@ export function buildReviewPrompt(
 
 优先检查本输入末尾的集中材料。inline=true 的源码和 diff 已完整提供，不重复读取；inline=false 的必要材料按精确路径批量补读。证据不足仍须 UNCERTAIN。禁止 skill、网页、文档 CLI 和重复执行门禁。
 
-只使用任务目录提供的 review-packet.json、本轮 smell-after.json、linter-after.json、public-contract-results.json、test-results.json、review-diff.patch、baseline-production、current-production、review-context-production、review-context.json、task.json、review-risk.json、refactor-changes.json 和 ${gatesFile}。
+只使用任务目录提供的 review-packet.json、review-literals.json、本轮 smell-after.json、linter-after.json、public-contract-results.json、test-results.json、review-diff.patch、baseline-production、current-production、review-context-production、review-context.json、task.json、review-risk.json、refactor-changes.json 和 ${gatesFile}。
 review-context-production 包含直接与传递生产依赖（含本地包及重导出），必须核对新增委托、Mapper、Builder、Helper 调用链末端的实际实现。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或写入命令。commitHash 仅为元信息，不能替代本地重构前基线。
 
 - 异味：${task.smell_type}

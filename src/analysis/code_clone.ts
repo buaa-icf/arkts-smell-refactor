@@ -8,6 +8,8 @@ import { longLiteralSegments, sharedLiteralGroups } from "./literals.js";
 import { lineAt, mask, matching, rangeText } from "./source.js";
 import { METHOD, braceDepths } from "./god_class.js";
 import { cloneReactiveEvidence, type CloneMember } from "./clone_reactivity.js";
+import { cloneUiContext, cloneEventEvidence } from "./clone_boundaries.js";
+import { scopedShortLiterals } from "./short_literals.js";
 const STRING_LITERAL =
   /^(?:"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*'|`(?:\\[\s\S]|[^`\\])*`)$/;
 const STRINGS = /(['"])(?:\\.|(?!\1)[^\\\r\n])*\1|`(?:\\.|[^`])*`/g;
@@ -61,7 +63,8 @@ function instance(
   const matches = (re: RegExp, text = code) =>
     unique([...text.matchAll(re)].map((m) => m[1])).sort();
   const maskedLines = mask(source).split("\n"),
-    fragmentIds = uiIdEvidence(fragment);
+    fragmentIds = uiIdEvidence(fragment),
+    context = resolved ? cloneUiContext(source, start, end) : null;
   return {
     role,
     filePath: file,
@@ -82,6 +85,8 @@ function instance(
     // whole file's call sites as preservation evidence, not an edit scope.
     uiIdEvidence: resolved ? uiIdEvidence(source) : [],
     sensitiveLiteralEvidence: resolved ? sensitiveLiteralEvidence(source) : [],
+    ...(context ? { uiContext: { node: context.name, startLine: context.startLine, endLine: context.endLine },
+      shortLiteralEvidence: scopedShortLiterals(source, context.startLine, context.endLine) } : {}),
     longLiteralSegments: resolved
       ? longLiteralSegments(source, start, end)
       : [],
@@ -139,7 +144,7 @@ function alignedLines(lines: string[], first: Json, other: Json): string[] {
   return [...shared.sort((a, b) => b.count - a.count).slice(0, 2).map(s => s.hint), ...[...differences, ...changedBlocks].slice(0, 4)];
 }
 
-function sameHostExtraction(source: string, instances: Json[]): { hints: string[]; reactive?: Json } | null {
+function sameHostExtraction(source: string, instances: Json[]): { hints: string[]; reactive?: Json; events?: Json | null } | null {
   const code = mask(source), lines = source.split(/\r?\n/);
   if (instances.some(i => !Number.isInteger(i.startLine) || !Number.isInteger(i.endLine) ||
     i.startLine < 1 || i.endLine < i.startLine || i.endLine > lines.length)) return null;
@@ -175,15 +180,16 @@ function sameHostExtraction(source: string, instances: Json[]): { hints: string[
     // Ambiguous/incomplete ownership keeps the existing generic recommendation.
     if (located.some(matches => matches.length !== 1)) continue;
     const [head, ...others] = instances;
+    const events = located.every(([m]) => m.ui) ? cloneEventEvidence(source, instances, open, close) : null;
     return { hints: [
       owner[1] + ' ' + owner[2] + ' 内的成员：' + located.map(([m], index) =>
         m.name + '（实例 L' + instances[index].startLine + '–' + instances[index].endLine + '）').join('；'),
-      located.every(([m]) => m.ui)
+      events ? '先核对下方完整事件配置调用；优先保留 UI 原位并抽取普通成员 helper，通过原回调显式保留字段写入差异。' : located.every(([m]) => m.ui)
         ? '先在当前宿主内提取成员 @Builder，沿用原 this、响应式读取与事件时机。'
         : '先检查是否可提取当前类内的方法，保留调用点的静态/实例上下文、副作用与控制流。',
       '在源码中确认完整表达式和链式修饰符边界，仅参数化已核实的差异。以下为部分行级线索。',
       ...others.slice(0, 3).flatMap(other => alignedLines(lines, head, other)),
-    ], reactive: cloneReactiveEvidence(source, owner[1] + ' ' + owner[2], open, close, instances, located.map(([member]) => member)) };
+    ], events, reactive: cloneReactiveEvidence(source, owner[1] + ' ' + owner[2], open, close, instances, located.map(([member]) => member)) };
   }
   return null;
 }
@@ -344,6 +350,7 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     instances,
     sharedLiteralGroups: sharedLiteralGroups(instances),
     ...(localProfile?.reactive ? { reactiveExtraction: localProfile.reactive } : {}),
+    ...(localProfile?.events ? { eventExtraction: localProfile.events } : {}),
     classification: result[0],
     similarity,
     variationDimensions: dimensions,
