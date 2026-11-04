@@ -153,6 +153,30 @@ test("格式修复通过不重跑门禁，改写评审内容时仍阻塞", async
     assert(!fs.existsSync(path.join(dir, "unexpected-repair")));
   }
 });
+
+test("前置说明加唯一 PASS JSON 直接收尾，不调用格式修复、返修或重复门禁", async (t) => {
+  const dir = setupTask(fixture(t)), config = goodConfig();
+  const review = {verdict:"PASS",summary:"两处克隆均已处理",smellRemoved:true,behaviorEquivalent:true,
+    riskChecks:[{riskCode:"REACTIVE_STATE",status:"passed",evidence:"原状态读取位置保留"}],issues:[]};
+  const response = "核对完成。裁剪顺序保留 [高→宽上限] 与 [日志]。\n\n" + JSON.stringify(review);
+  const events = [
+    {type:"text",sessionID:"s",part:{type:"text",messageID:"old",text:'{"verdict":"FAIL"}'}},
+    {type:"text",sessionID:"s",part:{type:"text",messageID:"final",text:response}},
+    {type:"step_finish",sessionID:"s",part:{type:"step-finish",messageID:"final",reason:"stop"}},
+  ];
+  config.reviewAgent = spec(`console.log(${JSON.stringify(events.map(e=>JSON.stringify(e)).join("\n"))})`);
+  const unexpected = spec("require('node:fs').writeFileSync('unexpected-call','x'); process.exit(1)", {cwd:"{task_dir}"});
+  config.reviewFormatAgent = unexpected;
+  config.repairAgent = unexpected;
+  config.gates!.smell = spec("require('node:fs').appendFileSync('gate-count','x')", {cwd:"{task_dir}"});
+  const result = await executePipeline(dir, config);
+  assert.equal(result.verdict,"PASS");
+  assert.equal(result.reviewFormatRetries,0);
+  assert.equal(result.repairAttempts,0);
+  assert.deepEqual(readJson(path.join(dir,"review.json")),review);
+  assert.equal(readText(path.join(dir,"gate-count")),"x");
+  assert(!fs.existsSync(path.join(dir,"unexpected-call")));
+});
 test("异味持续失败最多三轮修复，修复基于已有修改继续", async (t) => {
   const dir = setupTask(fixture(t)),
     c = goodConfig();
