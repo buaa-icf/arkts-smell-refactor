@@ -29,6 +29,7 @@ import { displayCommand, runCommand } from "./process.js";
 import { interruptTestResults } from "./test_progress.js";
 import { buildRepairPrompt } from "./prompts.js";
 import { frozenUiFailureEvidence } from "./test_ui.js";
+import { collectReactiveEvidence } from "./reactive_evidence.js";
 import { finalReviewText, parseReview, formatRetryPrompt, preservesReview } from "./review_output.js";
 import {
   failedHypiumCases,
@@ -414,6 +415,11 @@ export function buildFailureReport(
     contract: "PUBLIC_CONTRACT_BREAK",
     "review-agent": "SEMANTIC_REVIEW_FAILURE",
   };
+  if (stage === "test" && hasCaseEvidence && attributable && !unavailable) {
+    const reactive = collectReactiveEvidence(taskDir, changes);
+    writeJson(path.join(taskDir, "reactive-extraction.json"), reactive);
+    issues = [...issues, ...reactive.issues];
+  }
   return {
     schemaVersion: "1.0",
     attempt,

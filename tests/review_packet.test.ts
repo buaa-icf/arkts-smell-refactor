@@ -60,6 +60,22 @@ test("集中材料内联完整源码、diff 与门禁摘要并记录版本", (t)
   assert.match(prompt, /review-diff\.patch（完整）/);
   assert.match(buildReviewPrompt(task(root), {}), /只使用[^\n]*review-literals\.json/);
 });
+
+test("集中评审内联响应式参数风险，保持为证据并在修复后刷新", t => {
+  const dir = taskDir(fixture(t)), file = "entry/src/main/ets/Page.ets";
+  const before = "struct Page {\n @Local city: string = '';\n @Builder Body() { Text(this.city); }\n}";
+  const after = "struct Page {\n @Local city: string = '';\n @Builder Value(value: string) { Text(value); }\n @Builder Body() { this.Value(this.city); }\n}";
+  writeText(path.join(dir, "baseline-production", file), before);
+  writeText(path.join(dir, "current-production", file), after);
+  const prompt = prepareReviewPrompt(dir, path.join(dir, "review-prompt.md"));
+  assert.equal(readJson(path.join(dir, "reactive-extraction.json")).issues.length, 1);
+  assert.match(readText(prompt), /reactive-extraction.json（完整）/);
+  assert.match(readText(prompt), /不能仅凭命中判 FAIL/);
+  writeText(path.join(dir, "current-production", file), before);
+  prepareReviewPrompt(dir, path.join(dir, "review-prompt.md"));
+  assert.equal(readJson(path.join(dir, "reactive-extraction.json")).issues.length, 0);
+  assert.doesNotMatch(readText(prompt), /reactive-extraction.json（完整）/);
+});
 test("超出上限的源码与 diff 不截断内联，改为定向补读", (t) => {
   const root = fixture(t),
     dir = taskDir(root),

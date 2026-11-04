@@ -374,7 +374,7 @@ export function buildReviewPrompt(
 
 优先检查本输入末尾的集中材料。inline=true 的源码和 diff 已完整提供，不重复读取；inline=false 的必要材料按精确路径批量补读。证据不足仍须 UNCERTAIN。禁止 skill、网页、文档 CLI 和重复执行门禁。
 
-只使用任务目录提供的 review-packet.json、review-literals.json、本轮 smell-after.json、linter-after.json、public-contract-results.json、test-results.json、review-diff.patch、baseline-production、current-production、review-context-production、review-context.json、task.json、review-risk.json、refactor-changes.json 和 ${gatesFile}。
+只使用任务目录提供的 review-packet.json、review-literals.json、reactive-extraction.json、本轮 smell-after.json、linter-after.json、public-contract-results.json、test-results.json、review-diff.patch、baseline-production、current-production、review-context-production、review-context.json、task.json、review-risk.json、refactor-changes.json 和 ${gatesFile}。
 review-context-production 包含直接与传递生产依赖（含本地包及重导出），必须核对新增委托、Mapper、Builder、Helper 调用链末端的实际实现。禁止读取 risk-report.json 中的调用点信息，禁止读取或搜索原项目目录，禁止运行构建、测试、HomeCheck、Linter 或写入命令。commitHash 仅为元信息，不能替代本地重构前基线。
 
 - 异味：${task.smell_type}
