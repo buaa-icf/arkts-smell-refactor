@@ -7,6 +7,7 @@ import { CLONE_DETECTOR_RULES } from "./detector_rules.js";
 import { longLiteralSegments, sharedLiteralGroups } from "./literals.js";
 import { lineAt, mask, matching, rangeText } from "./source.js";
 import { METHOD, braceDepths } from "./god_class.js";
+import { cloneReactiveEvidence, type CloneMember } from "./clone_reactivity.js";
 const STRING_LITERAL =
   /^(?:"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*'|`(?:\\[\s\S]|[^`\\])*`)$/;
 const STRINGS = /(['"])(?:\\.|(?!\1)[^\\\r\n])*\1|`(?:\\.|[^`])*`/g;
@@ -138,10 +139,10 @@ function alignedLines(lines: string[], first: Json, other: Json): string[] {
   return [...shared.sort((a, b) => b.count - a.count).slice(0, 2).map(s => s.hint), ...[...differences, ...changedBlocks].slice(0, 4)];
 }
 
-function sameHostExtraction(source: string, instances: Json[]): string[] {
+function sameHostExtraction(source: string, instances: Json[]): { hints: string[]; reactive?: Json } | null {
   const code = mask(source), lines = source.split(/\r?\n/);
   if (instances.some(i => !Number.isInteger(i.startLine) || !Number.isInteger(i.endLine) ||
-    i.startLine < 1 || i.endLine < i.startLine || i.endLine > lines.length)) return [];
+    i.startLine < 1 || i.endLine < i.startLine || i.endLine > lines.length)) return null;
   for (const owner of code.matchAll(/\b(class|struct)\s+([\w$]+)(?:\s+[^{};]+)?\s*\{/g)) {
     const open = owner.index! + owner[0].length - 1, close = matching(code, open);
     if (close < 0) continue;
@@ -150,7 +151,7 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
     const body = code.slice(open, close + 1);
     if (/\b(?:class|struct)\s+[\w$]+/.test(body)) continue;
     const depths = braceDepths(body);
-    const members: { name: string; start: number; declarationLine: number; end: number; ui: boolean }[] = [];
+    const members: CloneMember[] = [];
     for (const method of body.matchAll(METHOD)) {
       const brace = method.index! + method[0].length - 1;
       if (depths[brace] !== 1) continue;
@@ -166,7 +167,7 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
         if (previous && !/^@[\w$]+(?:\([^()\r\n]*\))?$/.test(previous)) break;
         start--;
       }
-      members.push({ name: method[2], start, declarationLine, end: lineAt(code, open + end),
+      members.push({ name: method[2], start, declarationLine, end: lineAt(code, open + end), parameters: method[3],
         ui: owner[1] === 'struct' && (method[2] === 'build' || /@(?:Local)?Builder\s*$/.test(body.slice(0, declaration))) });
     }
     const located = instances.map(i => members.filter(m =>
@@ -174,7 +175,7 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
     // Ambiguous/incomplete ownership keeps the existing generic recommendation.
     if (located.some(matches => matches.length !== 1)) continue;
     const [head, ...others] = instances;
-    return [
+    return { hints: [
       owner[1] + ' ' + owner[2] + ' 内的成员：' + located.map(([m], index) =>
         m.name + '（实例 L' + instances[index].startLine + '–' + instances[index].endLine + '）').join('；'),
       located.every(([m]) => m.ui)
@@ -182,9 +183,9 @@ function sameHostExtraction(source: string, instances: Json[]): string[] {
         : '先检查是否可提取当前类内的方法，保留调用点的静态/实例上下文、副作用与控制流。',
       '在源码中确认完整表达式和链式修饰符边界，仅参数化已核实的差异。以下为部分行级线索。',
       ...others.slice(0, 3).flatMap(other => alignedLines(lines, head, other)),
-    ];
+    ], reactive: cloneReactiveEvidence(source, owner[1] + ' ' + owner[2], open, close, instances, located.map(([member]) => member)) };
   }
-  return [];
+  return null;
 }
 
 export function analyzeCodeClone(task: RefactorTask, source: string): Json {
@@ -326,8 +327,9 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     .map((i) => `${i.filePath}:${i.startLine}-${i.endLine}`)
     .sort()
     .join("|");
-  const localHints = sameFile && available.length === instances.length && instances.length >= 2 &&
-    result[0] !== "DIVERGENT_OR_STALE" ? sameHostExtraction(source, instances) : [];
+  const localProfile = sameFile && available.length === instances.length && instances.length >= 2 &&
+    result[0] !== "DIVERGENT_OR_STALE" ? sameHostExtraction(source, instances) : null;
+  const localHints = localProfile?.hints ?? [];
   instances.forEach((i) => delete i._shape);
   return {
     groupId: "clone-" + digest(key).slice(0, 12),
@@ -341,6 +343,7 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     resolvedInstanceCount: available.length,
     instances,
     sharedLiteralGroups: sharedLiteralGroups(instances),
+    ...(localProfile?.reactive ? { reactiveExtraction: localProfile.reactive } : {}),
     classification: result[0],
     similarity,
     variationDimensions: dimensions,

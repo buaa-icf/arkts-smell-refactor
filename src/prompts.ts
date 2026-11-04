@@ -4,8 +4,9 @@ import { targetPath } from "./models.js";
 import { slash, unique, within } from "./utils.js";
 import { projectLinterGuidance } from "./linter_profile.js";
 import { analyzeLongMethod } from "./analysis/long_method.js";
-import { FINAL_CHECK_DESCRIPTION } from "./validation_handoff.js";
-const FINAL_VALIDATION_STEP = `全部生产编辑和源码自查完成后，优先用 bash 工具单独执行一次 devecocli build 或 devecocli check arkts <改动的源码路径>。workdir 指定当前隔离工程根目录，description 精确填写 ${FINAL_CHECK_DESCRIPTION}。这个标记表示你已准备交回，成功后运行器直接接手；本步不要并行编辑或附加其他命令。若检查发现本轮代码错误，修复并自查后再用同一标记复验。仅有旧版原生验证工具时正常验证并简短交回。`;
+import { cloneReactiveHints } from "./analysis/clone_reactivity.js";
+import { FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
+const FINAL_VALIDATION_STEP = FINAL_CHECK_INSTRUCTION + "使用 bash 工具，workdir 指定隔离工程根目录；本步不要并行编辑或附加其他命令。标记表示已准备交回，成功后运行器直接接手；不要为验证标记另加一次构建。仅有旧版原生验证工具时正常验证并简短交回。";
 export const SMELL_GUIDANCE: Record<string, string> = {
   "feature-envy":
     "结合源码确认静态画像给出的职责归属；不得只改名、挪行、按检测阈值拆小方法，或把依恋整体复制到无关工具类。",
@@ -183,6 +184,7 @@ function analysisSection(task: RefactorTask, risk: Json): string {
       ...(policy.constraints ?? []).map(
         (c: string) => "- 入口与抽取约束：" + c,
       ),
+      ...(clone.reactiveExtraction ? cloneReactiveHints(clone.reactiveExtraction).map(hint => "- 响应式抽取：" + hint) : []),
       ...((clone.sharedLiteralGroups ?? []) as Json[]).length
         ? [
             "- 平台已比较重构前长字符串 token 序列（不含连接空白/注释）：下列同指纹片段逐 token 相同，无须自行写脚本再次证明；这只证明所列字面量片段，不证明外部表达式或整个重构等价。指纹不同不能推出值不同。",
