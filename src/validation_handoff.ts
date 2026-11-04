@@ -5,6 +5,7 @@ import { productionKind } from "./workspace.js";
 
 // The agent sets this description only after editing and source self-review.
 export const FINAL_CHECK_DESCRIPTION = "ARKTS_FINAL_CHECK";
+export const FINAL_CHECK_INSTRUCTION = `完成全部生产编辑和源码自查后，首次内部验证就使用 description=${FINAL_CHECK_DESCRIPTION}，在当前隔离工程根目录单独执行 devecocli check arkts <全部改动源码路径> 或 devecocli build 二选一。首次成功即交回，不按“先 check 再 build”串行验证；只有本轮代码错误经修复后才复验。`;
 
 function validationCommand(input: Json, cwd: string, edits: Set<string>): "build" | "check" | null {
   if (typeof input.command !== "string" ||
@@ -74,11 +75,14 @@ export function validationHandoff(cwd: string) {
       const command = validationCommand(state.input, cwd, edits);
       if (!command) return null;
       const events = state.metadata?.devecoCliEvents;
-      if (edited && state.input.description === FINAL_CHECK_DESCRIPTION && state.metadata?.exit === 0 &&
-          Array.isArray(events) && events.length === 1 && events[0]?.command === command &&
-          events[0].exitCode === 0 && (command === "build" || events[0].subcommand === "arkts")) candidate = command;
-      // An unsuccessful check can be retried after a new edit.
-      edited = false;
+      const succeeded = state.metadata?.exit === 0 && Array.isArray(events) && events.length === 1 &&
+        events[0]?.command === command && events[0].exitCode === 0 &&
+        (command === "build" || events[0].subcommand === "arkts");
+      if (edited && state.input.description === FINAL_CHECK_DESCRIPTION && succeeded) candidate = command;
+      // A successful unmarked check does not erase the production edits. A
+      // later explicit final check must still be eligible for handoff.
+      // Failed/unverified checks require another edit before a retry can hand off.
+      if (!succeeded) edited = false;
     }
     if (event.type === "step_finish") {
       step = undefined;

@@ -2,9 +2,9 @@ import path from "node:path";
 import type { Json } from "./models.js";
 import { readText, writeJson } from "./utils.js";
 import { runCommand } from "./process.js";
-import { validationHandoff, FINAL_CHECK_DESCRIPTION } from "./validation_handoff.js";
+import { validationHandoff, FINAL_CHECK_DESCRIPTION, FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
 
-export const POLICY_VERSION = "2026-11-03-readonly-check-handoff";
+export const POLICY_VERSION = "2026-11-04-first-check-handoff";
 export const DEFAULT_AGENT_MODEL = "zhipu-coding/glm-5";
 export const DISABLED_AGENT_TOOLS = ["webfetch", "websearch", "skill"];
 export const INTERNAL_VALIDATION_TOOLS = ["build_project", "arkts_check"];
@@ -80,7 +80,8 @@ export async function runAgent(
   const command = [deveco, "run", "-m", model];
   if (options.variant) command.push("--variant", options.variant);
   if (options.formatOnly) command.push("--agent", "arkts-review-format");
-  command.push(options.role.startsWith("review") ? "严格执行输入中的只读评审任务，只输出要求的 JSON。" : "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。");
+  command.push(options.role.startsWith("review") ? "严格执行输入中的只读评审任务，只输出要求的 JSON。" :
+    "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。" + FINAL_CHECK_INSTRUCTION);
   if (!options.promptViaStdin) command.push("-f", path.resolve(promptFile));
   command.push("--dir", cwd, "--format", "json", "--auto");
   if (options.title) command.push("--title", options.title);

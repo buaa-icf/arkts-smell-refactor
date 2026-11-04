@@ -25,6 +25,27 @@ function check(command = 'devecocli check arkts "' + page + '"', exit = 0, descr
     metadata: { exit, devecoCliEvents: [{ ...cli, exitCode: exit }] } } };
 }
 const tool = (data: object) => event("tool_use", "check", data);
+
+test("未标记的成功检查保留编辑状态，后续显式收尾仍需真实成功证据", () => {
+  for (const final of [check(), check("devecocli build")]) {
+    const observe = validationHandoff(cwd);
+    assert([...edit, start, tool(check(undefined, 0, "Run ArkTS check")), finish].map(observe).every(x => x === null));
+    assert.deepEqual([start, tool(final), finish].map(observe).filter(Boolean),
+      [final.state.input.command === "devecocli build" ? "build" : "check"]);
+  }
+  const observe = validationHandoff(cwd);
+  [...edit, start, tool(check(undefined, 0, "Run ArkTS check")), finish].forEach(observe);
+  assert([start, tool(check("devecocli build", 1)), finish,
+    start, tool(check("devecocli build")), finish].map(observe).every(x => x === null));
+});
+
+test("补充编辑后文件检查必须覆盖所有改动，旧成功检查不能替代新验证", () => {
+  const observe = validationHandoff(cwd);
+  [...edit, start, tool(check(undefined, 0, "Run ArkTS check")), finish].forEach(observe);
+  [edit[0], event("tool_use", "edit", {tool:"edit",state:{status:"completed",input:{filePath:"feature/src/main/ets/Other.ets"}}}), edit[2]].forEach(observe);
+  assert([start, tool(check()), finish].map(observe).every(x => x === null));
+  assert.equal([start, tool(check("devecocli build")), finish].map(observe).at(-1), "build");
+});
 test("一次成功验证可伴随已完成的只读查询，写入、未知工具和重复验证仍拒绝收尾", () => {
   const inspect = (name: string, status = "completed") => tool({tool: name, state: {status}});
   for (const name of ["glob", "grep", "read"]) {
@@ -72,6 +93,7 @@ test("Agent 入口消费 stdout 的完整 JSON 行，成功交回且保留其他
     ["refactor", "stdout", 0], ["repair", "stdout", 0], ["refactor", "stderr", 17], ["review", "stdout", 17],
   ] as const) {
     writeText(path.join(root, "run"), [
+      "if (process.argv.some(a => a.includes('首次内部验证就使用 description=ARKTS_FINAL_CHECK')) !== " + (role !== "review") + ") process.exit(91);",
       "process." + stream + ".write(" + JSON.stringify(firstHalf) + ");",
       "setTimeout(() => process." + stream + ".write(" + JSON.stringify(secondHalf) + "), 10);",
       "setTimeout(() => process.exit(17), " + (expected === 0 ? 2000 : 50) + ");",
