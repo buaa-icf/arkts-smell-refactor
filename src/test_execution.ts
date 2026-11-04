@@ -9,9 +9,14 @@ import {
   stamp,
   within,
   writeJson,
-  writeText,
 } from "./utils.js";
 import { runCommand } from "./process.js";
+import {
+  monitorTestJob,
+  saveTestResults,
+  testPhaseTimeouts,
+  writeTestState,
+} from "./test_progress.js";
 export const TEST_TOOL_BLOCKERS =
   "\\[Fail\\]\\s*ExecuteCommand\\s+need\\s+connect-key\\b|Connect server failed|\\[Empty\\]|no (?:available |connected )?devices?\\b|device not found|device[^\\r\\n]*(?:offline|not connected)|\\bFailed[^\\r\\n]*@SignHap\\b|Invalid storeFile value|(?:hap/hsp|hap|hsp) package is signed";
 export function testToolBlocker(output: string): Json | null {
@@ -138,7 +143,7 @@ export async function runTestPlan(
   redactOutput: (text: string) => string = (text) => text,
 ): Promise<number> {
   if (!plan.jobs?.length) {
-    writeJson(path.join(taskDir, "test-results.json"), {
+    writeTestState(path.join(taskDir, "test-results.json"), {
       status: "BLOCKED",
       reason: "empty test plan",
       jobs: [],
@@ -148,13 +153,16 @@ export async function runTestPlan(
   }
   const attempt = path.join(taskDir, "test-attempts", stamp());
   writeJson(path.join(attempt, "plan.json"), plan);
+  const timeouts = testPhaseTimeouts(env);
   const results: Json = {
     schemaVersion: "1.0",
     plan: path.join(attempt, "plan.json"),
     status: "RUNNING",
     jobs: [],
+    pendingJobs: plan.jobs,
   };
-  writeJson(path.join(taskDir, "test-results.json"), results);
+  const save = () => saveTestResults(taskDir, results);
+  save();
   for (const module of plan.additionalModulesWithoutBusinessTests ?? [])
     console.log(
       `TEST_COVERAGE_NOTE module=${module} only SDK template tests found; no independent business suite; target tests remain required`,
@@ -191,13 +199,45 @@ export async function runTestPlan(
     console.log(
       `TEST_SELECTION kind=${job.kind} module=${selector} scope=${job.scope ?? "*"} reason=${job.reason}`,
     );
-    const started = now(),
-      run = await runCommand(command, { cwd: workspace, env });
+    const started = now();
+    const current: Json = {
+      ...job,
+      selectionReason: job.reason,
+      status: "RUNNING",
+      startedAt: new Date().toISOString(),
+      command,
+      log: path.join(evidenceDir, "hvigor.log"),
+      progressFile: path.join(evidenceDir, "progress.json"),
+    };
+    results.jobs.push(current);
+    results.pendingJobs = plan.jobs.slice(i + 1);
+    const monitor = monitorTestJob(
+      current, evidenceDir, artifacts, timeouts, redactOutput, save,
+    );
+    let run;
+    try {
+      run = await runCommand(command, {
+        cwd: workspace,
+        env,
+        signal: monitor.signal,
+        onStdoutLine: monitor.onLine,
+        onStderrLine: monitor.onLine,
+      });
+    } finally {
+      monitor.stop();
+    }
     let evidence = resultEvidence(
       path.join(artifacts, "test_result.txt"),
       job.expectedSuites,
     );
-    if (run.error)
+    if (monitor.signal.aborted)
+      evidence = {
+        ...evidence,
+        status: "BLOCKED",
+        classification: current.classification,
+        reason: current.reason,
+      };
+    else if (run.error)
       evidence = {
         status: "BLOCKED",
         reason: "cannot launch Hvigor: " + run.error,
@@ -235,37 +275,23 @@ export async function runTestPlan(
         typeof value === "string" ? redactOutput(value) : value,
       ),
     );
-    const log = path.join(evidenceDir, "hvigor.log");
-    writeText(log, redactOutput(run.output));
-    process.stdout.write(redactOutput(run.output));
-    const copied: Json = {};
-    for (const name of ["test_result.txt", "coverage.log"])
-      if (isFile(path.join(artifacts, name))) {
-        const saved = path.join(evidenceDir, name);
-        writeText(saved, redactOutput(readText(path.join(artifacts, name))));
-        copied[name] = saved;
-        if (evidence.status !== "PASS")
-          console.log(redactOutput(readText(saved).slice(-12000)));
-      }
-    results.jobs.push({
-      ...job,
+    if (evidence.status !== "PASS")
+      for (const saved of Object.values(current.artifacts) as string[])
+        console.log(readText(saved).slice(-12000));
+    Object.assign(current, {
       ...evidence,
-      selectionReason: job.reason,
-      command,
       exitCode: run.code,
       durationSeconds: round(now() - started),
-      log,
-      artifacts: copied,
+      endedAt: new Date().toISOString(),
     });
+    writeTestState(current.progressFile, current);
     results.status =
       evidence.status !== "PASS"
         ? evidence.status
         : i === plan.jobs.length - 1
           ? "PASS"
           : "RUNNING";
-    results.pendingJobs = plan.jobs.slice(i + 1);
-    writeJson(path.join(attempt, "results.json"), results);
-    writeJson(path.join(taskDir, "test-results.json"), results);
+    save();
     console.log(
       `TEST_RESULT kind=${job.kind} module=${selector} status=${evidence.status} ${evidence.reason}`,
     );

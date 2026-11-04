@@ -27,6 +27,7 @@ import {
 } from "./workspace.js";
 import { buildTestPlan, freezeTestPlan } from "./test_plan.js";
 import { resultEvidence, runTestPlan } from "./test_execution.js";
+import { writeTestState } from "./test_progress.js";
 import {
   comparePublicContract,
   snapshotPublicContract,
@@ -138,7 +139,7 @@ export async function hvigorGate(
 ): Promise<number> {
   let plan: Json | null = null;
   if (["auto-test", "test", "onDeviceTest"].includes(taskName)) {
-    writeJson(path.join(taskDir, "test-results.json"), {
+    writeTestState(path.join(taskDir, "test-results.json"), {
       status: "RUNNING",
       jobs: [],
     });
@@ -149,7 +150,7 @@ export async function hvigorGate(
       console.error(
         "TEST_GATE_BLOCKED: cannot determine test plan: " + String(e),
       );
-      writeJson(path.join(taskDir, "test-results.json"), {
+      writeTestState(path.join(taskDir, "test-results.json"), {
         status: "BLOCKED",
         reason: String(e),
         jobs: [],
@@ -191,7 +192,7 @@ export async function hvigorGate(
   if (!signing.ready) {
     console.error("SIGNING_GATE_BLOCKED: " + signing.report.reason);
     if (plan)
-      writeJson(path.join(taskDir, "test-results.json"), {
+      writeTestState(path.join(taskDir, "test-results.json"), {
         status: "BLOCKED",
         classification: "SIGNING_UNAVAILABLE",
         reason: signing.report.reason,

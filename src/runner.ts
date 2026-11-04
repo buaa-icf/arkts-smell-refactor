@@ -26,6 +26,7 @@ import {
   walk,
 } from "./utils.js";
 import { displayCommand, runCommand } from "./process.js";
+import { interruptTestResults } from "./test_progress.js";
 import { buildRepairPrompt } from "./prompts.js";
 import { finalReviewText, parseReview, formatRetryPrompt, preservesReview } from "./review_output.js";
 import {
@@ -159,41 +160,58 @@ export async function runSpec(
       timeout,
       taskDeadline === undefined ? Infinity : taskDeadline - started,
     );
+  const log = path.join(taskDir, name + ".log"),
+    isTest = /^test(?:-repair-\d+)?$/.test(name);
+  if (isTest) {
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(log, "", "utf8");
+  }
   const run = await runCommand(command, {
     cwd,
     signal,
     timeoutSeconds: seconds,
+    onOutput: isTest ? (text) => fs.appendFileSync(log, text, "utf8") : undefined,
   });
-  const log = path.join(taskDir, name + ".log");
-  writeText(
-    log,
-    run.output +
-      (run.timedOut
-        ? "\nTIMEOUT"
-        : run.cancelled
-          ? "\nCANCELLED_BY_FAIL_FAST"
-          : ""),
-  );
+  const ending = run.timedOut
+    ? "\nTIMEOUT"
+    : run.cancelled
+      ? "\nCANCELLED_BY_FAIL_FAST"
+      : "";
+  if (isTest) fs.appendFileSync(log, ending, "utf8");
+  else writeText(log, run.output + ending);
+  const interruptTest = (reason: string, classification: string) => {
+    if (isTest) interruptTestResults(taskDir, reason, classification);
+  };
   const fields = {
     command: display,
     duration_seconds: round(now() - started),
     output_file: log,
   };
-  if (run.cancelled && !run.timedOut)
+  if (run.cancelled && !run.timedOut) {
+    interruptTest("同组门禁未通过，已由 fail-fast 终止", "TEST_GATE_CANCELLED");
     return result(name, "SKIPPED", {
       ...fields,
       reason: "同组门禁未通过，已由 fail-fast 终止",
     });
-  if (run.timedOut)
-    return result(name, "BLOCKED", {
-      ...fields,
-      reason:
-        taskDeadline !== undefined && now() >= taskDeadline
-          ? "单条异味总执行时间超过限制"
-          : `步骤执行时间超过 ${timeout} 秒`,
-    });
-  if (run.error)
+  }
+  if (run.timedOut) {
+    const reason =
+      taskDeadline !== undefined && now() >= taskDeadline
+        ? "单条异味总执行时间超过限制"
+        : `步骤执行时间超过 ${timeout} 秒`;
+    interruptTest(reason, "TEST_GATE_TIMEOUT");
+    return result(name, "BLOCKED", { ...fields, reason });
+  }
+  if (run.error) {
+    interruptTest(run.error, "TEST_GATE_INTERRUPTED");
     return result(name, "BLOCKED", { ...fields, reason: run.error });
+  }
+  const manifest = path.join(taskDir, "test-results.json");
+  if (isTest && isFile(manifest) && readJson(manifest).status === "RUNNING") {
+    const reason = `测试进程已退出（code=${run.code}），未保存最终测试状态`;
+    interruptTest(reason, "TEST_GATE_INTERRUPTED");
+    return result(name, "BLOCKED", { ...fields, exit_code: run.code, reason });
+  }
   let passed = run.code === 0;
   if (spec.successOutputRegex)
     passed ||= new RegExp(spec.successOutputRegex, "i").test(run.output);

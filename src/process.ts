@@ -11,6 +11,7 @@ export interface ProcessOptions {
   stream?: boolean;
   onOutput?: (text: string) => void;
   onStdoutLine?: (line: string) => void;
+  onStderrLine?: (line: string) => void;
   input?: string;
 }
 export interface ProcessOutput {
@@ -121,6 +122,8 @@ export async function runCommand(
     child.stderr?.on("data", collectText);
     if (options.onStdoutLine && child.stdout)
       createInterface({ input: child.stdout, crlfDelay: Infinity }).on("line", options.onStdoutLine);
+    if (options.onStderrLine && child.stderr)
+      createInterface({ input: child.stderr, crlfDelay: Infinity }).on("line", options.onStderrLine);
     let hardStop: NodeJS.Timeout | undefined;
     const kill = () => {
       terminateTree(child);

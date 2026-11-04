@@ -112,6 +112,19 @@ Code Clone 同文件多个实例按各自所属方法合并选测。若已找到
 
 每条异味默认总执行上限 **1200 秒**，包含 Agent、门禁、修复和 Review；达到上限终止当前进程树并记录超时。重构和返修 Agent 完成编辑与源码自查后，可在隔离工作区调用 `build_project` 或 `arkts_check`（新版对应 `devecocli build` / `devecocli check arkts`）做必要内部验证；提示词要求每轮合计最多两次，首次通过即停止，只有明确属于本轮修改的错误才修复并追加一次。环境或签名失败立即交回。完整的平台门禁仍执行，Linter 按 required/skip 配置；skip 时不为纯风格问题补跑或返修。网页与 `skill` 入口继续禁用；只读评审及 JSON 格式修复仍禁用内部构建/检查工具。
 
+测试期间，Hvigor 的 stdout/stderr 按行脱敏后实时写入 `test-attempts/<轮次>/<作业>/hvigor.log`，并转发到 `test.log`（返修轮为 `test-repair-N.log`）。同目录 `progress.json` 保存阶段历史、时间、最后输出时间和报告快照路径；已生成的 `test_result.txt`、`coverage.log` 每 0.5 秒采样保存，子进程正常退出前也会最后采样一次。
+
+每个测试作业另设以下阶段时限，按已确认的完成标记推进，重复输出不会重置计时；整条任务剩余时限更短时，仍以整条任务时限为准。可用对应环境变量设置正数秒值。
+
+| 阶段 | 开始依据 | 默认时限 | 环境变量 |
+|---|---|---:|---|
+| `preparing-test` | 启动该测试作业的 Hvigor | 300 秒 | `ARKTS_TEST_PREPARE_TIMEOUT_SECONDS` |
+| `awaiting-install` | 当前测试模块 `ohosTest@SignHap` 完成 | 90 秒 | `ARKTS_TEST_INSTALL_TIMEOUT_SECONDS` |
+| `awaiting-test-result` | 安装完成，或已读到测试运行记录 | 300 秒 | `ARKTS_TEST_EXECUTION_TIMEOUT_SECONDS` |
+| `collecting-results` | 设备执行结束标记，或 Local Test 汇总出现 | 60 秒 | `ARKTS_TEST_COLLECT_TIMEOUT_SECONDS` |
+
+阶段名表示最后确认的进度，不能仅凭 `awaiting-install` 判断具体卡在安装还是安装前的设备命令。没有对应标记的阶段沿用之前的计时。阶段超时终止 Hvigor 进程树，记为 `BLOCKED / TEST_PHASE_TIMEOUT`，不进入代码返修。外层总超时强制结束门禁时，由仍在运行的外层 Runner 将未完成的测试索引收尾为 `BLOCKED / TEST_GATE_TIMEOUT`，保留已通过作业及最新快照，避免遗留 `RUNNING`；终止整个 Runner 进程不在此保证内。本地实验脚本仍按预运行快照回滚源码。
+
 ## 5. 各层如何判断
 
 - **异味**：当前 Node.js 调用内置包的 `scan.cjs`，只扫描当前目标和本任务修改/新增的生产文件；使用独立本轮报告。判断原符号（含 `%AM序号$外层方法` 匿名名称）及本次变更方法的异味，不能直接复用数据集旧行号去判断别的方法。扫描工具错误是 BLOCKED，实际异味残留是 FAIL。
