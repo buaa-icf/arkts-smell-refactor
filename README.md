@@ -220,6 +220,8 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 
 ## 9. 开发与迁移范围
 
+迁移后的 Agent、测试归因、评审及日志优化，以及截至 2026-11-05 的验证边界，见 [TypeScript 后端合入后的优化记录](docs/typescript-agent-optimization-retrospective-20261105.md)。
+
 ```text
 src/
 ├─ cli.ts / automatic.ts           命令行、配置、粘贴输入和批量调度
