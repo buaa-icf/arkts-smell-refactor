@@ -229,3 +229,11 @@ Local 1 总耗时 427.913 秒，超过目标 7.913 秒。Agent 用时 205.431 �
 当前现有数据集共 55 条：Code Clone 类内 15、跨类 14、同文件顶层 Builder 1；Long Method 类内 25。顶层 Builder 单列，以 420 秒作参考；目前没有独立的 Long Method 跨类样本，不能宣称这一分组已达标。
 
 具体样本、分批终端命令、统计规则见 [重聚焦后的扩测安排](agent-expanded-validation-20261105.md)。本次只更新实验安排，TypeScript 构建通过；没有执行 `tools/` 脚本、模型重构或设备测试，没有新增运行时优化。
+
+## 9. 扩测 A 批已完成
+
+用户随后完成 A 批 10 条：第 27 条完整重跑在 305.252 秒内 PASS、零返修；5 条跨类 Code Clone 全部在 900 秒内 PASS；Long Method 排除 I15 后为 3/3 在 420 秒内 PASS。唯一返修为 CC-L3，最终 582.523 秒通过。策略版本及模型设置保持不变。
+
+LM-I15 在 Agent 阶段收到 `UnknownError: unknown certificate verification error`，总耗时 20.295 秒，后续门禁均未执行；不是设备用例已执行后的失败。按用户最新要求暂排除这一条，原 BLOCKED 记录保留，后续再重测。当前只完成首批 A，尚不代表完整跨类 Clone 或 Long Method 集合达标。
+
+9 条成功任务最终 17 个测试作业、134 次用例执行全部通过；10 份快照的备份与当前源工程各 1868 项 SHA-256 核对均一致。详细逐条数据、原始日志索引、覆盖率报告限制及下一批范围见 [A 批结果](agent-expanded-batch-a-results-20261105.md)。保持现有策略继续 B/C/D 共 31 条，本轮没有新增运行时优化。
