@@ -39,6 +39,7 @@ import {
 import { smellGate } from "./smell.js";
 import { runAgent } from "./agent_runtime.js";
 import { prepareReviewPrompt } from "./review_packet.js";
+import { prepareRepairContext } from "./repair_context.js";
 import {
   prepareSigning,
   saveSigningReport,
@@ -88,23 +89,26 @@ export async function refactorGate(
   }
   freezeTestPlan(taskDir, source);
   freshCopy(source, workspace, true);
-  const prompt = normalizeAgentPromptPaths(
+  const basePrompt = normalizeAgentPromptPaths(
     readText(promptFile ?? path.join(taskDir, "refactor-prompt.md")),
     raw,
     source,
   );
-  writeText(path.join(taskDir, "refactor-agent-prompt.md"), prompt);
+  const evidence = promptFile ? prepareRepairContext(taskDir, workspace, path.basename(promptFile, path.extname(promptFile))) : null;
   // DevEco attachments must live within --dir; the audit copy remains in taskDir.
   const attachment = path.join(
     workspace,
     ".arkts-refactor-prompt-" + stamp() + ".md",
   );
-  writeText(attachment, prompt);
   try {
+    const prompt = basePrompt + (evidence?.prompt ?? "");
+    writeText(path.join(taskDir, promptFile ? path.basename(promptFile, path.extname(promptFile)) + "-agent-prompt.md" : "refactor-agent-prompt.md"), prompt);
+    writeText(attachment, prompt);
     const code = await runAgent(deveco, taskDir, workspace, attachment, { role: promptFile ? "repair" : "refactor", model, variant, title: task.task_id });
     if (code !== 0) return code;
   } finally {
     fs.rmSync(attachment, { force: true });
+    evidence?.dispose();
   }
   return syncProductionChanges(workspace, source);
 }
