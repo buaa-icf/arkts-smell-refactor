@@ -1,5 +1,7 @@
 # 异味重构实验批跑脚本
 
+**2026-11-05 当前安排：先完整重跑 Code Clone Instrument 第 27 条，并分批扩测跨类 Code Clone 与 Long Method；命令见 [最新扩测安排](agent-expanded-validation-20261105.md)。当前目标是各适用分组限时 PASS 成功率严格 >70%，10 条需至少 8 条，7/10 不满足。下文带日期的试验保留为历史用法。**
+
 本文记录本机 `tools/*.ps1` 辅助脚本的用法。这些脚本由 Git 忽略，不随仓库分发；新克隆仓库可使用正式 CLI 入口。运行 PowerShell 示例前执行 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`。
 
 脚本调用本仓库 TypeScript 后端的编译产物 `dist/cli.js`，因此首次使用前须在仓库根目录执行 `npm install` 和 `npm run build`；缺少 `dist/cli.js` 时脚本直接报错，不会回退到旧 Python 入口。
@@ -52,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { throw 'TypeScript build failed.' }
 .\tools\run_code_clone_instrument.ps1 -StartOrdinal 1 -EndOrdinal 10 -LinterMode skip -LogDirectory 'C:\Users\RoyCai\Desktop\group_project\TestResult1028'
 ```
 
-本轮仍按 `RESULT totalSeconds <= 420` 且最终 PASS 统计限时成功；后端 1200 秒执行上限不替代 7 分钟指标。十条中至少七条限时成功才达到本批 70% 目标。
+上述历史十条复测曾统一使用 `RESULT totalSeconds <= 420` 作压力测试；正式目标按实际类内 ≤420 秒、跨类 ≤900 秒分别统计，且最终 PASS。后端 1200 秒执行上限不替代目标。当前严格 >70% 的要求见最新扩测安排，不能将不同分组混成十条成功率替代。
 
 脚本自动设置原生进程输入/输出所需的 UTF-8 编码，运行结束后恢复原目录与控制台编码。`-LogDirectory` 同时显示终端输出并保存日志，每次脚本调用生成一个 `outputyyyyMMdd-HHmmss-fff.log`。PowerShell 5.1 的 Tee-Object 默认保存 UTF-16 LE，PowerShell 7 默认保存 UTF-8；日志读取程序应按 BOM/实际编码读取。
 
