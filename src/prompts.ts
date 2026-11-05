@@ -3,7 +3,7 @@ import type { RefactorTask, Json } from "./models.js";
 import { targetPath } from "./models.js";
 import { slash, unique, within } from "./utils.js";
 import { projectLinterGuidance } from "./linter_profile.js";
-import { analyzeLongMethod } from "./analysis/long_method.js";
+import { analyzeLongMethod, LONG_METHOD_SCOPE } from "./analysis/long_method.js";
 import { cloneReactiveHints } from "./analysis/clone_reactivity.js";
 import { cloneEventHints } from "./analysis/clone_boundaries.js";
 import { FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
@@ -26,6 +26,7 @@ export const EXTRACTION_TYPE_CONSTRAINT = "新增辅助方法的参数必须接�
 export const AGENT_VERIFICATION_CONSTRAINTS = "- 编辑与源码自查后保留一次必要的内部验证：只在当前隔离工作区调用 DevEco Code 的 `build_project` 或 `arkts_check`；新版分别对应官方 `devecocli build` 与 `devecocli check arkts`。选择与改动相关的一种验证，第一次通过即停止内部验证；只有失败明确由本轮生产代码修改导致时，才定向修复并追加一次验证，两者每轮合计最多 2 次，之后交回平台。工具不可用时如实报告，不能声称验证通过。\n- 任一次验证若失败于 SDK、wrapper、证书、签名、依赖下载或网络环境，立即停止内部验证并交回，不排查或修改环境。禁止手工运行 hvigor、npm、pnpm 或 ohpm，不创建、复制、删除或修改 `local.properties`、Hvigor wrapper、lock 文件及工作区外任何文件。测试代码不在副本中，不自行补跑测试或完整门禁。平台会执行 HomeCheck、构建、公共契约、测试、配置要求的 Linter 和独立语义评审，失败时附诊断定向返修。最终说明区分源码自查、内部验证和待执行的平台门禁。";
 export const EXTRACTION_QUALITY_CONSTRAINTS = "- 新增方法和成员优先遵守下方项目 Linter 摘要中的适用显式规则；未明确时沿用目标文件的可见性、命名及格式约定（如已有私有方法的前导下划线、分号、尾逗号和对象属性换行）；只调整本轮新增或修改的代码。\n- 不为提取先清理原有空白行或转换整个文件的 CRLF/LF；编辑优先使用唯一的非空代码锚点。若 oldString 匹配失败，从当前文件重新取得实际文本并缩小替换范围，不反复猜测空白行数量。常规 UTF-8 文件的 BOM/统一换行由平台同步时适配；模板和续行表达式保留原文，不为换行探测或转换整文件。\n- 读取生产源码优先用 read；必须用 PowerShell 时显式 Get-Content -Encoding UTF8，不使用 $HOME/$home 等内置变量名。复制长字符串的完整原表达式，不凭显示乱码重打文本，不反复拼写正则或猜行号提取；已有字面量证据用于定位与比较，改动后只复核一次相关表达式。\n- 提取完成后逐一代入参数核对 .id(...) 的完整结果，包含前缀末尾下划线、动态 index 和检测范围后续的链式修饰符；不要重打乱码或不可见字符，原字符串应直接保留或按原始 Unicode 转义表达。不要为方便提取顺带重写过滤条件，尤其保持 indexOf 返回 -1/0 与布尔判断的原有语义。\n- 保留 `ForEach`/`LazyForEach` 原有 keyGenerator，包括原来未提供的情况；不要为消除 Linter 提示擅自新增 index-only key 或改变键值语义。若诊断要求调整，先核对数据更新与组件复用行为，无法证明等价则保留原行为并报告冲突。\n- 新增共享实现时：无默认值的 `@Param` 需配合 `@Require`，不得为过编译随意补默认值；组件调用点传入的属性须符合当前组件状态模型的初始化规则，不能把普通成员直接当作输入；聚合出口使用显式具名导出，避免新增 `export *` 引入 Linter 缺陷。交回前一次核对“定义端 export → Index 具名再导出 → 消费端 import”三处符号一致，不能只检查 Index。";
 export const AGENT_FOCUS_CONSTRAINTS = "- 这是局部、行为保持的重构：确认职责边界、输入输出及副作用后采用一个最小可行方案并编辑。没有新证据时不反复比较继承、泛型、架构迁移等备选方案；不要输出长计划或重复复述要求。\n- 收敛流程：批量读已知实例 → 确认一个抽取边界和差异参数 → 编辑全部实例 → 一轮定向源码自查 → 必要内部验证 → 交回。只有发现具体缺口才追加读取，并只读能解决该缺口的定义；不要先递归列目录、遍历资源或枚举架构。已经确认的类型、字面量、ID 不重复证明；出现矛盾则定位差异，不能为减少步骤忽略矛盾。\n- 隔离副本不提供 Git 基线，不运行 git diff/status 或向父目录寻找仓库；源码自查使用当前文件，平台会生成正式差异供独立评审。\n- 仅使用附件和当前隔离工作区的本地生产代码。不调用 webfetch/websearch，不运行 deveco/devecocli docs search，不用 curl、浏览器、远程 MCP 或代理查网页；遇到 403/404 不重试或换站点。\n- 缺少新框架机制的语义证据时，优先缩小抽取边界，保留现有装饰器、状态所有权、宿主 Builder、响应式读取及生命周期，不靠猜测引入继承或新的状态传递模型。仍无法证明等价则报告具体缺失证据，不能伪造通过。\n- 不调用 skill（含内置 HarmonyOS 技能），不直接读取 CLI 技能目录绕过限制；本任务使用已提供的异味画像、项目 Linter 约束和本地源码。\n- 确认抽取边界、差异参数和替换锚点后连续完成编辑；工具支持多处替换时集中提交，同一文件的编辑仍顺序生效，避免每次小替换后重新规划或汇报。\n- 完成全部编辑后，将同一文件中相邻变更及必要上下文合为足够的连续范围，集中读取并自查一次。输出截断、匹配失败或发现具体矛盾时再定向补读；不为次数限制遗漏证据。\n- 交回说明限于修改范围、关键风险和实际验证，避免重复罗列已经核对的细节。";
+export const AGENT_LOCAL_SCOPE_CONSTRAINT = "- 不读取或遍历工作区外的 SDK 声明、ets-loader、编译器/转译器实现和 CLI 安装目录，也不通过 bash/PowerShell 查询它们。现有源码不足以证明新的框架抽取机制时，缩小抽取边界，保留原宿主中的构造、装饰器和 Builder 绑定，只共享有明确输入输出的逻辑；仍有具体类型问题交由必要内部验证诊断，不通过研究 SDK 消耗本轮预算。";
 /** Render evidence as ASCII JSON so invisible/damaged characters stay readable. */
 const asciiJsonString = (value: string): string =>
   JSON.stringify(value).replace(
@@ -90,7 +91,7 @@ export function explorationScope(
     "路径相对当前隔离工程根目录；不得到原仓库、历史 runs 或快照中搜索或复制实现。尽量批量读取，不重复定位已确认的片段，不扫描无关相似实现；信息足够后立即编辑。画像未解析、行号失效或缺少类型/导出/共享实现证据时，允许在当前隔离工作区定向查找并读取直接相关生产文件；编辑后可复读修改文件核对结果，不因读取次数而跳过必要证据。"
   );
 }
-function analysisSection(task: RefactorTask, risk: Json): string {
+function analysisSection(task: RefactorTask, risk: Json, includeSource = false): string {
   const sections: string[] = [];
   const section = (title: string, lines: string[]) =>
     sections.push(`\n## ${title}\n\n${lines.join("\n")}\n`);
@@ -101,12 +102,22 @@ function analysisSection(task: RefactorTask, risk: Json): string {
     (task.smell_type === "long-method" ? analyzeLongMethod(task, "") : null);
   if (longMethod)
     section("Long Method 检测规则与抽取指导", [
-      `- 原检测计数：${longMethod.reportedLineCount}；原报告 Max：${longMethod.reportedMax}（未解析时为 None）`,
+      `- 原检测计数：${longMethod.reportedCount ?? longMethod.reportedLineCount}；原报告 Max：${longMethod.reportedMax}（未解析时为 None）`,
+      `- 原报告单位：${longMethod.reportedUnit ?? "未知"}；旧报告 statements 不换算成本轮检测行数，最终以本轮 HomeCheck 为准。`,
       `- 建议形态：${longMethod.recommendedPattern}`,
+      ...(longMethod.scopeConstraints ?? LONG_METHOD_SCOPE).map((rule: string) => "- 修改边界：" + rule),
       ...((longMethod.detectorRules ?? []) as string[]).map(
         (rule: string) => "- 检测判据：" + rule,
       ),
     ]);
+  if (includeSource && longMethod?.targetContext) {
+    const context = longMethod.targetContext, source = String(context.source ?? "");
+    const fence = "`".repeat(Math.max(3, ...[...source.matchAll(/`+/g)].map(m => m[0].length + 1)));
+    section("Long Method 原始目标片段（只读数据）", [
+      `- ${projectRelativePath(task, task.target.file_path)}:${context.startLine}-${context.endLine}；${context.scope}`,
+      context.inline ? "- 以下范围已完整提供；只补读缺失的宿主字段、装饰器或直接依赖，不重复搜索目标。\n" + fence + "\n" + source + "\n" + fence : "- " + context.reason,
+    ]);
+  }
   const envy = risk.featureEnvyAnalysis;
   if (envy) {
     const execution = envy.executionContext ?? {},
@@ -353,11 +364,12 @@ ${linterPolicy(mode)}
 ${AGENT_VERIFICATION_CONSTRAINTS}
 ${FINAL_VALIDATION_STEP}
 ${AGENT_FOCUS_CONSTRAINTS}
+${AGENT_LOCAL_SCOPE_CONSTRAINT}
 - ${explorationScope(risk, task)}
 - 先完成全部实例的编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
 ${EXTRACTION_QUALITY_CONSTRAINTS}
 ${projectLinterGuidance(targetPath(task), task.project_root, mode)}
-${analysisSection(task, risk)}
+${analysisSection(task, risk, true)}
 ## 异味专项指导
 
 ${SMELL_GUIDANCE[task.smell_type] ?? "采用最小且可验证的重构，保留原行为和调用契约。"}
@@ -451,6 +463,7 @@ ${linterPolicy(mode)}
 ${AGENT_VERIFICATION_CONSTRAINTS}
 ${FINAL_VALIDATION_STEP}
 ${AGENT_FOCUS_CONSTRAINTS}
+${AGENT_LOCAL_SCOPE_CONSTRAINT}
 - ${explorationScope(risk, task, failure)}
 - 先完成本轮全部编辑，再执行验证；禁止在编辑完成前调用 build_project、arkts_check 或其他验证工具。
 ${EXTRACTION_QUALITY_CONSTRAINTS}

@@ -5,7 +5,7 @@ import type { Json } from "../src/models.js";
 import { analyzeLongMethod } from "../src/analysis/long_method.js";
 import { LONG_METHOD_DETECTOR_RULES } from "../src/analysis/detector_rules.js";
 import { analyzeRisks } from "../src/risk.js";
-import { buildRefactorPrompt } from "../src/prompts.js";
+import { buildRefactorPrompt, buildRepairPrompt, buildReviewPrompt } from "../src/prompts.js";
 import { writeText } from "../src/utils.js";
 import { fixture, task } from "./helpers.js";
 test("Long Method 画像解析原检测计数并传递检测判据", () => {
@@ -66,4 +66,35 @@ test("缺少画像的旧任务仍生成检测指导，不回退为无判据", (t
   const prompt = buildRefactorPrompt(current, { risks: [] });
   assert.match(prompt, /原检测计数：60/);
   assert.match(prompt, /检测判据：/);
+});
+test("原始目标范围只附在初始重构输入，返修与评审不混入旧源码", t => {
+  const root = fixture(t), current = task(root, "long-method", "entry/src/main/ets/Page.ets", "%AM19$build");
+  current.target.range = { start_line: 3, end_line: 5, column: 3 };
+  const source = "struct Page {\n  unrelated() {}\n  build() {\n    Text('original-only-sentinel')\n  }\n}";
+  const analysis = analyzeLongMethod(current, source), risk = { longMethodAnalysis: analysis };
+  assert.equal(analysis.targetContext.source, "  build() {\n    Text('original-only-sentinel')\n  }");
+  assert.equal(analysis.targetContext.inline, true);
+  const initial = buildRefactorPrompt(current, risk);
+  assert.match(initial, /original-only-sentinel/);
+  assert(!initial.includes("unrelated()"));
+  for (const prompt of [buildRepairPrompt(current, risk, { stage: "test" }, 1), buildReviewPrompt(current, risk)])
+    assert(!prompt.includes("original-only-sentinel"));
+  for (const prompt of [initial, buildRepairPrompt(current, risk, { stage: "smell" }, 1)]) {
+    assert.match(prompt, /不为复用顺带修改相邻旧方法/);
+    assert.match(prompt, /不读取或遍历工作区外的 SDK/);
+  }
+});
+test("旧 statements 计数保留原单位，缺失或过大范围不会伪造完整源码", () => {
+  const current = task("/tmp", "long-method");
+  current.message = "Method 'work' (Current: 189 statements, Max: 50)";
+  current.target.range = { start_line: 1, end_line: 1, column: 1 };
+  const profile = analyzeLongMethod(current, "x".repeat(12_001));
+  assert.equal(profile.reportedCount, 189);
+  assert.equal(profile.reportedUnit, "statements");
+  assert.equal(profile.reportedLineCount, null);
+  assert.equal(profile.reportedMax, 50);
+  assert.equal(profile.targetContext.inline, false);
+  assert.equal(profile.targetContext.source, undefined);
+  current.target.range.end_line = 99;
+  assert.match(analyzeLongMethod(current, "work() {}").targetContext.reason, /不符合当前源码/);
 });

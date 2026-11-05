@@ -23,3 +23,92 @@
 - 初始提示词不再被返修覆盖；各轮保存独立提示词和 `repair-context-*.json`，可核对本轮材料哈希。
 
 验证：TypeScript 测试编译通过；返修证据、Agent 启动集成、内部验证交回三组共 28/28。Windows junction 路径测试需在沙箱外运行，已通过；未执行 `tools/` 脚本、真实模型或设备实验。
+
+提交：`f49b2a9 fix: give repair agents fresh production baselines and diffs`。
+
+## 批次二：收窄初始探索和长方法修改范围
+
+- 初始 Long Method 输入附原始检测范围的完整片段（最多 12,000 字符），明确只是定位证据，不将匿名方法报告误当作可重命名方法。超大/无效范围要求定向读取，不截断冒充完整。
+- 返修/评审不重复附初始源码片段，避免把旧代码当成最新代码；返修使用批次一每轮刷新的证据包。
+- 默认只修改报告目标和必要的新 helper。邻近方法不是自动扩大的重构目标；若无关改动引出残留，先判断是否应撤销这部分改动。
+- 保留旧报告 `statements` 计数和单位，修复以前只能解析 `lines` 导致 Current/Max 丢失的问题；不把旧 statements 转换成当前 HomeCheck 行数。
+- 明确禁止读取外部 SDK、ets-loader、编译器/转译器与 CLI 安装目录。缺少新框架机制证据时缩小抽取边界，保持现有宿主、装饰器和 Builder 绑定。这是提示约束，尚非 shell 权限强制拦截，需从下一轮工具轨迹验证是否遵守。
+- 策略版本更新为 `2026-11-05-bounded-repair-context`。模型/档位、返修次数、门禁、1200 秒总上限均不变。
+
+验证：`npm test` **284/284**，包含 TypeScript 构建；未调用真实 Agent/设备。另从历史任务快照在仓库临时目录重建四份证据包（不重新运行重构）：CC-I14 四份 diff/四对源码内联，CC-I19 三份 diff/三对源码内联，LM-I16 与 LM-L07 各一份完整 diff 内联、完整大文件按路径补读。提示增量分别约 23,773 / 20,688 / 9,835 / 9,449 字符；输入变大是否换来更少往返，待实测。历史任务与原工程没有修改。
+
+## 固定复跑顺序与口径
+
+先跑 A 共 8 条：五条 BLOCKED（CC-I14/I18/I19、LM-I16/L07），加三个已限时通过的对照（CC-I13、LM-I01、LM-L06）。比较最终 verdict、端到端 `RESULT totalSeconds`、首次编辑时间、工具次数、返修次数、评审剩余时间和回滚记录。不能用 A 的小样本率宣称全组达标。
+
+A 审计后，如果不再改运行时，则按 B/C 补齐本版本全量：CC 共 30 条、LM 共 24 条，合计 54 条。LM-I15 按用户要求继续暂排除，保留证书失败历史并另择批次重测。A/B/C 统一使用本版首次完整尝试，不用重试中的最好成绩替换失败；若期间改版，为新版本重新固定验证范围。
+
+| 批次 | 固定范围 | 条数 |
+|---|---|---:|
+| A 问题与对照 | CC-I14,18,19,13；LM-I16,1；LM-L7,6 | 8 |
+| B Clone 补齐 | CC-I1～27 排除 13,14,18,19；CC-L1～3 | 26 |
+| C Long Method 补齐 | LM-I1～17 排除 1,15,16；LM-L1～8 排除 6,7 | 20 |
+
+限时成功仍要求最终 PASS，类内 ≤420 秒、跨类 ≤900 秒。Clone 类内/跨类分别报告，顶层 Builder I22 单列；Long Method 当前只有类内样本。现有固定组跨类 Clone 8/14，达到严格 >70% 需至少 10/14（净增 2）；Long Method 14/24，需至少 17/24（净增 3）。新增样本与旧批次分开记录，待新版本全组完成再计算其分组率。
+
+再次核对四份阳性 JSON：CC-I27/CC-L3/LM-I17/LM-L8，共 55 条，哈希仍与 [原验证安排](agent-expanded-validation-20261105.md) 一致。当前数据集中没有额外未测的两类阳性任务；负样本不能加入重构成功率分母。继续扩充应预先选定新的工程/宿主、确认可复现的目标异味和对应测试，再冻结新队列；优先补跨类 Clone 的独立工程及当前空缺的跨类 Long Method，而不是按预期能通过筛选。真实新增队列尚未建立，本轮先完成现有全量的新版本验证。
+
+## 用户终端命令
+
+以下仅为命令文本，助手未执行 `tools/` 脚本；脚本继续本地忽略，不入 Git。各批串行运行，共享工程和设备。每次新终端先执行准备段，日志统一放入指定目录。原有脚本对有效 FAIL/BLOCKED 记录结果并完成回滚后继续；异常无结果或回滚失败会停止，不能强制忽略。
+
+准备段：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+$ErrorActionPreference = 'Stop'
+$repo = 'C:\Users\RoyCai\Desktop\group_project\arkts-smell-refactor'
+$logDir = 'C:\Users\RoyCai\Desktop\group_project\TestResult1028'
+Set-Location -LiteralPath $repo
+$env:ARKTS_REFACTOR_MODEL = 'zhipu-coding/glm-5'
+$env:ARKTS_REVIEW_MODEL = 'zhipu-coding/glm-5'
+$env:ARKTS_REFACTOR_VARIANT = 'max'
+Remove-Item Env:ARKTS_REVIEW_VARIANT -ErrorAction SilentlyContinue
+npm.cmd run build
+if ($LASTEXITCODE -ne 0) { throw 'TypeScript build failed.' }
+```
+
+A（本轮先运行）：
+
+```powershell
+foreach ($i in @(14, 18, 19, 13)) {
+    & "$repo\tools\run_code_clone_instrument.ps1" -StartOrdinal $i -EndOrdinal $i -LinterMode skip -LogDirectory $logDir
+}
+foreach ($i in @(16, 1)) {
+    & "$repo\tools\run_long_method_instrument.ps1" -StartOrdinal $i -EndOrdinal $i -LinterMode skip -LogDirectory $logDir
+}
+foreach ($i in @(7, 6)) {
+    & "$repo\tools\run_long_method_local.ps1" -StartOrdinal $i -EndOrdinal $i -LinterMode skip -LogDirectory $logDir
+}
+```
+
+B（A 审计后，同一版本补齐 Clone）：
+
+```powershell
+foreach ($i in 1..27) {
+    if ($i -notin @(13, 14, 18, 19)) {
+        & "$repo\tools\run_code_clone_instrument.ps1" -StartOrdinal $i -EndOrdinal $i -LinterMode skip -LogDirectory $logDir
+    }
+}
+& "$repo\tools\run_code_clone_local.ps1" -StartOrdinal 1 -EndOrdinal 3 -LinterMode skip -LogDirectory $logDir
+```
+
+C（同一版本补齐 Long Method）：
+
+```powershell
+foreach ($i in 1..17) {
+    if ($i -notin @(1, 15, 16)) {
+        & "$repo\tools\run_long_method_instrument.ps1" -StartOrdinal $i -EndOrdinal $i -LinterMode skip -LogDirectory $logDir
+    }
+}
+foreach ($i in 1..8) {
+    if ($i -notin @(6, 7)) {
+        & "$repo\tools\run_long_method_local.ps1" -StartOrdinal $i -EndOrdinal $i -LinterMode skip -LogDirectory $logDir
+    }
+}
+```
