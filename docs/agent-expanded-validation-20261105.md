@@ -2,7 +2,7 @@
 
 按用户最新要求，暂停第 27 条比例算法及专项返修优化，先运行当前重构器。原代码与首次重构各两轮的测试均已通过，无需再做相同诊断。第 27 条改为完整重构重跑；同时扩测跨类 Code Clone 和 Long Method。问题背景见 [复盘第 7、8 节](typescript-agent-optimization-retrospective-20261105.md)。
 
-**执行进展：A 批 10 条已完成。CC-I27 在 305.252 秒内 PASS；跨类 Clone 5/5 限时 PASS；按用户要求暂排除 LM-I15 后，Long Method 3/3 限时 PASS。LM-I15 在 Agent 阶段出现证书校验错误，原记录为 BLOCKED，待后续重测；B/C/D 共 31 条继续按下列命令运行。详见 [A 批结果与证据](agent-expanded-batch-a-results-20261105.md)。**
+**执行进展：A/B/C/D 已完成，包括关机后的 29 条续跑。完整跨类 Clone 为 8/14（57.1%）限时 PASS；按用户要求暂排除 LM-I15 后，Long Method 为 14/24（58.3%）。两组均未达标；I15 保留证书校验 BLOCKED，仍待单独重测。详见 [全范围扩测结果](agent-expanded-results-20261105.md)。下列命令保留为本次执行记录，无需原样再跑全批。**
 
 ## 固定配置与操作约定
 
