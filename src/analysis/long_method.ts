@@ -1,6 +1,7 @@
 import type { Json, RefactorTask } from "../models.js";
 import { LONG_METHOD_DETECTOR_RULES } from "./detector_rules.js";
 import { rangeText } from "./source.js";
+import { longMethodStructure } from "./long_method_structure.js";
 export const LONG_METHOD_SCOPE = [
   "默认仅修改报告目标及从它提取的新 helper；不为复用顺带修改相邻旧方法或调整业务算法。相邻方法只作上下文，不能自动扩大本轮任务。",
   "提取后检查原目标和新增 helper；若残留指向本轮顺带改过的非目标方法，先判断能否撤销那部分无关修改，再修复真正必要的变更，不继续扩展重构范围。",
@@ -22,6 +23,7 @@ export function analyzeLongMethod(task: RefactorTask, targetText: string): Json 
     recommendedPattern: "在原 class/struct 内按职责提取私有方法或成员 @Builder",
     detectorRules: LONG_METHOD_DETECTOR_RULES,
     scopeConstraints: LONG_METHOD_SCOPE,
+    structure: longMethodStructure(task, targetText),
     targetContext: {
       startLine: start, endLine: end, inline,
       ...(inline ? { source: fragment } : { reason: validRange ? "报告范围超过 12000 字符，按目标路径与范围补读，未截断。" : "报告范围缺失或不符合当前源码，按目标符号定向定位。" }),

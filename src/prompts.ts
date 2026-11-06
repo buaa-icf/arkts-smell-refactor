@@ -4,6 +4,7 @@ import { targetPath } from "./models.js";
 import { slash, unique, within } from "./utils.js";
 import { projectLinterGuidance } from "./linter_profile.js";
 import { analyzeLongMethod, LONG_METHOD_SCOPE } from "./analysis/long_method.js";
+import { longMethodStructureHints } from "./analysis/long_method_structure.js";
 import { cloneReactiveHints } from "./analysis/clone_reactivity.js";
 import { cloneEventHints } from "./analysis/clone_boundaries.js";
 import { FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
@@ -118,6 +119,9 @@ function analysisSection(task: RefactorTask, risk: Json, includeSource = false):
       context.inline ? "- 以下范围已完整提供；只补读缺失的宿主字段、装饰器或直接依赖，不重复搜索目标。\n" + fence + "\n" + source + "\n" + fence : "- " + context.reason,
     ]);
   }
+  if (includeSource && longMethod?.structure)
+    section("Long Method 原始结构与抽取线索（只读，编辑后行号可能漂移）",
+      longMethodStructureHints(longMethod.structure).map(line => "- " + line));
   const envy = risk.featureEnvyAnalysis;
   if (envy) {
     const execution = envy.executionContext ?? {},
