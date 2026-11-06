@@ -315,7 +315,8 @@ export function analyzeRisks(task: RefactorTask): Json {
     risks.push(...r);
     constraints.push(...c);
   } else if (task.smell_type === "long-method") {
-    analysis = analyzeLongMethod(task, region);
+    // The analyzer uses report line numbers, which are relative to the full file.
+    analysis = analyzeLongMethod(task, source);
     key = "longMethodAnalysis";
     if (region.includes("@Builder") || region.includes("build()"))
       add("UI_STRUCTURE_CHANGE", "high", "目标可能包含 ArkUI Builder/组件树");

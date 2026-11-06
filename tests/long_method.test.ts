@@ -67,6 +67,21 @@ test("缺少画像的旧任务仍生成检测指导，不回退为无判据", (t
   assert.match(prompt, /原检测计数：60/);
   assert.match(prompt, /检测判据：/);
 });
+
+test("风险入口按原文件绝对行号提供目标，不能对已截取片段再次切片", t => {
+  const root = fixture(t), current = task(root, "long-method", "entry/src/main/ets/Page.ets", "build");
+  current.target.range = { start_line: 103, end_line: 105, column: 3 };
+  const source = "// unrelated context\n".repeat(100) + "@Component\nstruct Page {\n  build() {\n    Text('target-at-line-104')\n  }\n}";
+  writeText(path.join(root, current.target.file_path), source);
+  const risk = analyzeRisks(current), context = risk.longMethodAnalysis.targetContext;
+  assert.equal(context.inline, true);
+  assert.equal(context.source, "  build() {\n    Text('target-at-line-104')\n  }");
+  const initial = buildRefactorPrompt(current, risk);
+  assert.match(initial, /target-at-line-104/);
+  assert(!initial.includes("unrelated context"));
+  for (const prompt of [buildRepairPrompt(current, risk, { stage: "test" }, 1), buildReviewPrompt(current, risk)])
+    assert(!prompt.includes("target-at-line-104"));
+});
 test("原始目标范围只附在初始重构输入，返修与评审不混入旧源码", t => {
   const root = fixture(t), current = task(root, "long-method", "entry/src/main/ets/Page.ets", "%AM19$build");
   current.target.range = { start_line: 3, end_line: 5, column: 3 };
