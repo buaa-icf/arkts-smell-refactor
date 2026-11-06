@@ -2,6 +2,8 @@
 
 本轮按用户要求只针对 Long Method 专属分析器改进初始重构证据。策略版本为 `2026-11-06-long-method-structure`，前置修复提交 `1f68126`。真实 Agent 复跑待用户执行，不能据静态检查或单元测试宣称限时成功率已提升。
 
+**11 月 6 日 A 批更新：8 条已完成，最终 PASS 7/8、限时 PASS 5/8（62.5%），同样例前后均 PASS 的 7 条平均耗时下降 30.5%。I6 因评审输出格式无效 BLOCKED；跨轮最新 Long Method 已为 17/24（70.8%），仍待 B 批补齐同版本全量。详见 [A 批结果与耗时审计](long-method-analyzer-batch-a-results-20261106.md)。下文保留原计划，A 批命令不需重复执行。**
+
 ## 已确认的问题
 
 1. **原始片段接线错误。** `analyzeRisks()` 先用报告绝对行号截取 `region`，再把该片段交给仍按原文件行号切片的 `analyzeLongMethod()`。例如 ReaderToolBar 原范围 199–346，传入的片段只有 148 行，因此被判为范围无效。最近 A 批 LM-I01、LM-I16、LM-L06、LM-L07 的 risk-report 均为 `targetContext.inline=false`；改为传入完整文件后，这四条均能内联原范围。已有测试直接调用分析器，未覆盖这个入口，故新增通过 `analyzeRisks()` 的高行号回归测试。
