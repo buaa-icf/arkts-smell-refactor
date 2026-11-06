@@ -2,6 +2,8 @@
 
 更新日期：2026-11-05。记录范围：当前分支 `codex/refactor-agent-focus-main`，运行时实现截至 `3b3e937`。
 
+全量验证更新（11月6日晚）：Code Clone跨类同版本14条已全部完成，10/14限时PASS（71.4%），达到>70%目标；I19按用户确认正常计入PASS。详见 [跨类Clone全量结果](code-clone-cross-host-full-results-20261106.md)。下面各阶段待跑状态保留为历史。
+
 最新进展（11 月 6 日）：Long Method 类内已完成全量验证，19/25 限时 PASS（76%），I15 已恢复计入。已为该状态打 tag `agent-long-method-passed-20261106`，随后优化 Code Clone 跨类专属分析器；见 [跨类 Clone 优化与固定复跑](code-clone-cross-host-optimization-20261106.md)。新增实现尚待真实复跑，下文的早期“当前行动”保留为历史记录，不代表最新安排。
 
 后续复跑：Clone 跨类 A 批已完成，6/8 流水线限时 PASS（75%），全量尚余6条；I19同时存在旧接口兼容警告，I18/I23未通过。详见 [A批审计及补齐安排](code-clone-cross-host-batch-a-results-20261106.md)。

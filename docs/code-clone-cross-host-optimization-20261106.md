@@ -1,5 +1,7 @@
 # 2026-11-06：Code Clone 跨类分析器优化与固定复跑
 
+**全量验证已完成：14条中10条限时PASS（71.4%），11条最终PASS。用户确认I19项目自身接口问题不计重构失败，正常保留该条PASS。见 [同版本全量结果与耗时](code-clone-cross-host-full-results-20261106.md)；本页后续的“尚未运行/待补齐”等文字均为实施时记录。**
+
 优化前已创建本地 annotated tag **`agent-long-method-passed-20261106`**，指向 `5031f8c4be957a878356c537151aebd3d1c94f93`。该点包含 Long Method 类内全量 19/25 限时 PASS（76%）的实验记录；运行时为 `7fcf2b3`。tag 未推送。
 
 本轮运行时提交：**`2bddaf8 feat: provide bounded cross-host clone extraction evidence`**。策略版本 `2026-11-06-cross-host-clone-evidence`。本轮仅完成实现、单元/受控集成测试及只读离线分析，**尚未运行真实 Agent 或设备实验，不能提前更新成功率**。
