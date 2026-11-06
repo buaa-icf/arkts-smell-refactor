@@ -50,6 +50,7 @@ export const lineAt = (source: string, offset: number) =>
 export function symbolRegion(
   source: string,
   symbol: string | null,
+  hint: { line?: number | null } = {},
 ): {
   text: string;
   startLine: number;
@@ -68,26 +69,59 @@ export function symbolRegion(
     const patterns = [
       new RegExp(
         `^[ \\t]*(?:(?:export|public|private|protected|static|async|override)\\s+)*(?:function\\s+)?${name}(?:\\s*<[^>{}]+>)?\\s*\\(`,
-        "m",
+        "gm",
       ),
       new RegExp(
         `^[ \\t]*(?:(?:export|public|private|protected|static|readonly)\\s+)*(?:(?:const|let|var)\\s+)?${name}\\s*=\\s*(?:async\\s*)?\\(`,
-        "m",
+        "gm",
       ),
     ];
-    for (const re of patterns) {
-      const m = re.exec(code);
-      if (!m) continue;
-      const brace = code.indexOf("{", m.index + m[0].length),
-        end = brace < 0 ? -1 : matching(code, brace);
-      if (end >= 0)
-        return {
-          text: source.slice(m.index, end + 1),
-          startLine: lineAt(source, m.index),
-          start: m.index,
-          end,
-          located: true,
-        };
+    const owners = [
+      ...code.matchAll(
+        /\b(?:class|struct|interface)\s+([A-Za-z_$][\w$]*)[^{};]*\{/g,
+      ),
+    ].map((m) => ({
+      name: m[1],
+      start: m.index!,
+      end: matching(code, m.index! + m[0].length - 1),
+    }));
+    const ownerAt = (offset: number) =>
+      owners.filter((o) => o.start <= offset && o.end >= offset).at(-1)?.name;
+    const qualifiedOwner = symbol.includes(".")
+      ? symbol.split(".").at(-2)
+      : undefined;
+    const hintOffset = hint.line
+      ? source
+          .split("\n")
+          .slice(0, hint.line - 1)
+          .join("\n").length + (hint.line > 1 ? 1 : 0)
+      : undefined;
+    const expectedOwner =
+      qualifiedOwner ??
+      (hintOffset === undefined ? undefined : ownerAt(hintOffset));
+    const candidates = [];
+    for (const re of patterns)
+      for (const m of code.matchAll(re)) {
+        if (expectedOwner && ownerAt(m.index!) !== expectedOwner) continue;
+        const brace = code.indexOf("{", m.index + m[0].length),
+          end = brace < 0 ? -1 : matching(code, brace);
+        if (end >= 0)
+          candidates.push({
+            text: source.slice(m.index, end + 1),
+            startLine: lineAt(source, m.index),
+            start: m.index,
+            end,
+            located: true,
+          });
+      }
+    // Dataset lines may be stale. Use their enclosing type, not the nearest
+    // same-named method. Never silently choose the first ambiguous declaration.
+    if (candidates.length === 1) return candidates[0];
+    if (hintOffset !== undefined) {
+      const containing = candidates.filter(
+        (c) => c.start <= hintOffset && c.end >= hintOffset,
+      );
+      if (containing.length === 1) return containing[0];
     }
   }
   return {

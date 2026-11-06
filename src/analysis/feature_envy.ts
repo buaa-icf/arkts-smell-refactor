@@ -1,5 +1,5 @@
 import type { Json, RefactorTask } from "../models.js";
-import { symbolRegion } from "./source.js";
+import { mask, matching, symbolRegion } from "./source.js";
 import { escapeRe } from "../utils.js";
 export function analyzeFeatureEnvy(
   task: RefactorTask,
@@ -8,14 +8,28 @@ export function analyzeFeatureEnvy(
   callers: Json[] = [],
   reactive: string[] = [],
 ): Json {
-  const region = symbolRegion(source, task.target.symbol),
-    text = region.text;
+  const region = symbolRegion(source, task.target.symbol, {
+      line: task.target.range.start_line,
+    }),
+    // An unresolved/ambiguous target must not acquire other methods' accesses.
+    text = region.located ? mask(region.text) : "";
+  const code = mask(source);
+  const owner = [
+    ...code.matchAll(/\b(?:class|struct)\s+([A-Za-z_$][\w$]*)[^{};]*\{/g),
+  ]
+    .map((m) => ({
+      start: m.index!,
+      end: matching(code, m.index! + m[0].length - 1),
+    }))
+    .filter((o) => o.start <= region.start && o.end >= region.end)
+    .at(-1);
+  const typeScope = owner ? code.slice(owner.start, owner.end + 1) : text;
   const types: Record<string, string> = {};
-  for (const m of source.matchAll(
+  for (const m of (typeScope + "\n" + text).matchAll(
     /\b(?:let|const|var|private|public|protected)?\s*([A-Za-z_$][\w$]*)\s*:\s*([^=;,)]+)/g,
   ))
     types[m[1]] = m[2].trim();
-  for (const m of source.matchAll(
+  for (const m of (typeScope + "\n" + text).matchAll(
     /\b([A-Za-z_$][\w$]*)\s*=\s*new\s+([A-Za-z_$][\w$]*)/g,
   ))
     types[m[1]] = m[2];
@@ -74,31 +88,57 @@ export function analyzeFeatureEnvy(
     null;
   const type =
       types[receiver?.split(".").at(-1) ?? ""] ?? reported ?? "unknown",
-    value = [reported, type, receiver].join(" ").toLowerCase();
-  const ownership = [
-    "appstorage",
-    "localstorage",
-    "persiststorage",
-    "storagev2",
-  ].some((t) => value.includes(t))
-    ? "global-state"
-    : [
-          "canvas",
-          "pixelmap",
-          "image",
-          "path",
-          "drawing",
-          "render",
-          "context2d",
-          "want",
-          "router",
-          "http",
-          "https",
-        ].some((t) => value.includes(t))
-      ? "sdk-object"
-      : /service|repository|http/.test(value)
-        ? "service-object"
-        : "business-data";
+    value = [reported, type].join(" ").toLowerCase();
+  const typeNames = new Set(type.match(/[A-Za-z_$][\w$]*/g) ?? []);
+  const localType = [
+    ...code.matchAll(
+      /\b(?:class|struct|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g,
+    ),
+  ].some((m) => typeNames.has(m[1]));
+  const imports = [
+    ...mask(source, false).matchAll(
+      /\bimport\s+([^;]*?)\s+from\s*['"]([^'"]+)['"]/g,
+    ),
+  ];
+  const importedFrom = imports
+    .filter((m) => {
+      const clause = m[1].replace(/[{}]/g, "").trim();
+      return clause.split(",").some((entry) => {
+        const local = entry
+          .trim()
+          .replace(/^type\s+/, "")
+          .split(/\s+as\s+/)
+          .at(-1)!
+          .trim();
+        return typeNames.has(local);
+      });
+    })
+    .map((m) => m[2]);
+  const sdkImport = importedFrom.find((p) =>
+    /^@(?:ohos\.|hms\.|kit\.|system\.)/.test(p),
+  );
+  const projectType =
+    localType ||
+    importedFrom.some((p) => !/^@(?:ohos\.|hms\.|kit\.|system\.)/.test(p));
+  const frameworkGlobal = [
+    "CanvasRenderingContext2D",
+    "OffscreenCanvasRenderingContext2D",
+    "Path2D",
+    "RenderingContextSettings",
+  ].some((name) => typeNames.has(name));
+  // Identifier substrings such as RenderHelper, ImageInfo or GuideRouter are
+  // not proof of SDK ownership. Local declarations/imports take precedence.
+  const ownership = projectType
+    ? "business-data"
+    : ["appstorage", "localstorage", "persiststorage", "storagev2"].some((t) =>
+          [...typeNames].some((name) => name.toLowerCase() === t),
+        )
+      ? "global-state"
+      : sdkImport || frameworkGlobal
+        ? "sdk-object"
+        : /service|repository|http/.test(value)
+          ? "service-object"
+          : "business-data";
   const a = accesses[receiver ?? ""] ?? {},
     w = writes[receiver ?? ""] ?? {};
   const classification =
@@ -177,6 +217,13 @@ export function analyzeFeatureEnvy(
     receiver,
     targetType: type,
     ownershipKind: ownership,
+    ownershipEvidence: projectType
+      ? "project-declaration-or-import"
+      : sdkImport
+        ? `sdk-import:${sdkImport}`
+        : frameworkGlobal
+          ? "framework-global-type"
+          : "unresolved-or-heuristic",
     classification,
     metrics: Object.fromEntries(
       [...task.message.matchAll(/\b(ATFD|LDA|CPFD)\s*=\s*([0-9.]+)/gi)].map(
@@ -206,6 +253,12 @@ export function analyzeFeatureEnvy(
       : null,
     mustPreserve: preserve,
     limitations: [
+      ...(!region.located
+        ? ["目标符号未能唯一定位，未分析其他方法；需结合所属类型与当前源码确认"]
+        : []),
+      ...(!projectType && !sdkImport && !frameworkGlobal
+        ? ["未解析到类型声明或 SDK 导入，不能仅凭名称断言 SDK 归属"]
+        : []),
       "成员访问和写入采用词法级近似，别名、解构、泛型和跨文件类型关系可能无法完整识别",
       "职责归属建议必须由 Refactor Agent 结合实际依赖方向确认",
     ],

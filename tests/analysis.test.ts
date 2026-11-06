@@ -148,3 +148,100 @@ test("未定位符号保持文件证据，不能误声称已定位", () => {
   const source = "class Page {}";
   assert.equal(symbolRegion(source, "missing").located, false);
 });
+
+test("Feature Envy 按当前所属类型定位，旧行号不误选前面的同名 Helper", (t) => {
+  const current = task(
+    fixture(t),
+    "feature-envy",
+    undefined,
+    "isNeedRenderConnectedWiFi",
+  );
+  const source = `interface WiFiMenuModel { settingTitle: string; settingArrow: string; }
+class WiFiMenuModelRenderHelper {
+  static isNeedRenderConnectedWiFi(connectedWiFi: WiFiMenuModel) {
+    return connectedWiFi.settingTitle;
+  }
+}
+@Component
+struct Index {
+  @State isWiFiEnabled: boolean = false;
+  connectedWiFi: WiFiMenuModel;
+  otherMethod() { return false; }
+  isNeedRenderConnectedWiFi() {
+    return this.isWiFiEnabled && this.connectedWiFi.settingArrow.length > 0;
+  }
+}`;
+  current.target.range.start_line = 11; // stale sample line, still inside Index
+  current.message =
+    "Method 'isNeedRenderConnectedWiFi' is feature-envious toward 'WiFiMenuModel'";
+  const analysis = analyzeFeatureEnvy(
+    current,
+    source,
+    {},
+    [],
+    ["isWiFiEnabled"],
+  );
+  assert.equal(analysis.located, true);
+  assert.equal(analysis.receiver, "this.connectedWiFi");
+  assert.equal(analysis.targetType, "WiFiMenuModel");
+  assert.equal(analysis.ownershipKind, "business-data");
+  assert.notEqual(analysis.moveFeasibility, "unsafe");
+  assert(analysis.mustPreserve.includes("响应式状态实时读取：isWiFiEnabled"));
+  assert.equal(
+    symbolRegion(
+      source,
+      "WiFiMenuModelRenderHelper.isNeedRenderConnectedWiFi",
+      { line: 11 },
+    ).startLine,
+    3,
+  );
+  writeText(
+    path.join(current.workspace_root, current.target.file_path),
+    source,
+  );
+  const report = analyzeRisks(current);
+  assert(report.risks.some((r: Json) => r.code === "REACTIVE_STATE"));
+  assert(report.callers.items.every((c: Json) => c.owner === "Index"));
+  assert.equal(report.featureEnvyAnalysis.receiver, "this.connectedWiFi");
+});
+
+test("Feature Envy 同名符号无法消歧时不收集其他函数的成员访问", (t) => {
+  const current = task(fixture(t));
+  current.target.range.start_line = 1;
+  const source = `// no owner at stale sample line
+class A {
+  work() { return first.foo; }
+}
+class B {
+  work() { return second.bar; }
+}`;
+  const result = analyzeFeatureEnvy(current, source);
+  assert.equal(result.located, false);
+  assert.equal(result.receiver, null);
+  assert.equal(result.readCount, 0);
+  assert.equal(result.extractionRegion, null);
+});
+
+test("Feature Envy SDK 归属使用导入证据而不是 Render/Image/Router 名字", (t) => {
+  const current = task(fixture(t));
+  current.message =
+    "Method 'work' is feature-envious toward 'ImageRenderRouter'";
+  for (const declaration of [
+    "interface ImageRenderRouter { value: number }",
+    "import { ImageRenderRouter } from './models';",
+    "import { ImageRenderRouter } from 'common';",
+    "",
+  ]) {
+    const source = `${declaration}\nclass Page {\n  work(info: ImageRenderRouter) { return info.value; }\n}`;
+    assert.notEqual(
+      analyzeFeatureEnvy(current, source).ownershipKind,
+      "sdk-object",
+    );
+  }
+  const sdk = analyzeFeatureEnvy(
+    current,
+    "import { Path as ImageRenderRouter } from '@ohos.graphics2d';\nclass Page {\n  work(info: ImageRenderRouter) { info.close(); }\n}",
+  );
+  assert.equal(sdk.ownershipKind, "sdk-object");
+  assert.equal(sdk.moveFeasibility, "unsafe");
+});
