@@ -216,7 +216,7 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 
 四个入口共用 `run_refactor_experiment.ps1` 和 `task_source_rollback.ps1`；默认从第 1 条跑到数据集末尾，保留 `-StartOrdinal`、`-EndOrdinal`、`-ListOnly` 和 `-LinterMode required|skip`。Linter 默认仍为 `skip`；完整门禁实验显式传 `required`。`-LogDirectory` 可将终端输出同时写入指定目录的 `output<日期时间>.log`。每条结束或异常退出时按预运行快照回滚生产源码，正常结果目录另存 `experiment.json` 记录数据集类型及原序号。
 
-`local`/`instrument` 表示样例来源，不强制覆盖 `auto-test` 的测试类型选择；目标同时有可达的两类测试时仍会全部运行。四个脚本共用源码和设备，必须串行执行。完整命令、单条重跑、日志和路径配置见 [实验脚本使用说明](docs/experiment-scripts.md)。
+`local`/`instrument` 表示样例来源，不强制覆盖 `auto-test` 的测试类型选择；目标同时有可达的两类测试时仍会全部运行。四个脚本共用源码和设备，必须串行执行。完整命令、单条重跑、日志和路径配置保存在本机 `docs/experiment-scripts.md`。根目录 `docs/` 由 `.gitignore` 忽略，其中的实验记录和报告保留在本机，不随仓库分发。
 
 截至 2026-11-06，三个已有固定样本组均达到“最终 PASS 且在所属时限内”的成功率严格 >70% 目标（Linter skip）：
 
@@ -226,11 +226,11 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 | Long Method 类内 | 420秒 | 19/25（76.0%） | `7fcf2b3` |
 | Code Clone 跨类 | 900秒 | 10/14（71.4%） | `2bddaf8` |
 
-完整方法、逐条结果、测试与阶段耗时见 [Code Clone 实验报告](docs/code-clone-experiment-20261106.md) 和 [Long Method 实验报告](docs/long-method-experiment-20261106.md)。各组对应其冻结验证批次，不表示最终版本一次重跑了全部样例；顶层 Builder 单列，目前没有独立的 Long Method 跨类样本。里程碑 tag 为 `agent-three-groups-passed-20261106`，指向 `ea370d4`，已合并回本地 `dev_cly`。
+完整方法、逐条结果、测试与阶段耗时保存在本机 `docs/code-clone-experiment-20261106.md` 和 `docs/long-method-experiment-20261106.md`。各组对应其冻结验证批次，不表示最终版本一次重跑了全部样例；顶层 Builder 单列，目前没有独立的 Long Method 跨类样本。里程碑 tag 为 `agent-three-groups-passed-20261106`，指向 `ea370d4`，已合并回本地 `dev_cly`。
 
 ## 9. 开发与迁移范围
 
-迁移后的 Agent、测试归因、评审及日志优化，以及截至 2026-11-05 的验证边界，见 [TypeScript 后端合入后的优化记录](docs/typescript-agent-optimization-retrospective-20261105.md)。
+迁移后的 Agent、测试归因、评审及日志优化，以及截至 2026-11-05 的验证边界，保存在本机 `docs/typescript-agent-optimization-retrospective-20261105.md`。
 
 ```text
 src/
@@ -262,4 +262,4 @@ npm test
 
 回归包括原 Python 分析结果对照、受控 Agent/HomeCheck/Hvigor 子进程、测试注册选择、真实报告校验、并行 fail-fast、三轮修复、总超时、生产修改边界和传递依赖。受控测试不等于真实模型、SDK、签名和设备上的全量实验；使用新后端开展实验时应重新验证实际任务。
 
-本次移除了旧 `src/arkts_smell_refactor/`、根 `tests/test_*.py` 和 `pyproject.toml`，清理旧 Python 缓存及临时验证副本；历史 `runs` 保留。插件界面及应用事务仍使用 Java，连接层已切换到 Node：配置 Node 可执行文件和本仓库根目录，先运行 `npm install`、`npm run build`。详见 [插件说明](deveco-plugin/README.md)。`docs/` 中带日期的旧实验报告保留原始命令，属于历史证据。
+本次移除了旧 `src/arkts_smell_refactor/`、根 `tests/test_*.py` 和 `pyproject.toml`，清理旧 Python 缓存及临时验证副本；历史 `runs` 保留。插件界面及应用事务仍使用 Java，连接层已切换到 Node：配置 Node 可执行文件和本仓库根目录，先运行 `npm install`、`npm run build`。详见 [插件说明](deveco-plugin/README.md)。本机 `docs/` 中带日期的旧实验报告保留原始命令，属于历史证据。

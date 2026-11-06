@@ -38,6 +38,7 @@ v/
 .workspace-links/
 
 # Local experiment helpers and reports
+/docs/
 reports/
 /tools/*.ps1
 /.codex_tmp/
