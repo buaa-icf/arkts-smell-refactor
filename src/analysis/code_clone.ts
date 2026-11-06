@@ -10,6 +10,8 @@ import { METHOD, braceDepths } from "./god_class.js";
 import { cloneReactiveEvidence, type CloneMember } from "./clone_reactivity.js";
 import { cloneUiContext, cloneEventEvidence } from "./clone_boundaries.js";
 import { scopedShortLiterals } from "./short_literals.js";
+import { analyzeCrossHostClone } from "./clone_cross_host.js";
+import { cloneComparisonEvidence, type CloneSourceInput } from "./clone_comparison.js";
 const STRING_LITERAL =
   /^(?:"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*'|`(?:\\[\s\S]|[^`\\])*`)$/;
 const STRINGS = /(['"])(?:\\.|(?!\1)[^\\\r\n])*\1|`(?:\\.|[^`])*`/g;
@@ -194,7 +196,16 @@ function sameHostExtraction(source: string, instances: Json[]): { hints: string[
   return null;
 }
 
+function cloneSourcePath(task: RefactorTask, file: string): string {
+  let candidate = path.resolve(task.workspace_root, file);
+  if (!isFile(candidate) && task.source_project && !file.startsWith(task.source_project + "/"))
+    candidate = path.resolve(task.workspace_root, task.source_project, file);
+  return candidate;
+}
+
 export function analyzeCodeClone(task: RefactorTask, source: string): Json {
+  const sources: CloneSourceInput[] = [{ filePath: task.target.file_path, identityPath: cloneSourcePath(task, task.target.file_path), source,
+    startLine: task.target.range.start_line ?? null, endLine: task.target.range.end_line ?? null, resolved: true }];
   const instances = [
     instance(
       task.target.file_path,
@@ -207,20 +218,16 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
   ];
   for (const related of task.target.related_targets) {
     const file = slash(related.filePath ?? "");
-    let candidate = path.resolve(task.workspace_root, file);
-    if (
-      !isFile(candidate) &&
-      task.source_project &&
-      !file.startsWith(task.source_project + "/")
-    )
-      candidate = path.resolve(task.workspace_root, task.source_project, file);
-    const ok = isFile(candidate);
+    const candidate = cloneSourcePath(task, file);
+    const ok = isFile(candidate), relatedSource = ok ? readText(candidate) : "";
+    sources.push({ filePath: file, identityPath: candidate, source: relatedSource, startLine: related.range?.startLine ?? null,
+      endLine: related.range?.endLine ?? null, resolved: ok });
     instances.push(
       instance(
         file,
         related.range?.startLine ?? null,
         related.range?.endLine ?? null,
-        ok ? readText(candidate) : "",
+        relatedSource,
         "related",
         ok,
       ),
@@ -336,6 +343,7 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
   const localProfile = sameFile && available.length === instances.length && instances.length >= 2 &&
     result[0] !== "DIVERGENT_OR_STALE" ? sameHostExtraction(source, instances) : null;
   const localHints = localProfile?.hints ?? [];
+  const crossHost = localProfile ? null : analyzeCrossHostClone(sources);
   instances.forEach((i) => delete i._shape);
   return {
     groupId: "clone-" + digest(key).slice(0, 12),
@@ -351,6 +359,7 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     sharedLiteralGroups: sharedLiteralGroups(instances),
     ...(localProfile?.reactive ? { reactiveExtraction: localProfile.reactive } : {}),
     ...(localProfile?.events ? { eventExtraction: localProfile.events } : {}),
+    ...(crossHost ? { crossHostExtraction: crossHost, originalComparison: cloneComparisonEvidence(sources) } : {}),
     classification: result[0],
     similarity,
     variationDimensions: dimensions,

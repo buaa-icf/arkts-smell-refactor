@@ -5,6 +5,8 @@ import { slash, unique, within } from "./utils.js";
 import { projectLinterGuidance } from "./linter_profile.js";
 import { analyzeLongMethod, LONG_METHOD_SCOPE } from "./analysis/long_method.js";
 import { longMethodStructureHints } from "./analysis/long_method_structure.js";
+import { crossHostCloneHints } from "./analysis/clone_cross_host.js";
+import { cloneComparisonHints } from "./analysis/clone_comparison.js";
 import { cloneReactiveHints } from "./analysis/clone_reactivity.js";
 import { cloneEventHints } from "./analysis/clone_boundaries.js";
 import { FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
@@ -278,6 +280,15 @@ function analysisSection(task: RefactorTask, risk: Json, includeSource = false):
       ),
     );
     section("Code Clone 静态画像", lines);
+    if (includeSource && clone.crossHostExtraction) {
+      if (clone.sharedLiteralGroups?.length)
+        section("Code Clone 最小共享候选", ["- 已确认存在共享长字面量，优先评估仅提取为共享常量，保持外围 UI、状态、事件及模块依赖方向；先核对完整表达式边界。该候选不保证整个克隆组消除，仍以全部实例修改后的 HomeCheck 结果为准。"]);
+      section("Code Clone 原始跨宿主证据（只读，编辑后行号可能漂移）",
+        crossHostCloneHints(clone.crossHostExtraction).map(hint => "- " + normalizeTaskPaths(task, hint)));
+      if (clone.originalComparison)
+        section("Code Clone 原始实例对照（只读数据）",
+          cloneComparisonHints(clone.originalComparison, file => projectRelativePath(task, file)).map(hint => "- " + hint));
+    }
   }
   const god = risk.godClassAnalysis;
   if (god)
