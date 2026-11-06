@@ -218,6 +218,16 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 
 `local`/`instrument` 表示样例来源，不强制覆盖 `auto-test` 的测试类型选择；目标同时有可达的两类测试时仍会全部运行。四个脚本共用源码和设备，必须串行执行。完整命令、单条重跑、日志和路径配置见 [实验脚本使用说明](docs/experiment-scripts.md)。
 
+截至 2026-11-06，三个已有固定样本组均达到“最终 PASS 且在所属时限内”的成功率严格 >70% 目标（Linter skip）：
+
+| 分组 | 时限 | 限时 PASS | 验证运行时 |
+|---|---:|---:|---|
+| Code Clone 类内 | 420秒 | 13/15（86.7%） | `3b3e937` |
+| Long Method 类内 | 420秒 | 19/25（76.0%） | `7fcf2b3` |
+| Code Clone 跨类 | 900秒 | 10/14（71.4%） | `2bddaf8` |
+
+完整方法、逐条结果、测试与阶段耗时见 [Code Clone 实验报告](docs/code-clone-experiment-20261106.md) 和 [Long Method 实验报告](docs/long-method-experiment-20261106.md)。各组对应其冻结验证批次，不表示最终版本一次重跑了全部样例；顶层 Builder 单列，目前没有独立的 Long Method 跨类样本。里程碑 tag 为 `agent-three-groups-passed-20261106`，指向 `ea370d4`，已合并回本地 `dev_cly`。
+
 ## 9. 开发与迁移范围
 
 迁移后的 Agent、测试归因、评审及日志优化，以及截至 2026-11-05 的验证边界，见 [TypeScript 后端合入后的优化记录](docs/typescript-agent-optimization-retrospective-20261105.md)。
