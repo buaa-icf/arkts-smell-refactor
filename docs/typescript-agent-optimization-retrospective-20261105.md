@@ -4,6 +4,8 @@
 
 最新进展（11 月 6 日）：Long Method 类内已完成全量验证，19/25 限时 PASS（76%），I15 已恢复计入。已为该状态打 tag `agent-long-method-passed-20261106`，随后优化 Code Clone 跨类专属分析器；见 [跨类 Clone 优化与固定复跑](code-clone-cross-host-optimization-20261106.md)。新增实现尚待真实复跑，下文的早期“当前行动”保留为历史记录，不代表最新安排。
 
+后续复跑：Clone 跨类 A 批已完成，6/8 流水线限时 PASS（75%），全量尚余6条；I19同时存在旧接口兼容警告，I18/I23未通过。详见 [A批审计及补齐安排](code-clone-cross-host-batch-a-results-20261106.md)。
+
 后续更新：11 月 6 日按用户要求优化 Long Method 类内耗时，已修正目标源码坐标接线并增加结构/嵌套状态画像，见 [专属分析器优化与复跑安排](long-method-analyzer-optimization-20261106.md)。下文保留原阶段记录。
 
 **当前行动以第 8 节为准：暂停第 27 条比例算法及其专项返修优化，先完整重跑该条，并扩测跨类 Code Clone 与 Long Method。第 6 节保留问题证据，不再作为扩测前置条件。**

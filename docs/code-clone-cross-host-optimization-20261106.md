@@ -4,6 +4,8 @@
 
 本轮运行时提交：**`2bddaf8 feat: provide bounded cross-host clone extraction evidence`**。策略版本 `2026-11-06-cross-host-clone-evidence`。本轮仅完成实现、单元/受控集成测试及只读离线分析，**尚未运行真实 Agent 或设备实验，不能提前更新成功率**。
 
+**后续进展：A 批8条已完成，6/8流水线限时PASS（75%），新增I6/I8/I14/I19四条限时成功；I18仍App died，I23模型长度终止无修改。I19有已确认的旧接口兼容问题，不能把流水线PASS等同无质量疑点。完整14条仍待B批6条，见 [A批结果与补齐命令](code-clone-cross-host-batch-a-results-20261106.md)。下面“尚未运行”保留为实现时记录。**
+
 ## 为什么先优化 Clone 分析器
 
 上一轮 `1f68126` 修复 Long Method 的完整源码坐标接线，`7fcf2b3` 增加 Long Method 结构和状态证据，提示接入也只作用于 Long Method；共享修改主要是策略版本记录，没有改变 Code Clone 分析行为。直接用该版重跑 Clone，可能出现模型波动，但没有针对跨类抽取的新证据。
