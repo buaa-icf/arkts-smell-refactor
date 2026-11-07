@@ -26,7 +26,11 @@ import {
   walk,
 } from "./utils.js";
 import { displayCommand, runCommand } from "./process.js";
+import { interruptTestResults } from "./test_progress.js";
 import { buildRepairPrompt } from "./prompts.js";
+import { frozenUiFailureEvidence } from "./test_ui.js";
+import { collectReactiveEvidence } from "./reactive_evidence.js";
+import { finalReviewText, parseReview, formatRetryPrompt, preservesReview } from "./review_output.js";
 import {
   failedHypiumCases,
   hostUnavailable,
@@ -38,6 +42,7 @@ export const PLACEHOLDERS = [
   "risk_file",
   "prompt_file",
   "review_prompt_file",
+  "review_format_prompt_file",
   "repair_prompt_file",
   "project_root",
   "workspace_root",
@@ -157,41 +162,58 @@ export async function runSpec(
       timeout,
       taskDeadline === undefined ? Infinity : taskDeadline - started,
     );
+  const log = path.join(taskDir, name + ".log"),
+    isTest = /^test(?:-repair-\d+)?$/.test(name);
+  if (isTest) {
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(log, "", "utf8");
+  }
   const run = await runCommand(command, {
     cwd,
     signal,
     timeoutSeconds: seconds,
+    onOutput: isTest ? (text) => fs.appendFileSync(log, text, "utf8") : undefined,
   });
-  const log = path.join(taskDir, name + ".log");
-  writeText(
-    log,
-    run.output +
-      (run.timedOut
-        ? "\nTIMEOUT"
-        : run.cancelled
-          ? "\nCANCELLED_BY_FAIL_FAST"
-          : ""),
-  );
+  const ending = run.timedOut
+    ? "\nTIMEOUT"
+    : run.cancelled
+      ? "\nCANCELLED_BY_FAIL_FAST"
+      : "";
+  if (isTest) fs.appendFileSync(log, ending, "utf8");
+  else writeText(log, run.output + ending);
+  const interruptTest = (reason: string, classification: string) => {
+    if (isTest) interruptTestResults(taskDir, reason, classification);
+  };
   const fields = {
     command: display,
     duration_seconds: round(now() - started),
     output_file: log,
   };
-  if (run.cancelled && !run.timedOut)
+  if (run.cancelled && !run.timedOut) {
+    interruptTest("同组门禁未通过，已由 fail-fast 终止", "TEST_GATE_CANCELLED");
     return result(name, "SKIPPED", {
       ...fields,
       reason: "同组门禁未通过，已由 fail-fast 终止",
     });
-  if (run.timedOut)
-    return result(name, "BLOCKED", {
-      ...fields,
-      reason:
-        taskDeadline !== undefined && now() >= taskDeadline
-          ? "单条异味总执行时间超过限制"
-          : `步骤执行时间超过 ${timeout} 秒`,
-    });
-  if (run.error)
+  }
+  if (run.timedOut) {
+    const reason =
+      taskDeadline !== undefined && now() >= taskDeadline
+        ? "单条异味总执行时间超过限制"
+        : `步骤执行时间超过 ${timeout} 秒`;
+    interruptTest(reason, "TEST_GATE_TIMEOUT");
+    return result(name, "BLOCKED", { ...fields, reason });
+  }
+  if (run.error) {
+    interruptTest(run.error, "TEST_GATE_INTERRUPTED");
     return result(name, "BLOCKED", { ...fields, reason: run.error });
+  }
+  const manifest = path.join(taskDir, "test-results.json");
+  if (isTest && isFile(manifest) && readJson(manifest).status === "RUNNING") {
+    const reason = `测试进程已退出（code=${run.code}），未保存最终测试状态`;
+    interruptTest(reason, "TEST_GATE_INTERRUPTED");
+    return result(name, "BLOCKED", { ...fields, exit_code: run.code, reason });
+  }
   let passed = run.code === 0;
   if (spec.successOutputRegex)
     passed ||= new RegExp(spec.successOutputRegex, "i").test(run.output);
@@ -210,49 +232,7 @@ export async function runSpec(
   });
 }
 export function extractReviewJson(log: string, output?: string): Json | null {
-  const candidates: Json[] = [];
-  const seen = new Set<string>();
-  const collect = (value: unknown, depth = 0) => {
-    if (depth > 12) return;
-    if (value && typeof value === "object") {
-      if (!Array.isArray(value) && "verdict" in value)
-        candidates.push(value as Json);
-      for (const nested of Object.values(value)) collect(nested, depth + 1);
-    } else if (
-      typeof value === "string" &&
-      value.includes("verdict") &&
-      !seen.has(value)
-    ) {
-      seen.add(value);
-      scan(value, depth + 1);
-    }
-  };
-  const scan = (text: string, depth = 0) => {
-    for (let start = 0; start < text.length; start++) {
-      if (text[start] !== "{") continue;
-      let level = 0,
-        quote = false,
-        escaped = false;
-      for (let i = start; i < text.length; i++) {
-        const c = text[i];
-        if (quote) {
-          if (escaped) escaped = false;
-          else if (c === "\\") escaped = true;
-          else if (c === '"') quote = false;
-        } else if (c === '"') quote = true;
-        else if (c === "{") level++;
-        else if (c === "}" && --level === 0) {
-          try {
-            collect(JSON.parse(text.slice(start, i + 1)), depth);
-          } catch {}
-          start = i;
-          break;
-        }
-      }
-    }
-  };
-  scan(readText(log));
-  const candidate = candidates.at(-1) ?? null;
+  const candidate = parseReview(finalReviewText(log));
   if (output) {
     if (candidate) writeJson(output, candidate);
     else fs.rmSync(output, { force: true });
@@ -295,8 +275,10 @@ export function buildFailureReport(
   failed: CommandResult,
   attempt: number,
 ): Json {
-  const stage = failed.name.replace(/-retry-\d+$/, "").split("-repair-")[0],
-    suffix = failed.name.replace(/^review-agent/, ""),
+  // Formatting changes the transport step name, not the semantic review round.
+  const logicalName = failed.name.replace(/-format$/, ""),
+    stage = logicalName.replace(/-retry-\d+$/, "").split("-repair-")[0],
+    suffix = logicalName.replace(/^review-agent/, ""),
     reviewFile = path.join(taskDir, `review${suffix}.json`),
     review =
       stage === "review-agent" && isFile(reviewFile)
@@ -385,6 +367,7 @@ export function buildFailureReport(
   let attributable = mentionsChanged(log, changes),
     unavailable = false,
     hasCaseEvidence = false;
+  const testAttribution: Json[] = [];
   if (stage === "test") {
     const jobs = currentTestFailures(taskDir);
     if (jobs !== null) {
@@ -396,6 +379,7 @@ export function buildFailureReport(
           ))
             cases.push({
               ...c,
+              uiEvidence: frozenUiFailureEvidence(taskDir, job, c, changes),
               targeted:
                 job.selectionReason === "target-named-suite" &&
                 (job.expectedSuites ?? []).includes(c.suite),
@@ -405,9 +389,12 @@ export function buildFailureReport(
         const formatted = (c: Json) =>
           `class=${c.suite}\ntest=${c.name}\n${c.details}\nresult=${c.result}`;
         log = cases.map(formatted).join("\n\n");
+        for (const c of cases)
+          if (c.uiEvidence.length) testAttribution.push({ suite: c.suite, caseName: c.name, evidence: c.uiEvidence });
         attributable = cases.every(
           (c) =>
             c.targeted ||
+            c.uiEvidence.length > 0 ||
             mentionsChanged(formatted(c), changes) ||
             changes.some((f) =>
               new RegExp(
@@ -457,6 +444,11 @@ export function buildFailureReport(
     contract: "PUBLIC_CONTRACT_BREAK",
     "review-agent": "SEMANTIC_REVIEW_FAILURE",
   };
+  if (stage === "test" && hasCaseEvidence && attributable && !unavailable) {
+    const reactive = collectReactiveEvidence(taskDir, changes);
+    writeJson(path.join(taskDir, "reactive-extraction.json"), reactive);
+    issues = [...issues, ...reactive.issues];
+  }
   return {
     schemaVersion: "1.0",
     attempt,
@@ -467,6 +459,7 @@ export function buildFailureReport(
       ? "目标测试在 beforeAll 找不到测试宿主，未执行生产断言，不能归因于本次修改"
       : (review.summary ?? failed.reason ?? `${stage} 未通过`),
     changedProductionFiles: changes,
+    ...(stage === "test" ? { testAttribution } : {}),
     issues,
     logTail: log,
   };
@@ -664,7 +657,7 @@ export async function executePipeline(
     repairs: number,
     retries: number,
   ) => {
-    const filtered = terminal.filter(
+const filtered = terminal.filter(
       (i) =>
         !(
           mode === "skip" &&
@@ -672,6 +665,27 @@ export async function executePipeline(
           i.status === "SKIPPED"
         ),
     );
+
+    const output = {
+      ...finalResult(task.task_id, results, dry, filtered),
+      validationPolicy: policy,
+      agentPolicy: config.agentPolicy,
+      repairAttempts: repairs,
+      reviewRetries: retries,
+      reviewFormatRetries: formatRetries,
+      attempts,
+      durationSeconds: round(now() - started),
+      timeoutSeconds: timeout,
+      timedOut: results.some(
+        (s) =>
+          s.status === "BLOCKED" &&
+          s.reason?.includes("总执行时间超过限制"),
+      ),
+    };
+
+    writeJson(path.join(taskDir, "result.json"), output);
+    return output;
+  };
     const output = {
       ...finalResult(task.task_id, results, dry, filtered),
       validationPolicy: policy,
@@ -688,6 +702,7 @@ export async function executePipeline(
     writeJson(path.join(taskDir, "result.json"), output);
     return output;
   };
+  let formatRetries = 0;
   const saveFailure = (failure: Json, index: number | string) => {
     writeJson(path.join(taskDir, "failure-report.json"), failure);
     writeJson(path.join(taskDir, `failure-report-${index}.json`), failure);
@@ -806,14 +821,32 @@ export async function executePipeline(
         results.push(reviewResult);
       }
       if (!dry && reviewResult!.status === "PASS") {
-        const data = extractReviewJson(
+        let data = extractReviewJson(
             reviewResult!.output_file!,
             path.join(taskDir, `review${suffix}${retrySuffix}.json`),
-          ),
-          verdict = String(data?.verdict ?? "UNCERTAIN").toUpperCase();
-        reviewResult!.status = ["PASS", "FAIL"].includes(verdict)
-          ? (verdict as Status)
-          : "BLOCKED";
+          );
+        if (!data && config.reviewFormatAgent && formatRetries === 0 && (deadline === undefined || now() < deadline)) {
+          const original = finalReviewText(reviewResult!.output_file!), prompt = formatRetryPrompt(original);
+          if (prompt) {
+            formatRetries++;
+            reviewResult!.status = "BLOCKED";
+            reviewResult!.reason = "评审 JSON 无效，尝试一次仅格式修复";
+            results.push(reviewResult!);
+            const promptFile = path.join(taskDir, `review-format-prompt${suffix}.md`);
+            writeText(promptFile, prompt);
+            reviewResult = await runSpec("review-agent" + suffix + retrySuffix + "-format", config.reviewFormatAgent,
+              { ...context, review_format_prompt_file: promptFile }, taskDir, taskDir, false, undefined, deadline);
+            if (reviewResult.status === "PASS") {
+              const formatted = finalReviewText(reviewResult.output_file!);
+              if (preservesReview(original, formatted)) {
+                data = parseReview(formatted);
+                writeJson(path.join(taskDir, `review${suffix}${retrySuffix}.json`), data);
+              } else { reviewResult.status = "BLOCKED"; reviewResult.reason = "格式修复改变原评审内容、结论不自洽或仍无效"; }
+            } else reviewResult.status = "BLOCKED";
+          }
+        }
+        const verdict = String(data?.verdict ?? "UNCERTAIN").toUpperCase();
+        if (reviewResult!.status === "PASS") reviewResult!.status = ["PASS", "FAIL"].includes(verdict) ? verdict as Status : "BLOCKED";
         if (reviewResult!.status === "BLOCKED")
           reviewResult!.reason = "评审输出为 UNCERTAIN 或缺少有效 verdict JSON";
       }

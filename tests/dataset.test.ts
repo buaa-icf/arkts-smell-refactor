@@ -137,7 +137,12 @@ test("自动命令使用 Node 而非 Python，保留并行验证和返修配置"
   assert(!config.gates!.build.command!.includes("--hvigorw"));
   assert(config.gates!.linter.command!.includes("--deveco"));
   assert(!config.gates!.linter.command!.includes("--codelinter"));
-  assert(config.reviewAgent!.command!.includes("--auto"));
+
+  assert.equal(
+    (config.reviewAgent!.command as string[])[0],
+    process.execPath,
+  );
+  assert(config.reviewAgent!.command!.includes("review"));
   assert(!JSON.stringify(config).includes("--dangerously-skip-permissions"));
 });
 test("build 只依赖 DevEco Code，不因 hvigorw/ohpm 未在 PATH 而被禁用", (t) => {
@@ -187,14 +192,17 @@ test("首轮和返修保留验证限制、类型和键语义保护", (t) => {
     buildRepairPrompt(current, {}, { stage: "linter" }, 1),
   ]) {
     for (const fragment of [
+      "`build_project` 或 `arkts_check`",
       "两者每轮合计最多 2 次",
+      "第一次通过即停止内部验证",
       "devecocli build",
       "devecocli check arkts",
-      "第一次通过即停止内部验证",
+      "平台会执行 HomeCheck、构建、公共契约、测试",
       "包括原来未提供的情况",
       "擅自新增 index-only key",
       "已有私有方法的前导下划线",
       "不反复猜测空白行数量",
+      "不调用 skill（含内置 HarmonyOS 技能）",
       "不得到原仓库、历史 runs 或快照中搜索或复制实现",
     ])
       assert(prompt.includes(fragment), fragment);
@@ -231,4 +239,17 @@ test("Review 只读、完整依赖及 Linter skip 约定", (t) => {
   assert(review.includes("禁止读取或搜索原项目目录"));
   assert(review.includes("UNCERTAIN"));
   assert(review.includes("validationPolicy.linterMode=skip"));
+});
+
+test("跳过附加 Linter 时仍保留内部编译检查和平台测试", (t) => {
+  const current = task(fixture(t));
+  for (const prompt of [
+    buildRefactorPrompt(current, {}, "skip"),
+    buildRepairPrompt(current, {}, { stage: "build" }, 1, "skip"),
+  ]) {
+    assert(prompt.includes("本轮 Linter 已明确跳过，不参与验收或返修"));
+    assert(prompt.includes("内部构建和 ArkTS 类型/语法检查仍可执行"));
+    assert(prompt.includes("两者每轮合计最多 2 次"));
+    assert(!prompt.includes("Agent 完成编辑和源码差异自查后立即交回"));
+  }
 });

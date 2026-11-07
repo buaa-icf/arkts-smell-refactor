@@ -23,6 +23,7 @@ import {
 import { which } from "./process.js";
 import { TEST_TOOL_BLOCKERS } from "./test_execution.js";
 import { bundledHomecheck } from "./homecheck_runtime.js";
+import { resolveSelection, POLICY_VERSION, DISABLED_AGENT_TOOLS, INTERNAL_VALIDATION_TOOLS, MAX_INTERNAL_VALIDATION_ATTEMPTS, type AgentSelection } from "./agent_runtime.js";
 import { freezeTestPlan } from "./test_plan.js";
 export async function readPastedJson(
   input: NodeJS.ReadableStream = process.stdin,
@@ -112,7 +113,10 @@ export function autoConfig(
   smoke: Json = {},
   contract: Json = {},
   mode: "required" | "skip" = "required",
+  selection: AgentSelection = {},
 ): Config {
+  const agents = resolveSelection(selection);
+  const agentArgs = (role: "refactor" | "review") => ["--model", agents[role]!.model!, ...(agents[role]!.variant ? ["--variant", agents[role]!.variant!] : [])];
   const root = findHarmonyRoot(targetPath(task), task.project_root),
     gate = fileURLToPath(new URL("./gate.js", import.meta.url)),
     base = [process.execPath, gate],
@@ -123,7 +127,7 @@ export function autoConfig(
   const network =
     "certificate verification|unable to verify[^\\r\\n]*certificate|self[- ]signed certificate|\\b(?:SSL|TLS)(?:Error\\b|_[A-Z0-9_]+\\b|\\b)|\\b(?:CERT_[A-Z0-9_]+|CERTIFICATE_VERIFY_FAILED)\\b|authentication failed|\\bunauthorized\\b(?![-_])|\\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\\b|network[^\\r\\n]*unavailable";
   const agentBlockers =
-      "product agreements|deveco auth consent|model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|" +
+      "REVIEW_PACKET_BLOCKED|product agreements|deveco auth consent|model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|" +
       network,
     environment =
       network +
@@ -145,6 +149,7 @@ export function autoConfig(
             "--deveco",
             tools.deveco,
             ...(repair ? ["--prompt-file", "{repair_prompt_file}"] : []),
+            ...agentArgs("refactor"),
           ),
           cwd: "{task_dir}",
           blockedOutputRegex: agentBlockers,
@@ -249,6 +254,7 @@ export function autoConfig(
       timeoutSeconds: 3600,
     };
   return {
+    agentPolicy: { policyVersion: POLICY_VERSION, refactor: { requestedModel: agents.refactor!.model, requestedVariant: agents.refactor!.variant ?? null }, review: { requestedModel: agents.review!.model, requestedVariant: agents.review!.variant ?? null }, disabledTools: DISABLED_AGENT_TOOLS, disabledProviders: ["deveco"], validationOwner: "agent-and-platform", internalValidation: { tools: INTERNAL_VALIDATION_TOOLS, maxAttempts: MAX_INTERNAL_VALIDATION_ATTEMPTS } },
     taskTimeoutSeconds: 1200,
     linterMode: mode,
     refactorAgent: agent(),
@@ -258,16 +264,8 @@ export function autoConfig(
     reviewAgent: tools.deveco
       ? {
           command: [
-            tools.deveco,
-            "run",
-            "严格执行附件中的只读评审任务，只输出要求的 JSON。",
-            "-f",
-            "{review_prompt_file}",
-            "--dir",
-            "{task_dir}",
-            "--format",
-            "json",
-            "--auto",
+            ...base, "review", "--task-dir", "{task_dir}", "--deveco", tools.deveco,
+            "--prompt-file", "{review_prompt_file}", ...agentArgs("review"),
           ],
           cwd: "{task_dir}",
           blockedOutputRegex: agentBlockers,
@@ -277,6 +275,11 @@ export function autoConfig(
           timeoutSeconds: 3600,
         }
       : null,
+    reviewFormatAgent: tools.deveco ? {
+      command: [...base, "review", "--task-dir", "{task_dir}", "--deveco", tools.deveco,
+        "--prompt-file", "{review_format_prompt_file}", "--format-only", ...agentArgs("review")],
+      cwd: "{task_dir}", timeoutSeconds: 90, blockedOutputRegex: agentBlockers, blockedOutputScope: "agent-errors",
+    } : null,
   };
 }
 export function prepareTask(
@@ -307,10 +310,12 @@ export async function runInteractive(
   baseDir: string,
   workspaceHint?: string,
   mode: "required" | "skip" = "required",
+  selection: AgentSelection = {},
 ): Promise<Json> {
+  selection = resolveSelection(selection);
   const data = await readPastedJson(),
     workspace = discoverWorkspace(data, workspaceHint ?? process.cwd());
-  return runTasks(baseDir, workspace, data, undefined, mode);
+  return runTasks(baseDir, workspace, data, undefined, mode, false, {}, selection);
 }
 export async function runTasks(
   baseDir: string,
@@ -320,7 +325,9 @@ export async function runTasks(
   mode: "required" | "skip" = "required",
   dryRun = false,
   metadata: Json = {},
+  selection: AgentSelection = {},
 ): Promise<Json> {
+  selection = resolveSelection(selection);
   const started = now(),
     d = new Date(),
     pad = (n: number) => String(n).padStart(2, "0"),
@@ -388,7 +395,8 @@ export async function runTasks(
       console.log(
         `\n[${i + 1}/${tasks.length}] ${task.target.symbol ?? task.target.file_path}\n  静态风险：${risk.riskLevel}；Refactor Agent 仅接收生产代码与重构规范`,
       );
-      const config = autoConfig(task, taskDir, tools, smoke, contract, mode);
+      const config = autoConfig(task, taskDir, tools, smoke, contract, mode, selection);
+      console.log("Agent 配置：" + JSON.stringify(config.agentPolicy));
       writeJson(path.join(taskDir, "effective-config.json"), config);
       const result = await executePipeline(
         taskDir,

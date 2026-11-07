@@ -108,9 +108,34 @@ Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工
 
 自动测试选择在重构前按“原文件 + 所属 class/struct + 方法名及参数签名”保存接口身份，通过测试导入、别名/重导出、接收对象类型和方法调用，以及可解析的辅助函数调用，关联实际注册的 suite。同一生产文件的不同方法、不同 Local Test 文件或不同 suite 可以分别选择；同一个 suite 内的全部用例仍一起运行，不只选单个 `it`。如果本地和设备测试都有明确接口关联，则两者都运行，不能为了避免签名而跳过设备测试；同名但没有原接口关联证据的测试记入排除记录，不声称已证明不存在间接覆盖。这是有界静态匹配，不是完整跨语言/UI 事件调用图；没有明确匹配时仍回退到同文件/模块的可用测试，不凭数据集 `testKind` 跳过设备测试。
 
+Code Clone 同文件多个实例按各自所属方法合并选测。若已找到直接接口测试，同模块、按目标文件命名的已注册设备测试中，`it` 用例名等于某个克隆成员名或以 `成员名_` 开头的套件也会完整运行。计划用 `declared-device-case` 单独记录这种用例命名依据，便于区分直接调用和 UI 间接覆盖。
+
+Code Clone 专属分析器为已确认同一宿主的 UI 克隆补充 `reactiveExtraction`：原 `ForEach/LazyForEach` 数据源、宿主字段或成员形参的声明位置、装饰器及宿主内直接读取/疑似写入位置，同时传入重构与评审提示词。宿主状态与形参混用时，优先保留原数据源读取及外层容器，抽取共同子项或事件实现。这是有范围限制的词法证据，不追踪别名、外部写入、框架更新及模板插值；未发现直接写入不能证明状态不变，也不能作为按值传参等价的依据。
+
+专属分析器还会定位包含检测片段的完整 UI 节点及修饰符链（限 100 行、6000 字符），保持检测器原范围不变。同步事件中的同形配置调用若带内联回调和直接字段写入，`eventExtraction` 提供完整调用原文、同宿主候选位置及各自写入差异，优先提示保留 UI 原位、抽取普通成员 helper；不会仅因片段位于 `build()` 就统一推荐 `@Builder`。每组最多展示 8 处候选、每次最多 2 组；形态一致不代表配置值或行为等价，异步及无法解析的情况保留原建议。
+
+完整节点内的非 ASCII 短文案附带原行列和等值 Unicode 源码转义，帮助 Agent 直接复制原值。评审材料中的 `review-literals.json` 比较前后生产快照的短字符串解码值，提供缺失/新增值、位置和可能的码点替换；允许重复实现合并、换引号及等值转义。模板、拼接及正则歧义不求值，证据有明确数量上限。该对照仅辅助 Agent 自查与独立评审，不自动修改代码、不改变门禁判定；值集合一致也不能证明调用顺序、次数或语义等价。
+
 原计划保存在 Agent 工作区之外的 `baseline-test-plan.json`，包含接口身份、匹配依据及测试文件哈希；重构和每轮 Loop 后沿用，不根据改名/提取后的代码重新猜测测试。新增跨模块源码仍补充相应测试。原任务、已选测试内容或注册关系变化时记为 `TEST_PLAN_STALE`，不能复用旧证据。每轮实际计划、排除记录和覆盖缺口写入 `test-plan.json`。仅完整 SDK 原始字符串断言模板会按模板规则排除，显式指定测试任务不应用自动选择与模板排除。设备安装 ABI 不匹配记为 `BLOCKED / DEVICE_ABI_MISMATCH`，不进入代码修复 Loop；真实断言失败仍为 FAIL。
 
-每条异味默认总执行上限 **1200 秒**，包含 Agent、门禁、修复和 Review；达到上限终止当前进程树并记录超时。每轮 Agent 内部的 `build_project` 和 `arkts_check` 合计最多两次是提示词约束，不是对 DevEco 内部工具的强制拦截。
+原计划还冻结 `uiCaseEvidence`：已选设备用例通过 `ON.id` 查询，或通过本文件直接转发到 `waitForComponent(ON.id(parameter))` 的函数，访问目标生产组件的静态 ID 时，保存用例名、UI ID、源码位置和哈希。ID 必须在应用生产源码中唯一，用例名必须在该作业内唯一；不借用 hooks、其他用例或普通字符串中的 ID。归因前核对原任务和测试哈希，按失败用例逐条关联；模块兜底测试也可进入返修，但同轮含无关失败仍不放行。动态 ID、嵌套回调和未解析 helper 保守不建立关联；此证据不改变测试选择，也不证明失败一定由重构引入。
+
+每条异味默认总执行上限 **1200 秒**，包含 Agent、门禁、修复和 Review；达到上限终止当前进程树并记录超时。重构和返修 Agent 完成编辑与源码自查后，可在隔离工作区调用 `build_project` 或 `arkts_check`（新版对应 `devecocli build` / `devecocli check arkts`）做必要内部验证；提示词要求每轮合计最多两次，首次通过即停止，只有明确属于本轮修改的错误才修复并追加一次。环境或签名失败立即交回。完整的平台门禁仍执行，Linter 按 required/skip 配置；skip 时不为纯风格问题补跑或返修。网页与 `skill` 入口继续禁用；只读评审及 JSON 格式修复仍禁用内部构建/检查工具。
+
+首次内部验证的交接要求同时前置到 Agent 启动指令：完成全部编辑和源码自查后，选择 check 或 build 之一，bash description 使用 `ARKTS_FINAL_CHECK`，成功后交回，避免 check 通过后继续 build。运行器仍要求本会话、真实 CLI 成功元数据、覆盖所有已观察到的源码编辑和独立验证步骤；没有标记不会自动终止 Agent，但成功的未标记检查会保留编辑状态，使后续显式收尾有效。失败或证据不完整的检查仍需新编辑后才能通过复验交接。
+
+测试期间，Hvigor 的 stdout/stderr 按行脱敏后实时写入 `test-attempts/<轮次>/<作业>/hvigor.log`，并转发到 `test.log`（返修轮为 `test-repair-N.log`）。同目录 `progress.json` 保存阶段历史、时间、最后输出时间和报告快照路径；已生成的 `test_result.txt`、`coverage.log` 每 0.5 秒采样保存，子进程正常退出前也会最后采样一次。
+
+每个测试作业另设以下阶段时限，按已确认的完成标记推进，重复输出不会重置计时；整条任务剩余时限更短时，仍以整条任务时限为准。可用对应环境变量设置正数秒值。
+
+| 阶段 | 开始依据 | 默认时限 | 环境变量 |
+|---|---|---:|---|
+| `preparing-test` | 启动该测试作业的 Hvigor | 300 秒 | `ARKTS_TEST_PREPARE_TIMEOUT_SECONDS` |
+| `awaiting-install` | 当前测试模块 `ohosTest@SignHap` 完成 | 90 秒 | `ARKTS_TEST_INSTALL_TIMEOUT_SECONDS` |
+| `awaiting-test-result` | 安装完成，或已读到测试运行记录 | 300 秒 | `ARKTS_TEST_EXECUTION_TIMEOUT_SECONDS` |
+| `collecting-results` | 设备执行结束标记，或 Local Test 汇总出现 | 60 秒 | `ARKTS_TEST_COLLECT_TIMEOUT_SECONDS` |
+
+阶段名表示最后确认的进度，不能仅凭 `awaiting-install` 判断具体卡在安装还是安装前的设备命令。没有对应标记的阶段沿用之前的计时。阶段超时终止 Hvigor 进程树，记为 `BLOCKED / TEST_PHASE_TIMEOUT`，不进入代码返修。外层总超时强制结束门禁时，由仍在运行的外层 Runner 将未完成的测试索引收尾为 `BLOCKED / TEST_GATE_TIMEOUT`，保留已通过作业及最新快照，避免遗留 `RUNNING`；终止整个 Runner 进程不在此保证内。本地实验脚本仍按预运行快照回滚源码。
 
 ## 5. 各层如何判断
 
@@ -118,8 +143,8 @@ Instrument Test 需要可用设备/模拟器及工程要求的签名配置。工
 - **构建**：在 `v/` 下的验证副本调用所选 DevEco Code 自带的官方 CLI，显式指定模块，例如 `devecocli build --product default --modules entry@default hotel@default`。选择当前 product 对应的全部 HAP 入口/特性模块，并补充本次涉及的库模块；纯库工程构建库模块产物。根据 `src/main/module.json5` 和 targets/applyToProducts 解析，不靠模块名猜类型。**不能只传 `--product default`**：那会切到 `assembleApp`，额外校验整个应用包的卡片截图等资源，扩大原 HAP/模块编译验收范围。本门禁不声称已完成整包发布校验。依赖安装、同步和底层构建由 CLI 管理，不另找 hvigorw/ohpm。product、模块类型或 target 无法可靠确定时明确阻塞。必须同时有退出码 0 和官方 `Build completed successfully` 标记，帮助输出或缺少证据不能算 PASS。`build-evidence.json` 记录版本、命令、模块范围、工作区及判定。Agent 不得自行修改签名、wrapper 或依赖配置。
 - **公共契约**：保存模块导出和公开成员签名，比较是否删除或不兼容变更。
 - **测试**：解析 `build-profile.json5` 和 `List.test.*` 注册链；优先沿用重构前原接口关联的 suite，也能查找别的宿主模块；无法精确匹配时保守回退。每次先清除副本旧报告，必须有新生成的 Hypium 用例和完整汇总，Instrument 还要求设备完成标记。beforeAll 找不到测试宿主属于 BLOCKED，不冒充业务断言失败。
-- **Linter**：官方 CLI 执行 `devecocli check lint <本次变更文件> --config-path <项目配置> --format json --output-path <本轮唯一报告>`，不使用 `--fix` 或 Git 增量模式，不再搜索独立检查器 PATH。为避免与并行 build 的缓存互相影响，使用独立隔离副本。优先保留项目配置；项目没有配置时，仅在副本里使用当前官方 CLI 自带的应用模板规则，并包含 `.ets`/`.ts` 文件，不修改原仓库配置。必须生成格式和计数有效的新 JSON 报告，工具错误/报告缺失为 BLOCKED；退出码 0 不代表没有诊断。只判断本任务变更行引入/触及的诊断，已有文件的其他诊断不会使本任务失败，新增文件检查全部行。`linter-evidence.json` 记录命令、报告、配置来源和过滤结果，提示词仍读取项目风格配置。
-- **Review**：只读取本任务的前后生产代码、diff、风险、门禁结果和传递依赖材料；不访问原项目、不读测试、不重复运行工具。UNCERTAIN/无有效 JSON 记为 BLOCKED，不能借用旧评审 PASS。
+- **Linter**：仅判断本任务变更行引入/触及的诊断，不因文件里别的既有诊断判失败。提示词读取最近的项目风格配置，并展开 `ruleSet` 继承的显式风格规则，把 `semi`、`naming-convention` 的私有成员前导下划线、`avoid-overusing-custom-component-check` 等转成可执行的生成检查；存在 `overrides` 条件覆盖时不猜生效选择器。摘要不是完整生效配置，仍需实际 Linter 判定。
+- **Review**：优先读取集中评审材料（`review-agent-prompt.md`：变化文件前后精确路径与 SHA-256、完整 diff、完整前后源码、风险清单和机械门禁摘要），只有 `inline=false` 的材料才按精确路径补读；不访问原项目、不读测试、不重复运行工具。材料损坏时输出 `REVIEW_PACKET_BLOCKED` 并中止，不启动模型。UNCERTAIN/无有效 JSON 记为 BLOCKED，不能借用旧评审 PASS。
 
 测试的实际子进程命令格式如下，模块和 suite 由原接口测试计划自动生成，在隔离副本执行，并不是让使用者手动运行：
 
@@ -190,14 +215,44 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 
 自动替换的占位符：`{task_dir}`、`{task_file}`、`{risk_file}`、`{prompt_file}`、`{review_prompt_file}`、`{repair_prompt_file}`、`{project_root}`、`{workspace_root}`、`{target_file}`、`{backend_root}`、`{harmony_root}`。`project_root` 是数据集源仓库根；`harmony_root` 是最近可构建的 Harmony 工程。占位符只替换路径，不执行命令。
 
-## 8. 开发与迁移范围
+## 8. 本地实验批跑脚本
+
+按异味和数据集类型提供四个入口。这些 PowerShell 辅助脚本保存在本机 `tools/` 中，由 `.gitignore` 忽略，不随仓库分发；它们会调用本仓库 TypeScript CLI（`node dist/cli.js`），因此需先执行 `npm install` 和 `npm run build`。新克隆的仓库请直接使用上文的 CLI 或 `npm run batch`。
+
+| 脚本（`tools/`） | 数据集（`dataset/positive/`） | 当前展开样本数 |
+|---|---|---:|
+| `run_long_method_local.ps1` | `local-test/long-method.json` | 8 |
+| `run_code_clone_local.ps1` | `local-test/code-clone.json` | 3 |
+| `run_long_method_instrument.ps1` | `instrument-test/long-method.json` | 17 |
+| `run_code_clone_instrument.ps1` | `instrument-test/code-clone.json` | 27 |
+
+四个入口共用 `run_refactor_experiment.ps1` 和 `task_source_rollback.ps1`；默认从第 1 条跑到数据集末尾，保留 `-StartOrdinal`、`-EndOrdinal`、`-ListOnly` 和 `-LinterMode required|skip`。Linter 默认仍为 `skip`；完整门禁实验显式传 `required`。`-LogDirectory` 可将终端输出同时写入指定目录的 `output<日期时间>.log`。每条结束或异常退出时按预运行快照回滚生产源码，正常结果目录另存 `experiment.json` 记录数据集类型及原序号。
+
+`local`/`instrument` 表示样例来源，不强制覆盖 `auto-test` 的测试类型选择；目标同时有可达的两类测试时仍会全部运行。四个脚本共用源码和设备，必须串行执行。完整命令、单条重跑、日志和路径配置保存在本机 `docs/experiment-scripts.md`。根目录 `docs/` 由 `.gitignore` 忽略，其中的实验记录和报告保留在本机，不随仓库分发。
+
+截至 2026-11-06，三个已有固定样本组均达到“最终 PASS 且在所属时限内”的成功率严格 >70% 目标（Linter skip）：
+
+| 分组 | 时限 | 限时 PASS | 验证运行时 |
+|---|---:|---:|---|
+| Code Clone 类内 | 420秒 | 13/15（86.7%） | `3b3e937` |
+| Long Method 类内 | 420秒 | 19/25（76.0%） | `7fcf2b3` |
+| Code Clone 跨类 | 900秒 | 10/14（71.4%） | `2bddaf8` |
+
+完整方法、逐条结果、测试与阶段耗时保存在本机 `docs/code-clone-experiment-20261106.md` 和 `docs/long-method-experiment-20261106.md`。各组对应其冻结验证批次，不表示最终版本一次重跑了全部样例；顶层 Builder 单列，目前没有独立的 Long Method 跨类样本。里程碑 tag 为 `agent-three-groups-passed-20261106`，指向 `ea370d4`，已合并回本地 `dev_cly`。
+
+## 9. 开发与迁移范围
+
+迁移后的 Agent、测试归因、评审及日志优化，以及截至 2026-11-05 的验证边界，保存在本机 `docs/typescript-agent-optimization-retrospective-20261105.md`。
 
 ```text
 src/
 ├─ cli.ts / automatic.ts           命令行、配置、粘贴输入和批量调度
 ├─ models.ts / dataset.ts          任务类型和数据集解析
-├─ risk.ts / analysis/             通用风险与六类专项分析
-├─ prompts.ts / linter_profile.ts  提示词和项目规则摘要
+├─ risk.ts / analysis/             通用风险与六类专项分析（含 literals、long_method、detector_rules）
+├─ prompts.ts / linter_profile.ts  提示词和项目规则摘要（含 ruleSet 继承与生成检查）
+├─ agent_runtime.ts                Agent 模型/档位解析、工具禁用和环境隔离
+├─ review_packet.ts / review_output.ts 集中评审材料与最终 JSON 评审解析
+├─ source_format.ts                BOM/换行等常规编码适配
 ├─ runner.ts / process.ts          并行编排、Loop、失败分析、进程树和超时
 ├─ gate.ts / smell.ts              外部验证工具入口
 ├─ workspace.ts                   隔离副本、生产同步与评审材料
@@ -219,4 +274,4 @@ npm test
 
 回归包括原 Python 分析结果对照、受控 Agent/HomeCheck/Hvigor 子进程、测试注册选择、真实报告校验、并行 fail-fast、三轮修复、总超时、生产修改边界和传递依赖。受控测试不等于真实模型、SDK、签名和设备上的全量实验；使用新后端开展实验时应重新验证实际任务。
 
-本次移除了旧 `src/arkts_smell_refactor/`、根 `tests/test_*.py` 和 `pyproject.toml`，清理旧 Python 缓存及临时验证副本；历史 `runs` 保留。插件界面及应用事务仍使用 Java，连接层已切换到 Node：配置 Node 可执行文件和本仓库根目录，先运行 `npm install`、`npm run build`。详见 [插件说明](deveco-plugin/README.md)。`docs/` 中带日期的旧实验报告保留原始命令，属于历史证据。
+本次移除了旧 `src/arkts_smell_refactor/`、根 `tests/test_*.py` 和 `pyproject.toml`，清理旧 Python 缓存及临时验证副本；历史 `runs` 保留。插件界面及应用事务仍使用 Java，连接层已切换到 Node：配置 Node 可执行文件和本仓库根目录，先运行 `npm install`、`npm run build`。详见 [插件说明](deveco-plugin/README.md)。本机 `docs/` 中带日期的旧实验报告保留原始命令，属于历史证据。

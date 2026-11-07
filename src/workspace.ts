@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createPatch, diffLines } from "diff";
+import { preserveSourceFormat } from "./source_format.js";
 import type { Json } from "./models.js";
 import {
   copyFile,
@@ -146,6 +147,7 @@ export function prepareReviewMaterials(
   taskDir: string,
   source: string,
   changes: string[],
+  resources: string[] = [],
 ): void {
   const current = path.join(taskDir, "current-production"),
     context = path.join(taskDir, "review-context-production");
@@ -172,6 +174,11 @@ export function prepareReviewMaterials(
     );
   }
   writeText(path.join(taskDir, "review-diff.patch"), patches.join("\n"));
+  for (const r of resources) {
+    const file = path.join(source, r);
+    if (!within(file, source)) throw new Error("评审资源越界");
+    if (isFile(file)) copyFile(file, path.join(current, r));
+  }
   const processed = new Set<string>(),
     changed = new Set(files.map((p) => path.resolve(p))),
     queue = [...files],
@@ -264,7 +271,9 @@ export function syncProductionChanges(mirror: string, source: string): number {
     if (existed && !isFile(baseline) && !newFiles.has(a.relative))
       copyFile(a.to, baseline);
     if (!existed) newFiles.add(a.relative);
+    const payload = existed && a.kind === "source" ? preserveSourceFormat(fs.readFileSync(a.to), fs.readFileSync(a.from)) : fs.readFileSync(a.from);
     copyFile(a.from, a.to);
+    fs.writeFileSync(a.to, payload);
     if (a.kind === "resource")
       resources.push({
         filePath: a.relative,
@@ -293,7 +302,7 @@ export function syncProductionChanges(mirror: string, source: string): number {
     discardedValidationFiles: discarded,
     rejectedFiles: [],
   });
-  prepareReviewMaterials(taskDir, source, combined);
+  prepareReviewMaterials(taskDir, source, combined, unique([...(previous.changedProductionResources ?? []), ...allowed.filter(a => a.kind === "resource").map(a => a.relative)]));
   console.log(
     "已同步生产代码修改：" + allowed.map((a) => a.relative).join(", "),
   );

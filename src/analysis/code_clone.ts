@@ -1,11 +1,53 @@
 import path from "node:path";
 import crypto from "node:crypto";
-import { diffChars } from "diff";
+import { diffArrays, diffChars } from "diff";
 import type { RefactorTask, Json } from "../models.js";
 import { isFile, readText, slash, unique } from "../utils.js";
-import { mask, rangeText } from "./source.js";
+import { CLONE_DETECTOR_RULES } from "./detector_rules.js";
+import { longLiteralSegments, sharedLiteralGroups } from "./literals.js";
+import { lineAt, mask, matching, rangeText } from "./source.js";
+import { METHOD, braceDepths } from "./god_class.js";
+import { cloneReactiveEvidence, type CloneMember } from "./clone_reactivity.js";
+import { cloneUiContext, cloneEventEvidence } from "./clone_boundaries.js";
+import { scopedShortLiterals } from "./short_literals.js";
+import { analyzeCrossHostClone } from "./clone_cross_host.js";
+import { cloneComparisonEvidence, type CloneSourceInput } from "./clone_comparison.js";
+const STRING_LITERAL =
+  /^(?:"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*'|`(?:\\[\s\S]|[^`\\])*`)$/;
+const STRINGS = /(['"])(?:\\.|(?!\1)[^\\\r\n])*\1|`(?:\\.|[^`])*`/g;
 const digest = (s: string) =>
   crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
+/**
+ * Whole-file `.id(...)` call sites, keeping the full argument expression.
+ * Report ranges can end before a chained `.id()` modifier, so this is
+ * preservation evidence for the file rather than an edit scope.
+ */
+export function uiIdEvidence(text: string): Json[] {
+  const masked = mask(text),
+    evidence: Json[] = [];
+  for (const match of masked.matchAll(/\.id\s*\(/g)) {
+    const start = match.index! + match[0].length;
+    let depth = 1,
+      end = start;
+    while (end < masked.length && depth) {
+      if (masked[end] === "(") depth++;
+      else if (masked[end] === ")") depth--;
+      end++;
+    }
+    if (depth) continue;
+    evidence.push({
+      line: lineAt(text, match.index!),
+      expression: text.slice(start, end - 1).trim(),
+    });
+  }
+  return evidence;
+}
+/** Literals containing private-use or format characters must not be retyped. */
+export function sensitiveLiteralEvidence(text: string): Json[] {
+  return [...text.matchAll(STRINGS)]
+    .filter((match) => /[\p{Co}\p{Cf}]/u.test(match[0]))
+    .map((match) => ({ line: lineAt(text, match.index!), literal: match[0] }));
+}
 function instance(
   file: string,
   start: number | null,
@@ -22,7 +64,9 @@ function instance(
       .replace(/\s+/g, "");
   const matches = (re: RegExp, text = code) =>
     unique([...text.matchAll(re)].map((m) => m[1])).sort();
-  const maskedLines = mask(source).split("\n");
+  const maskedLines = mask(source).split("\n"),
+    fragmentIds = uiIdEvidence(fragment),
+    context = resolved ? cloneUiContext(source, start, end) : null;
   return {
     role,
     filePath: file,
@@ -33,7 +77,21 @@ function instance(
     rawFingerprint: digest(fragment),
     shapeFingerprint: digest(shape),
     _shape: shape,
-    uiIds: matches(/\.id\s*\(\s*['"](.*?)['"]\s*\)/gs, fragment),
+    uiIds: unique(
+      fragmentIds
+        .map((item) => String(item.expression))
+        .filter((expression) => STRING_LITERAL.test(expression))
+        .map((expression) => expression.slice(1, -1)),
+    ).sort(),
+    // Report ranges can end before a chained .id() modifier. Include the
+    // whole file's call sites as preservation evidence, not an edit scope.
+    uiIdEvidence: resolved ? uiIdEvidence(source) : [],
+    sensitiveLiteralEvidence: resolved ? sensitiveLiteralEvidence(source) : [],
+    ...(context ? { uiContext: { node: context.name, startLine: context.startLine, endLine: context.endLine },
+      shortLiteralEvidence: scopedShortLiterals(source, context.startLine, context.endLine) } : {}),
+    longLiteralSegments: resolved
+      ? longLiteralSegments(source, start, end)
+      : [],
     thisReferences: matches(/\bthis\.([A-Za-z_$][\w$]*)/g),
     stateWrites: matches(
       /\bthis\.([A-Za-z_$][\w$]*)\s*(?:[+\-*/%]?=|\+\+|--)/g,
@@ -62,7 +120,92 @@ function instance(
       ),
   };
 }
+/** Compare trimmed source lines for navigation only. Keep both original coordinates. */
+function alignedLines(lines: string[], first: Json, other: Json): string[] {
+  const extract = (instance: Json) =>
+    lines.slice(instance.startLine - 1, instance.endLine).map(line => line.trim());
+  const changes = diffArrays(extract(first), extract(other), { maxEditLength: 300 }) ?? [];
+  let left = first.startLine, right = other.startLine;
+  const shared: { count: number; hint: string }[] = [], differences: string[] = [], changedBlocks: string[] = [];
+  for (const [index, part] of changes.entries()) {
+    if (!part.added && !part.removed && part.count >= 2 && part.value.some(line => /\w/.test(line))) {
+      shared.push({ count: part.count, hint: '连续相同行（忽略行首尾空白）L' + left + '–' + (left + part.count - 1) +
+        ' ↔ L' + right + '–' + (right + part.count - 1) });
+    }
+    const next = changes[index + 1];
+    if (part.removed && part.count === 1 && next?.added && next.count === 1 &&
+        part.value[0].length <= 140 && next.value[0].length <= 140) {
+      differences.push('差异行 L' + left + ' ' + part.value[0] + ' ↔ L' + right + ' ' + next.value[0]);
+    } else if (part.removed && next?.added) {
+      changedBlocks.push('差异块 L' + left + '–' + (left + part.count - 1) + ' ↔ L' + right + '–' +
+        (right + next.count - 1) + '，分别从 ' + part.value[0].slice(0, 80) + ' / ' + next.value[0].slice(0, 80) + ' 开始');
+    }
+    if (!part.added) left += part.count;
+    if (!part.removed) right += part.count;
+  }
+  return [...shared.sort((a, b) => b.count - a.count).slice(0, 2).map(s => s.hint), ...[...differences, ...changedBlocks].slice(0, 4)];
+}
+
+function sameHostExtraction(source: string, instances: Json[]): { hints: string[]; reactive?: Json; events?: Json | null } | null {
+  const code = mask(source), lines = source.split(/\r?\n/);
+  if (instances.some(i => !Number.isInteger(i.startLine) || !Number.isInteger(i.endLine) ||
+    i.startLine < 1 || i.endLine < i.startLine || i.endLine > lines.length)) return null;
+  for (const owner of code.matchAll(/\b(class|struct)\s+([\w$]+)(?:\s+[^{};]+)?\s*\{/g)) {
+    const open = owner.index! + owner[0].length - 1, close = matching(code, open);
+    if (close < 0) continue;
+    const first = lineAt(code, open), last = lineAt(code, close);
+    if (!instances.every(i => first <= i.startLine && i.endLine <= last)) continue;
+    const body = code.slice(open, close + 1);
+    if (/\b(?:class|struct)\s+[\w$]+/.test(body)) continue;
+    const depths = braceDepths(body);
+    const members: CloneMember[] = [];
+    for (const method of body.matchAll(METHOD)) {
+      const brace = method.index! + method[0].length - 1;
+      if (depths[brace] !== 1) continue;
+      const end = matching(body, brace);
+      if (end < 0) continue;
+      const declaration = method.index! + method[0].search(/\S/);
+      const declarationLine = lineAt(code, open + declaration);
+      let start = declarationLine;
+      // Detector ranges may start on a blank line or the member decorator.
+      // Extend ownership only. Never alter the fragment used for comparison.
+      while (start > first + 1) {
+        const previous = lines[start - 2].trim();
+        if (previous && !/^@[\w$]+(?:\([^()\r\n]*\))?$/.test(previous)) break;
+        start--;
+      }
+      members.push({ name: method[2], start, declarationLine, end: lineAt(code, open + end), parameters: method[3],
+        ui: owner[1] === 'struct' && (method[2] === 'build' || /@(?:Local)?Builder\s*$/.test(body.slice(0, declaration))) });
+    }
+    const located = instances.map(i => members.filter(m =>
+      m.start <= i.startLine && m.declarationLine <= i.endLine && i.endLine <= m.end));
+    // Ambiguous/incomplete ownership keeps the existing generic recommendation.
+    if (located.some(matches => matches.length !== 1)) continue;
+    const [head, ...others] = instances;
+    const events = located.every(([m]) => m.ui) ? cloneEventEvidence(source, instances, open, close) : null;
+    return { hints: [
+      owner[1] + ' ' + owner[2] + ' 内的成员：' + located.map(([m], index) =>
+        m.name + '（实例 L' + instances[index].startLine + '–' + instances[index].endLine + '）').join('；'),
+      events ? '先核对下方完整事件配置调用；优先保留 UI 原位并抽取普通成员 helper，通过原回调显式保留字段写入差异。' : located.every(([m]) => m.ui)
+        ? '先在当前宿主内提取成员 @Builder，沿用原 this、响应式读取与事件时机。'
+        : '先检查是否可提取当前类内的方法，保留调用点的静态/实例上下文、副作用与控制流。',
+      '在源码中确认完整表达式和链式修饰符边界，仅参数化已核实的差异。以下为部分行级线索。',
+      ...others.slice(0, 3).flatMap(other => alignedLines(lines, head, other)),
+    ], events, reactive: cloneReactiveEvidence(source, owner[1] + ' ' + owner[2], open, close, instances, located.map(([member]) => member)) };
+  }
+  return null;
+}
+
+function cloneSourcePath(task: RefactorTask, file: string): string {
+  let candidate = path.resolve(task.workspace_root, file);
+  if (!isFile(candidate) && task.source_project && !file.startsWith(task.source_project + "/"))
+    candidate = path.resolve(task.workspace_root, task.source_project, file);
+  return candidate;
+}
+
 export function analyzeCodeClone(task: RefactorTask, source: string): Json {
+  const sources: CloneSourceInput[] = [{ filePath: task.target.file_path, identityPath: cloneSourcePath(task, task.target.file_path), source,
+    startLine: task.target.range.start_line ?? null, endLine: task.target.range.end_line ?? null, resolved: true }];
   const instances = [
     instance(
       task.target.file_path,
@@ -75,20 +218,16 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
   ];
   for (const related of task.target.related_targets) {
     const file = slash(related.filePath ?? "");
-    let candidate = path.resolve(task.workspace_root, file);
-    if (
-      !isFile(candidate) &&
-      task.source_project &&
-      !file.startsWith(task.source_project + "/")
-    )
-      candidate = path.resolve(task.workspace_root, task.source_project, file);
-    const ok = isFile(candidate);
+    const candidate = cloneSourcePath(task, file);
+    const ok = isFile(candidate), relatedSource = ok ? readText(candidate) : "";
+    sources.push({ filePath: file, identityPath: candidate, source: relatedSource, startLine: related.range?.startLine ?? null,
+      endLine: related.range?.endLine ?? null, resolved: ok });
     instances.push(
       instance(
         file,
         related.range?.startLine ?? null,
         related.range?.endLine ?? null,
-        ok ? readText(candidate) : "",
+        relatedSource,
         "related",
         ok,
       ),
@@ -201,9 +340,14 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     .map((i) => `${i.filePath}:${i.startLine}-${i.endLine}`)
     .sort()
     .join("|");
+  const localProfile = sameFile && available.length === instances.length && instances.length >= 2 &&
+    result[0] !== "DIVERGENT_OR_STALE" ? sameHostExtraction(source, instances) : null;
+  const localHints = localProfile?.hints ?? [];
+  const crossHost = localProfile ? null : analyzeCrossHostClone(sources);
   instances.forEach((i) => delete i._shape);
   return {
     groupId: "clone-" + digest(key).slice(0, 12),
+    detectorRules: CLONE_DETECTOR_RULES,
     detectorCloneKind:
       /Code\s+Clone\s+(Type-\d+)/i.exec(task.message)?.[1].toUpperCase() ??
       null,
@@ -212,12 +356,17 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     instanceCount: instances.length,
     resolvedInstanceCount: available.length,
     instances,
+    sharedLiteralGroups: sharedLiteralGroups(instances),
+    ...(localProfile?.reactive ? { reactiveExtraction: localProfile.reactive } : {}),
+    ...(localProfile?.events ? { eventExtraction: localProfile.events } : {}),
+    ...(crossHost ? { crossHostExtraction: crossHost, originalComparison: cloneComparisonEvidence(sources) } : {}),
     classification: result[0],
     similarity,
     variationDimensions: dimensions,
     recommendedPattern: result[1],
     recommendationReason: result[2],
     refactoringPolicy: {
+      ...(localHints.length ? { sameHostExtraction: localHints } : {}),
       preferredApproach: sameFile
         ? "同文件优先局部抽取：同一 class/struct 内提取私有方法或成员 @Builder；不同所属类型或顶层 Builder 保留各自入口并委托文件内共享实现。"
         : "跨文件优先保留各原类/组件及其入口，用组合或委托共用内部 Helper；确认类型、状态所有权和生命周期再考虑共享基类或组件。",
@@ -237,8 +386,7 @@ export function analyzeCodeClone(task: RefactorTask, source: string): Json {
     postConditions: [
       "逐项对照原文件导出、类/组件/Builder、构造方式和静态访问；旧调用形式继续有效。",
       "逐实例保留 UI ID、文案、资源、回调、状态读写和副作用顺序。",
-      "修改和新增生产文件复检；若仍报告该克隆组，按剩余实例定向修复，不只改名、换行或移动原样代码。",
-    ],
+      "修改和新增生产文件复检；若仍报告该克隆组，按剩余实例定向修复，不只改名、换行或移动原样代码。",    ],
     limitations: [
       "词法画像不能证明跨文件类型、生命周期、闭包和资源引用行为等价",
       "检测消息只提供直接对照片段；额外实例需纳入下一轮",

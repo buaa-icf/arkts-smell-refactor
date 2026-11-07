@@ -15,7 +15,9 @@ import {
   writeJson,
 } from "./utils.js";
 import { mask } from "./analysis/source.js";
+import { freezeUiCaseEvidence } from "./test_ui.js";
 import {
+  declaredDeviceCases,
   sourceInterface,
   interfaceTestMatches,
   testSupportFiles,
@@ -50,6 +52,7 @@ export function freezeTestPlan(taskDir: string, root: string): void {
       testHashes: Object.fromEntries(
         unique(support).map((f) => [relative(f, root), hash(f)]),
       ),
+      uiCaseEvidence: freezeUiCaseEvidence(root, readJson(path.join(taskDir, "task.json")), plan.jobs),
       plan,
     });
   } catch (e) {
@@ -181,7 +184,7 @@ export function buildTestPlan(
     affected = new Map<string, Set<string>>(),
     primaryModules = new Set<string>(),
     excludedTests: Json[] = [],
-    interfaces = new Map<string, Json>(),
+    interfaces = new Map<string, Json[]>(),
     primaryTargets = new Set<string>(),
     selectionEvidence: Json[] = [],
     selectionWarnings: Json[] = [],
@@ -218,33 +221,29 @@ export function buildTestPlan(
     if (target || !primaryModules.has(owner[0])) set.add(p);
     affected.set(owner[0], set);
   };
+  let cloneGroup = false;
   if (mode === "auto-test") {
     const task = readJson(path.join(taskDir, "task.json")),
       base = task.workspace_root ?? task.workspaceRoot,
       target = task.target;
     const original = path.resolve(base, target.file_path ?? target.filePath);
-    add(original, true);
-    primaryTargets.add(original);
-    if (!frozen) {
-      const identity = sourceInterface(
-        original,
-        target.symbol ?? null,
-        target.range?.start_line ?? target.startLine ?? 1,
-      );
-      if (identity) interfaces.set(original, identity);
-    }
-    for (const r of target.related_targets ?? target.relatedTargets ?? []) {
-      const related = path.resolve(base, r.filePath);
-      add(related, true);
-      primaryTargets.add(related);
-      if (!frozen) {
-        const identity = sourceInterface(
-          related,
-          r.symbol ?? null,
-          r.range?.startLine ?? r.startLine ?? 1,
-        );
-        if (identity) interfaces.set(related, identity);
+    const related = target.related_targets ?? target.relatedTargets ?? [];
+    cloneGroup = (task.smell_type ?? task.smellType) === "code-clone" && related.length > 0;
+    const addPrimary = (file: string, symbol: string | null, line: number) => {
+      add(file, true);
+      primaryTargets.add(file);
+      if (frozen) return;
+      const identity = sourceInterface(file, symbol, line);
+      const members = interfaces.get(file) ?? [];
+      if (identity && !members.some(m => m.startLine === identity.startLine && m.endLine === identity.endLine &&
+          m.method === identity.method && m.owner === identity.owner)) {
+        members.push(identity);
+        interfaces.set(file, members);
       }
+    };
+    addPrimary(original, target.symbol ?? null, target.range?.start_line ?? target.startLine ?? 1);
+    for (const r of related) {
+      addPrimary(path.resolve(base, r.filePath), r.symbol ?? null, r.range?.startLine ?? r.startLine ?? 1);
     }
     const cp = path.join(taskDir, "refactor-changes.json");
     if (isFile(cp)) {
@@ -293,17 +292,22 @@ export function buildTestPlan(
       if (frozen && primaryTargets.has(target)) continue;
       let found = false;
       const stem = path.basename(target, path.extname(target));
-      const identity = interfaces.get(target);
-      const exact: Json[] = identity
-        ? [...inventory].flatMap(([key, files]) =>
-            interfaceTestMatches(files, identity, root).map((match) => ({
-              ...match,
-              key,
-            })),
-          )
-        : [];
+      const identities = interfaces.get(target) ?? [];
+      const namedLikeTarget = (file: string) =>
+        [stem + ".test", stem + "Test.test"].includes(path.basename(file, path.extname(file)));
+      const exact: Json[] = identities.flatMap(identity =>
+        [...inventory].flatMap(([key, files]) =>
+          interfaceTestMatches(files, identity, root).map(match => ({ ...match, key })),
+        ));
+      let unmatched = identities;
       if (exact.length) {
-        for (const match of exact) {
+        const deviceKey = JSON.stringify([owner, "instrument"]);
+        const declared = cloneGroup
+          ? (inventory.get(deviceKey) ?? []).filter(namedLikeTarget).flatMap(file =>
+              declaredDeviceCases(file, identities).map(match => ({ ...match, key: deviceKey })))
+          : [];
+        const included: Json[] = [...exact, ...declared];
+        for (const match of included) {
           const set = matches.get(match.key) ?? new Set<string>();
           set.add(match.file);
           matches.set(match.key, set);
@@ -317,34 +321,32 @@ export function buildTestPlan(
             file: relative(match.file, root),
           });
         }
-        for (const [key, files] of inventory)
-          for (const file of files.filter((p) =>
-            [stem + ".test", stem + "Test.test"].includes(
-              path.basename(p, path.extname(p)),
-            ),
-          ))
-            if (!exact.some((m) => m.file === file))
+        unmatched = identities.filter(identity => !included.some(match => match.target === identity));
+        if (!unmatched.length) {
+          for (const [key, files] of inventory) {
+            for (const file of files.filter(namedLikeTarget)) {
+              if (included.some(m => m.file === file)) continue;
               excludedTests.push({
                 module: JSON.parse(key)[0],
                 kind: JSON.parse(key)[1],
                 filePath: relative(file, root),
                 reason: "no-proven-original-interface-link",
-                target: identity,
+                target: identities[0],
+                ...(identities.length > 1 ? { targets: identities } : {}),
               });
-        continue;
+            }
+          }
+          continue;
+        }
       }
-      if (identity)
+      for (const identity of unmatched)
         selectionWarnings.push({
           target: identity,
           reason:
             "no-positive-interface-match; retaining conservative file/module fallback, including device tests",
         });
       for (const [key, files] of inventory) {
-        const selected = files.filter((p) =>
-          [stem + ".test", stem + "Test.test"].includes(
-            path.basename(p, path.extname(p)),
-          ),
-        );
+        const selected = files.filter(namedLikeTarget);
         if (!selected.length) continue;
         found = true;
         const set = matches.get(key) ?? new Set<string>();
@@ -402,6 +404,7 @@ export function buildTestPlan(
               "suite-name-collision: Hvigor scope executes every registered suite with this name",
             files: runnableFiles.map((f) => relative(f, root)),
           });
+        const evidence = selectionEvidence.filter(e => e.key === key && e.suite === scope);
         jobs.push({
           kind,
           task: TEST_KINDS[kind][1],
@@ -411,8 +414,8 @@ export function buildTestPlan(
           expectedSuites: scope ? [scope] : suites,
           testFiles: runnableFiles.map((p) => relative(p, root)),
           reason:
-            specific && selected.some((file) => selectedScopes.has(file))
-              ? "original-interface-call"
+            specific && evidence.length
+              ? (evidence.every(e => e.evidence === "declared-device-case") ? "declared-device-case" : "original-interface-call")
               : specific
                 ? "target-named-suite"
                 : "module-fallback-all-available-kinds",

@@ -29,6 +29,7 @@ import {
 } from "./workspace.js";
 import { buildTestPlan, freezeTestPlan } from "./test_plan.js";
 import { resultEvidence, runTestPlan } from "./test_execution.js";
+import { writeTestState } from "./test_progress.js";
 import {
   comparePublicContract,
   snapshotPublicContract,
@@ -38,6 +39,9 @@ import {
   renderRuntimeSmokeTest,
 } from "./runtime_smoke.js";
 import { smellGate } from "./smell.js";
+import { runAgent } from "./agent_runtime.js";
+import { prepareReviewPrompt } from "./review_packet.js";
+import { prepareRepairContext } from "./repair_context.js";
 import { bundledDevecoCli } from "./deveco_cli.js";
 import { parseDevecoLintReport } from "./linter_report.js";
 import { moduleBuildPlan, restoreBuildBaseline } from "./build_validation.js";
@@ -73,6 +77,7 @@ export async function refactorGate(
   deveco: string,
   promptFile?: string,
   model?: string,
+  variant?: string,
 ): Promise<number> {
   const raw = readJson(path.join(taskDir, "task.json")),
     task = taskFromJson(raw),
@@ -89,42 +94,26 @@ export async function refactorGate(
   }
   freezeTestPlan(taskDir, source);
   freshCopy(source, workspace, true);
-  const prompt = normalizeAgentPromptPaths(
+  const basePrompt = normalizeAgentPromptPaths(
     readText(promptFile ?? path.join(taskDir, "refactor-prompt.md")),
     raw,
     source,
   );
-  writeText(path.join(taskDir, "refactor-agent-prompt.md"), prompt);
+  const evidence = promptFile ? prepareRepairContext(taskDir, workspace, path.basename(promptFile, path.extname(promptFile))) : null;
   // DevEco attachments must live within --dir; the audit copy remains in taskDir.
   const attachment = path.join(
     workspace,
     ".arkts-refactor-prompt-" + stamp() + ".md",
   );
-  writeText(attachment, prompt);
-  const command = [
-    deveco,
-    "run",
-    ...(model ? ["-m", model] : []),
-    "严格执行附件中的 ArkTS 重构任务，直接修改工作区内的生产代码。",
-    "-f",
-    attachment,
-    "--dir",
-    workspace,
-    "--format",
-    "json",
-    "--title",
-    task.task_id,
-    "--auto",
-  ];
   try {
-    const result = await runCommand(command, { cwd: workspace, stream: true });
-    if (result.error) {
-      console.error(result.error);
-      return 3;
-    }
-    if (result.code !== 0) return result.code ?? 3;
+    const prompt = basePrompt + (evidence?.prompt ?? "");
+    writeText(path.join(taskDir, promptFile ? path.basename(promptFile, path.extname(promptFile)) + "-agent-prompt.md" : "refactor-agent-prompt.md"), prompt);
+    writeText(attachment, prompt);
+    const code = await runAgent(deveco, taskDir, workspace, attachment, { role: promptFile ? "repair" : "refactor", model, variant, title: task.task_id });
+    if (code !== 0) return code;
   } finally {
     fs.rmSync(attachment, { force: true });
+    evidence?.dispose();
   }
   return syncProductionChanges(workspace, source);
 }
@@ -377,7 +366,7 @@ export async function hvigorGate(
 ): Promise<number> {
   let plan: Json | null = null;
   if (["auto-test", "test", "onDeviceTest"].includes(taskName)) {
-    writeJson(path.join(taskDir, "test-results.json"), {
+    writeTestState(path.join(taskDir, "test-results.json"), {
       status: "RUNNING",
       jobs: [],
     });
@@ -388,7 +377,7 @@ export async function hvigorGate(
       console.error(
         "TEST_GATE_BLOCKED: cannot determine test plan: " + String(e),
       );
-      writeJson(path.join(taskDir, "test-results.json"), {
+      writeTestState(path.join(taskDir, "test-results.json"), {
         status: "BLOCKED",
         reason: String(e),
         jobs: [],
@@ -421,7 +410,7 @@ export async function hvigorGate(
   if (!signing.ready) {
     console.error("SIGNING_GATE_BLOCKED: " + signing.report.reason);
     if (plan)
-      writeJson(path.join(taskDir, "test-results.json"), {
+      writeTestState(path.join(taskDir, "test-results.json"), {
         status: "BLOCKED",
         classification: "SIGNING_UNAVAILABLE",
         reason: signing.report.reason,
@@ -806,6 +795,7 @@ export async function gateMain(args: string[]): Promise<number> {
   const command = args[0],
     options: Record<string, string> = {};
   for (let i = 1; i < args.length; i += 2) {
+    if (args[i] === "--format-only") { options["format-only"] = "true"; i--; continue; }
     if (!args[i].startsWith("--") || args[i + 1] === undefined)
       throw new Error("无效门禁参数");
     options[args[i].slice(2)] = args[i + 1];
@@ -815,6 +805,21 @@ export async function gateMain(args: string[]): Promise<number> {
       return options[key];
     },
     taskDir = path.resolve(required("task-dir"));
+  if (command === "review") {
+    const formatOnly = options["format-only"] === "true";
+    let prompt = path.resolve(required("prompt-file"));
+    if (!formatOnly) {
+      try { prompt = prepareReviewPrompt(taskDir, prompt); }
+      catch (error) {
+        console.log(JSON.stringify({ type: "error", error: { name: "ReviewPacketError", data: { message: `REVIEW_PACKET_BLOCKED: ${String(error)}` } } }));
+        return 3;
+      }
+    }
+    return runAgent(required("deveco"), taskDir, taskDir, prompt, {
+      role: formatOnly ? "review-format" : "review", model: options.model, variant: options.variant,
+      formatOnly, promptViaStdin: !formatOnly,
+    });
+  }
   if (command === "smell")
     return smellGate(
       taskDir,
@@ -829,6 +834,7 @@ export async function gateMain(args: string[]): Promise<number> {
       required("deveco"),
       options["prompt-file"],
       options.model,
+      options.variant,
     );
   if (command === "build")
     return devecoBuildGate(taskDir, source, required("deveco"));

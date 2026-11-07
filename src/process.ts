@@ -2,6 +2,7 @@ import spawn from "cross-spawn";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { createInterface } from "node:readline";
 export interface ProcessOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -9,6 +10,9 @@ export interface ProcessOptions {
   timeoutSeconds?: number;
   stream?: boolean;
   onOutput?: (text: string) => void;
+  onStdoutLine?: (line: string) => void;
+  onStderrLine?: (line: string) => void;
+  input?: string;
 }
 export interface ProcessOutput {
   code: number | null;
@@ -95,7 +99,7 @@ export async function runCommand(
           env: options.env ?? process.env,
           windowsHide: true,
           detached: process.platform !== "win32",
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         })
       : spawn(command, [], {
           cwd: options.cwd,
@@ -103,7 +107,7 @@ export async function runCommand(
           windowsHide: true,
           detached: process.platform !== "win32",
           shell: true,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         });
     activeChildren.add(child);
     // StringDecoder avoids splitting a multi-byte Chinese character between chunks.
@@ -116,6 +120,10 @@ export async function runCommand(
     };
     child.stdout?.on("data", collectText);
     child.stderr?.on("data", collectText);
+    if (options.onStdoutLine && child.stdout)
+      createInterface({ input: child.stdout, crlfDelay: Infinity }).on("line", options.onStdoutLine);
+    if (options.onStderrLine && child.stderr)
+      createInterface({ input: child.stderr, crlfDelay: Infinity }).on("line", options.onStderrLine);
     let hardStop: NodeJS.Timeout | undefined;
     const kill = () => {
       terminateTree(child);
@@ -154,6 +162,12 @@ export async function runCommand(
       finish(null);
     });
     child.on("close", finish);
+    if (options.input !== undefined) {
+      child.stdin?.on("error", (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EPIPE") error = e.message;
+      });
+      child.stdin?.end(options.input, "utf8");
+    }
   });
 }
 export const displayCommand = (command: string[] | string) =>

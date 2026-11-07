@@ -10,7 +10,7 @@ import {
   agentErrorOutput,
 } from "../src/runner.js";
 import { taskFromJson } from "../src/models.js";
-import { readJson, writeJson, writeText, now } from "../src/utils.js";
+import { readJson, readText, writeJson, writeText, now } from "../src/utils.js";
 import { fixture, setupTask, goodConfig, spec } from "./helpers.js";
 
 test("构建失败分析以同轮基线证据为准，警告里提及变更文件不等于引入失败", (t) => {
@@ -152,6 +152,95 @@ test("语义 Review 失败进入定向修复，随后重新验证通过", async 
   );
   assert(fs.existsSync(path.join(dir, "repair-prompt-1.md")));
 });
+
+test("格式修复后的语义 FAIL 保留问题并进入代码返修", async (t) => {
+  const dir = setupTask(fixture(t)), c = goodConfig();
+  const review = JSON.stringify({
+    verdict: "FAIL", summary: 'guard "changed"',
+    issues: [{ severity: "blocking", filePath: "entry/src/main/ets/Page.ets", reason: "lost guard", requiredFix: "Restore guard" }],
+  });
+  const malformed = review.replaceAll('\\"', '"');
+  c.reviewAgent = spec(
+    `console.log(require('node:fs').existsSync('repaired') ? '{"verdict":"PASS","issues":[]}' : ${JSON.stringify(malformed)})`,
+    { cwd: "{task_dir}" },
+  );
+  c.reviewFormatAgent = spec(`console.log(${JSON.stringify(review)})`);
+  c.repairAgent = spec("require('node:fs').writeFileSync('repaired','yes')", { cwd: "{task_dir}" });
+  const result = await executePipeline(dir, c);
+  assert.equal(result.verdict, "PASS");
+  assert.equal(result.repairAttempts, 1);
+  assert.equal(result.reviewFormatRetries, 1);
+  const failure = readJson(path.join(dir, "failure-report-1.json"));
+  assert.equal(failure.stage, "review-agent");
+  assert.equal(failure.classification, "SEMANTIC_REVIEW_FAILURE");
+  assert.equal(failure.repairable, true);
+  assert.equal(failure.issues[0].reason, "lost guard");
+  assert.equal(failure.issues[0].requiredFix, "Restore guard");
+  assert.match(readText(path.join(dir, "repair-prompt-1.md")), /Restore guard/);
+});
+
+test("格式修复识别正确的返修和环境重试评审轮次", (t) => {
+  const dir = setupTask(fixture(t)), task = taskFromJson(readJson(path.join(dir, "task.json")));
+  for (const suffix of ["", "-retry-1", "-repair-1", "-repair-2-retry-1"]) {
+    const summary = "current round " + suffix;
+    writeJson(path.join(dir, `review${suffix}.json`), {
+      verdict: "FAIL", summary, issues: [{ reason: summary }],
+    });
+    // A leftover format file must never replace the accepted review for this round.
+    writeJson(path.join(dir, `review${suffix}-format.json`), { summary: "stale", issues: [] });
+    const failure = buildFailureReport(dir, task, {
+      name: `review-agent${suffix}-format`, status: "FAIL", duration_seconds: 0,
+    }, 3);
+    assert.equal(failure.stage, "review-agent");
+    assert.equal(failure.repairable, true);
+    assert.equal(failure.summary, summary);
+    assert.equal(failure.issues[0].reason, summary);
+  }
+});
+
+test("格式修复通过不重跑门禁，改写评审内容时仍阻塞", async (t) => {
+  const review = JSON.stringify({
+    verdict: "PASS", summary: 'verified "result"', smellRemoved: true,
+    behaviorEquivalent: true, riskChecks: [], issues: [],
+  });
+  for (const changed of [false, true]) {
+    const dir = setupTask(fixture(t)), c = goodConfig();
+    c.gates!.smell = spec("require('node:fs').appendFileSync('gate-count','x')", { cwd: "{task_dir}" });
+    c.reviewAgent = spec(`console.log(${JSON.stringify(review.replaceAll('\\"', '"'))})`);
+    c.reviewFormatAgent = spec(`console.log(${JSON.stringify(changed ? review.replace("verified", "invented") : review)})`);
+    c.repairAgent = spec("require('node:fs').writeFileSync('unexpected-repair','x')", { cwd: "{task_dir}" });
+    const result = await executePipeline(dir, c);
+    assert.equal(result.verdict, changed ? "BLOCKED" : "PASS");
+    assert.equal(result.reviewFormatRetries, 1);
+    assert.equal(result.repairAttempts, 0);
+    assert.equal(readText(path.join(dir, "gate-count")), "x");
+    assert(!fs.existsSync(path.join(dir, "unexpected-repair")));
+  }
+});
+
+test("前置说明加唯一 PASS JSON 直接收尾，不调用格式修复、返修或重复门禁", async (t) => {
+  const dir = setupTask(fixture(t)), config = goodConfig();
+  const review = {verdict:"PASS",summary:"两处克隆均已处理",smellRemoved:true,behaviorEquivalent:true,
+    riskChecks:[{riskCode:"REACTIVE_STATE",status:"passed",evidence:"原状态读取位置保留"}],issues:[]};
+  const response = "核对完成。裁剪顺序保留 [高→宽上限] 与 [日志]。\n\n" + JSON.stringify(review);
+  const events = [
+    {type:"text",sessionID:"s",part:{type:"text",messageID:"old",text:'{"verdict":"FAIL"}'}},
+    {type:"text",sessionID:"s",part:{type:"text",messageID:"final",text:response}},
+    {type:"step_finish",sessionID:"s",part:{type:"step-finish",messageID:"final",reason:"stop"}},
+  ];
+  config.reviewAgent = spec(`console.log(${JSON.stringify(events.map(e=>JSON.stringify(e)).join("\n"))})`);
+  const unexpected = spec("require('node:fs').writeFileSync('unexpected-call','x'); process.exit(1)", {cwd:"{task_dir}"});
+  config.reviewFormatAgent = unexpected;
+  config.repairAgent = unexpected;
+  config.gates!.smell = spec("require('node:fs').appendFileSync('gate-count','x')", {cwd:"{task_dir}"});
+  const result = await executePipeline(dir, config);
+  assert.equal(result.verdict,"PASS");
+  assert.equal(result.reviewFormatRetries,0);
+  assert.equal(result.repairAttempts,0);
+  assert.deepEqual(readJson(path.join(dir,"review.json")),review);
+  assert.equal(readText(path.join(dir,"gate-count")),"x");
+  assert(!fs.existsSync(path.join(dir,"unexpected-call")));
+});
 test("异味持续失败最多三轮修复，修复基于已有修改继续", async (t) => {
   const dir = setupTask(fixture(t)),
     c = goodConfig();
@@ -237,6 +326,7 @@ test("解析多行 JSON 和 JSONL 内嵌中文评审", (t) => {
       JSON.stringify({
         type: "text",
         part: {
+          type: "text",
           text: JSON.stringify(
             { verdict: "PASS", summary: "语义一致" },
             null,

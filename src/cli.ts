@@ -14,6 +14,7 @@ import { loadDatasetTasks } from "./dataset.js";
 import { executePipeline, loadConfig } from "./runner.js";
 import { isDir, isFile, readJson, writeJson } from "./utils.js";
 import { installCancellationHandlers } from "./process.js";
+import { resolveSelection } from "./agent_runtime.js";
 import { bundledDevecoCli } from "./deveco_cli.js";
 export const userConfigPath = () =>
   path.join(
@@ -57,6 +58,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         index: { type: "string" },
         "task-dir": { type: "string" },
         config: { type: "string" },
+        "refactor-model": { type: "string" },
+        "refactor-variant": { type: "string" },
+        "review-model": { type: "string" },
+        "review-variant": { type: "string" },
         "dry-run": { type: "boolean" },
         "linter-mode": { type: "string", default: "required" },
       },
@@ -160,6 +165,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         mode,
         values["dry-run"] ?? false,
         batch.metadata,
+        resolveSelection({ refactor: { model: values["refactor-model"], variant: values["refactor-variant"] }, review: { model: values["review-model"], variant: values["review-variant"] } }),
       );
       return final.dryRun ||
         final.tasks.every((t: { verdict: string }) => t.verdict === "PASS")
@@ -170,6 +176,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       base,
       defaultWorkspace(values.workspace),
       mode,
+      resolveSelection({ refactor: { model: values["refactor-model"], variant: values["refactor-variant"] }, review: { model: values["review-model"], variant: values["review-variant"] } }),
     );
     return final.tasks.every((t: { verdict: string }) => t.verdict === "PASS")
       ? 0

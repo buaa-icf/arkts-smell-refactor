@@ -38,10 +38,12 @@ v/
 .workspace-links/
 
 # Local experiment helpers and reports
+/docs/
 reports/
-tools/run_code_clone_series.ps1
-tools/run_long_method_series.ps1
-tools/task_source_rollback.ps1
+/tools/*.ps1
+/.codex_tmp/
+# Local boundary test for the untracked helpers; it still stubs the old Python entry.
+/tests/test_experiment_scripts.py
 
 # Editors and operating systems
 .idea/

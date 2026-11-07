@@ -145,7 +145,7 @@ test("真实 Agent 启动协议：附件位于隔离工作区，隐藏测试，�
   writeText(path.join(p.taskDir, "refactor-prompt.md"), "生产重构提示词");
   writeText(
     script,
-    `const fs=require('node:fs'),path=require('node:path');const a=process.argv.slice(2),attachment=a[a.indexOf('-f')+1],dir=a[a.indexOf('--dir')+1];if(path.dirname(attachment)!==dir||fs.existsSync('feature/src/test/Hidden.test.ets'))throw Error('invalid isolation');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:a,prompt:fs.readFileSync(attachment,'utf8')}));fs.writeFileSync('feature/src/main/ets/Page.ets','export class Page { work() { return 9; } }');`,
+    `const fs=require('node:fs'),path=require('node:path');const a=process.argv.slice(2),attachment=a[a.indexOf('-f')+1],dir=a[a.indexOf('--dir')+1],config=JSON.parse(process.env.DEVECO_CONFIG_CONTENT);if(path.dirname(attachment)!==dir||fs.existsSync('feature/src/test/Hidden.test.ets'))throw Error('invalid isolation');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:a,prompt:fs.readFileSync(attachment,'utf8'),tools:config.tools}));fs.writeFileSync('feature/src/main/ets/Page.ets','export class Page { work() { return 9; } }');`,
   );
   const launcher = path.join(
     root,
@@ -169,6 +169,12 @@ test("真实 Agent 启动协议：附件位于隔离工作区，隐藏测试，�
     0,
   );
   const captured = readJson(capture);
+  assert.equal(captured.tools.build_project, true);
+  assert.equal(captured.tools.arkts_check, true);
+  assert.equal(captured.tools.skill, false);
+  assert.equal(readJson(path.join(p.taskDir, "refactor-execution-policy.json")).validationOwner, "agent-and-platform");
+  assert(captured.args.includes("--auto"));
+  assert(!captured.args.includes("--dangerously-skip-permissions"));
   assert(captured.args.includes("provider/model"));
   assert(captured.args.includes("--auto"));
   assert(!captured.args.includes("--dangerously-skip-permissions"));

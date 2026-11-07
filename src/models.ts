@@ -55,6 +55,8 @@ export interface Config {
   refactorAgent?: CommandSpec | null;
   repairAgent?: CommandSpec | null;
   reviewAgent?: CommandSpec | null;
+  reviewFormatAgent?: CommandSpec | null;
+  agentPolicy?: Json;
   gates?: Record<string, CommandSpec>;
 }
 export const RULE_TYPES: Record<string, string> = {

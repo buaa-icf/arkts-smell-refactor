@@ -47,6 +47,21 @@ export function matching(
 }
 export const lineAt = (source: string, offset: number) =>
   source.slice(0, offset).split("\n").length;
+/** Split a known call's arguments by masked punctuation, preserving string slots.
+ * Generic type arguments are outside this bounded lexical helper's scope. */
+export function callArguments(source: string, open: number, end: number): string[] {
+  const code = mask(source), args: string[] = [];
+  let start = open + 1, depth = 0;
+  for (let i = start; i <= end; i++) {
+    if (i === end || (code[i] === "," && !depth)) {
+      const value = mask(source.slice(start, i), false).trim();
+      if (value || i !== end) args.push(value);
+      start = i + 1;
+    } else if ("([{".includes(code[i])) depth++;
+    else if (")]}".includes(code[i])) depth--;
+  }
+  return args;
+}
 export function symbolRegion(
   source: string,
   symbol: string | null,
