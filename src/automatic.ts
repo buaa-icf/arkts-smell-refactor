@@ -91,7 +91,6 @@ export function discoverTools(
     deveco: which("deveco"),
     hvigorw: which("hvigorw"),
     ohpm: which("ohpm"),
-    codelinter: which("codelinter"),
     homecheck: findHomecheck(workspace),
   };
 }
@@ -190,14 +189,14 @@ export function autoConfig(
               }
             : missing("Harmony 工程根目录"),
       build:
-        tools.hvigorw && root
+        tools.deveco && root
           ? {
-              command: hvigor("assembleHap"),
+              command: command("build", "--deveco", tools.deveco),
               cwd: "{task_dir}",
               blockedOutputRegex: environment + "|GATE_BLOCKED",
               timeoutSeconds: 3600,
             }
-          : missing("hvigorw 或 Harmony 工程根目录"),
+          : missing("DevEco Code 或 Harmony 工程根目录"),
       test:
         tools.hvigorw && root
           ? {
@@ -213,19 +212,19 @@ export function autoConfig(
       linter:
         mode === "skip"
           ? { enabled: false, reason: "按 linterMode=skip 跳过" }
-          : tools.codelinter && root
+          : tools.deveco && root
             ? {
                 command: command(
                   "linter",
-                  "--codelinter",
-                  tools.codelinter,
+                  "--deveco",
+                  tools.deveco,
                   ...(linterConfig ? ["--config", linterConfig] : []),
                 ),
                 cwd: "{task_dir}",
                 blockedOutputRegex: "GATE_BLOCKED",
                 timeoutSeconds: 1200,
               }
-            : missing("codelinter 或 Harmony 工程根目录"),
+            : missing("DevEco Code 或 Harmony 工程根目录"),
     };
   if (contract.enabled && root)
     gates.contract = {
@@ -386,6 +385,7 @@ export async function runTasks(
         .map(([k, v]) => `${k}=${v ? "已找到" : "未找到"}`)
         .join("，"),
   );
+  console.log("构建/Linter 入口：DevEco Code 自带 CLI");
   console.log("Linter 模式：" + mode);
   for (const [i, task] of tasks.entries()) {
     const taskStarted = now(),

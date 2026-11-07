@@ -47,7 +47,7 @@
         "--source-root",
         "{harmony_root}",
         "--homecheck-root",
-        "REPLACE_WITH_HOMECHECK_ROOT"
+        "{backend_root}/node_modules/@arkts-refactor/homecheck-runtime"
       ],
       "cwd": "{task_dir}",
       "blockedOutputRegex": "SMELL_GATE_BLOCKED|GATE_BLOCKED"
@@ -56,17 +56,13 @@
       "command": [
         "node",
         "{backend_root}/dist/gate.js",
-        "hvigor",
+        "build",
         "--task-dir",
         "{task_dir}",
         "--source-root",
         "{harmony_root}",
-        "--hvigorw",
-        "hvigorw",
-        "--ohpm",
-        "ohpm",
-        "--task",
-        "assembleHap"
+        "--deveco",
+        "deveco"
       ],
       "cwd": "{task_dir}",
       "blockedOutputRegex": "GATE_BLOCKED|Invalid storeFile value|Failed[^\\r\\n]*@SignHap|certificate|no devices"
@@ -99,8 +95,8 @@
         "{task_dir}",
         "--source-root",
         "{harmony_root}",
-        "--codelinter",
-        "codelinter"
+        "--deveco",
+        "deveco"
       ],
       "cwd": "{task_dir}",
       "blockedOutputRegex": "GATE_BLOCKED"

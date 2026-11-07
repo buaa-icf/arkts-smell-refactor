@@ -691,7 +691,7 @@
       },
       "raw": {}
     },
-    "source": "\nclass Painter {\n  private draw(path: CanvasPath): void {\n    path.moveTo(0, 0)\n    path.lineTo(10, 10)\n    path.close()\n  }\n}\n",
+    "source": "import { Path as CanvasPath } from '@ohos.graphics2d';\nclass Painter {\n  private draw(path: CanvasPath): void {\n    path.moveTo(0, 0)\n    path.lineTo(10, 10)\n    path.close()\n  }\n}\n",
     "declaration": {
       "visibility": "private",
       "exported": false

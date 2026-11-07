@@ -11,7 +11,7 @@ import {
   unique,
   parents,
 } from "./utils.js";
-import { ownerAtLine, rangeText } from "./analysis/source.js";
+import { ownerAtLine, rangeText, symbolRegion } from "./analysis/source.js";
 import {
   analyzeFeatureEnvy,
   featureEnvyConstraints,
@@ -196,11 +196,22 @@ export function analyzeRisks(task: RefactorTask): Json {
       analysisLimitations: analysis.analysisLimitations ?? [],
     };
   }
-  const symbol = task.target.symbol,
+  const selected =
+      task.smell_type === "feature-envy"
+        ? symbolRegion(source, task.target.symbol, {
+            line: task.target.range.start_line,
+          })
+        : null,
+    declarationSource = selected
+      ? selected.located
+        ? selected.text
+        : ""
+      : source,
+    symbol = task.target.symbol,
     m = symbol
       ? new RegExp(
           `((?:export\\s+)?(?:public\\s+|private\\s+|protected\\s+)?(?:static\\s+)?)\\b${escapeRe(symbol.split(".").at(-1)!)}\\s*\\(`,
-        ).exec(source)
+        ).exec(declarationSource)
       : null,
     prefix = m?.[1] ?? "";
   const declaration = {
@@ -218,17 +229,22 @@ export function analyzeRisks(task: RefactorTask): Json {
   const owner = ownerAtLine(
       source,
       m
-        ? source.slice(0, m.index).split("\n").length + 1
+        ? source.slice(0, (selected?.start ?? 0) + m.index).split("\n").length +
+            1
         : source.split("\n").length + 1,
       path.basename(file, path.extname(file)),
     ),
     callers = findCallers(task, source, owner),
     reactive = reactiveNames(source),
-    region = rangeText(
-      source,
-      task.target.range.start_line,
-      task.target.range.end_line,
-    ),
+    region = selected
+      ? selected.located
+        ? selected.text
+        : ""
+      : rangeText(
+          source,
+          task.target.range.start_line,
+          task.target.range.end_line,
+        ),
     reads = reactive
       .filter((n) => new RegExp(`\\bthis\\.${escapeRe(n)}\\b`).test(region))
       .sort();

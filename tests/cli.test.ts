@@ -8,6 +8,16 @@ import { runCommand } from "../src/process.js";
 import { fixture, goodConfig } from "./helpers.js";
 import { readJson, writeJson, writeText } from "../src/utils.js";
 const cli = path.resolve("dist/cli.js");
+
+test("doctor 不显示 HomeCheck，也不要求独立 codelinter 命令", async (t) => {
+  const root = fixture(t);
+  const result = await runCommand(
+    [process.execPath, cli, "doctor", "--workspace", root],
+    { cwd: root, env: { ...process.env, PATH: "" } },
+  );
+  assert(!/homecheck|codelinter/i.test(result.output));
+  assert(result.output.includes("DevEco CLI（构建/Linter）"));
+});
 test("交互粘贴完整对象自动结束，无需 EOF", async () => {
   const input = new PassThrough(),
     pending = readPastedJson(input);

@@ -183,16 +183,16 @@ test("bridge retains clone counterpart hash and marks test counterparts read-onl
   assert.equal(issue.relatedTargets[0].filePath, other);
   assert.equal(issue.relatedTargets[0].sourceSha256, hash(other));
 });
-test("bridge required/skip policy changes only linter requirement", (t) => {
+test("bridge 不再要求独立 Linter 路径，skip 不改变其他环境要求", (t) => {
   const f = setup(t),
     config = { ...f.config, linter: path.join(f.base, "missing.exe") };
   assert.equal(inspectEnvironment(config).canDetect, true);
-  assert.equal(inspectEnvironment(config).canRefactor, false);
+  assert.equal(inspectEnvironment(config).canRefactor, true);
   const skipped = inspectEnvironment({ ...config, linterMode: "skip" });
   assert.equal(skipped.canRefactor, true);
   assert.equal(
-    skipped.tools.find((r: Json) => r.name === "codelinter").required,
-    false,
+    skipped.tools.find((r: Json) => r.name === "codelinter"),
+    undefined,
   );
   assert.notEqual(
     skipped.tools.find((r: Json) => r.name === "HomeCheck").path,

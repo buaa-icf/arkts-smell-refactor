@@ -15,6 +15,7 @@ import { executePipeline, loadConfig } from "./runner.js";
 import { isDir, isFile, readJson, writeJson } from "./utils.js";
 import { installCancellationHandlers } from "./process.js";
 import { resolveSelection } from "./agent_runtime.js";
+import { bundledDevecoCli } from "./deveco_cli.js";
 export const userConfigPath = () =>
   path.join(
     process.platform === "win32" && process.env.APPDATA
@@ -92,9 +93,25 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     console.log("工作区：" + workspace);
     const tools = discoverTools(workspace);
-    for (const [k, v] of Object.entries(tools))
-      console.log(`${k}：${v ?? "未找到"}`);
-    return isDir(workspace) && Object.values(tools).every(Boolean) ? 0 : 2;
+    for (const [k, v] of Object.entries(tools).filter(
+      ([name]) => name !== "homecheck",
+    ))
+      console.log(
+        `${k}${k === "hvigorw" || k === "ohpm" ? "（测试使用，非 build 入口）" : ""}：${v ?? "未找到"}`,
+      );
+    const build = bundledDevecoCli(tools.deveco);
+    const nodeForBuild = Number(process.versions.node.split(".")[0]) >= 22;
+    if (!nodeForBuild) console.log("官方构建 CLI 要求 Node.js 22 或更高版本");
+    console.log(
+      `DevEco CLI（构建/Linter）：${build ? "可用，版本 " + build.version : "未找到当前 DevEco Code 自带的完整 CLI"}`,
+    );
+    if (!tools.homecheck) console.error("内置检测依赖缺失，请运行 npm ci");
+    return isDir(workspace) &&
+      nodeForBuild &&
+      !!build &&
+      Object.values(tools).every(Boolean)
+      ? 0
+      : 2;
   }
   if (command === "prepare") {
     const index = values.index === undefined ? undefined : Number(values.index);

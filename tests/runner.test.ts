@@ -12,6 +12,70 @@ import {
 import { taskFromJson } from "../src/models.js";
 import { readJson, readText, writeJson, writeText, now } from "../src/utils.js";
 import { fixture, setupTask, goodConfig, spec } from "./helpers.js";
+
+test("构建失败分析以同轮基线证据为准，警告里提及变更文件不等于引入失败", (t) => {
+  const dir = setupTask(fixture(t)),
+    log = path.join(dir, "build.log"),
+    task = taskFromJson(readJson(path.join(dir, "task.json")));
+  writeJson(path.join(dir, "refactor-changes.json"), {
+    changedProductionFiles: [task.target.file_path],
+  });
+  writeText(
+    log,
+    `WARN File: ${task.target.file_path}:1\nGeneratePackRes: widget_1-2x2.png invalid`,
+  );
+  const failed = {
+    name: "build",
+    status: "FAIL" as const,
+    duration_seconds: 1,
+    output_file: log,
+  };
+  writeJson(path.join(dir, "build-evidence.json"), {
+    engine: "devecocli",
+    runId: "a",
+    status: "BLOCKED",
+    classification: "BASELINE_BUILD_FAILURE",
+    baseline: { status: "FAIL", runId: "a" },
+  });
+  assert.equal(buildFailureReport(dir, task, failed, 1).repairable, false);
+  writeJson(path.join(dir, "build-evidence.json"), {
+    engine: "devecocli",
+    runId: "b",
+    status: "FAIL",
+    classification: "INTRODUCED_BUILD_FAILURE",
+    baseline: { status: "PASS", runId: "b" },
+  });
+  assert.equal(buildFailureReport(dir, task, failed, 1).repairable, true);
+  writeJson(path.join(dir, "build-evidence.json"), {
+    engine: "devecocli",
+    runId: "b",
+    status: "FAIL",
+    classification: "INTRODUCED_BUILD_FAILURE",
+    baseline: { status: "PASS", runId: "old" },
+  });
+  assert.equal(buildFailureReport(dir, task, failed, 1).repairable, false);
+});
+
+test("既有构建失败记 BLOCKED 并保存基线归因，不进入修复 Loop", async (t) => {
+  const dir = setupTask(fixture(t)),
+    config = goodConfig();
+  config.gates!.build = spec(
+    `require('node:fs').writeFileSync(${JSON.stringify(path.join(dir, "build-evidence.json"))},JSON.stringify({engine:'devecocli',status:'BLOCKED',classification:'BASELINE_BUILD_FAILURE',reason:'baseline failed'}));console.error('BUILD_GATE_BLOCKED: baseline failed');process.exit(3);`,
+    { blockedOutputRegex: "GATE_BLOCKED" },
+  );
+  config.repairAgent = spec("throw Error('must not run repair');");
+  const result = await executePipeline(dir, config);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.repairAttempts, 0);
+  assert.equal(
+    readJson(path.join(dir, "failure-report.json")).classification,
+    "BASELINE_BUILD_FAILURE",
+  );
+  assert.equal(
+    readJson(path.join(dir, "failure-report.json")).repairable,
+    false,
+  );
+});
 test("Dry Run 渲染六个步骤且不运行不存在的命令", async (t) => {
   const dir = setupTask(fixture(t)),
     config = goodConfig();

@@ -7,10 +7,12 @@ import type { Json } from "./models.js";
 import { taskFromJson, targetPath } from "./models.js";
 import {
   copyTree,
+  copyFile,
   escapeRe,
   isDir,
   isFile,
   readJson,
+  readJson5,
   readText,
   relative,
   removeGenerated,
@@ -40,6 +42,9 @@ import { smellGate } from "./smell.js";
 import { runAgent } from "./agent_runtime.js";
 import { prepareReviewPrompt } from "./review_packet.js";
 import { prepareRepairContext } from "./repair_context.js";
+import { bundledDevecoCli } from "./deveco_cli.js";
+import { parseDevecoLintReport } from "./linter_report.js";
+import { moduleBuildPlan, restoreBuildBaseline } from "./build_validation.js";
 import {
   prepareSigning,
   saveSigningReport,
@@ -133,6 +138,224 @@ export function devecoEnvironment(hvigor: string): NodeJS.ProcessEnv {
   }
   return env;
 }
+
+export function validationWorkspace(taskDir: string, source: string): string {
+  const toolRoot = path.resolve(fileURLToPath(import.meta.url), "../.."),
+    short = crypto.createHash("sha1").update(taskDir).digest("hex").slice(0, 8),
+    workspace = path.join(toolRoot, "v", short);
+  ensureValidationModuleScope(path.dirname(workspace));
+  writeJson(path.join(taskDir, "validation-workspace.json"), {
+    path: workspace,
+    sourceRoot: source,
+  });
+  if (!isDir(workspace)) freshCopy(source, workspace, false);
+  else copyTree(source, workspace, false);
+  return workspace;
+}
+
+export async function devecoBuildGate(
+  taskDir: string,
+  source: string,
+  deveco: string,
+): Promise<number> {
+  const evidenceFile = path.join(taskDir, "build-evidence.json"),
+    runId = stamp();
+  writeJson(evidenceFile, { engine: "devecocli", status: "RUNNING", runId });
+  writeJson(path.join(taskDir, "build-baseline-evidence.json"), {
+    status: "NOT_RUN",
+    runId,
+  });
+  const blocked = (reason: string, extra: Json = {}) => {
+    console.error("BUILD_GATE_BLOCKED: " + reason);
+    writeJson(evidenceFile, {
+      engine: "devecocli",
+      runId,
+      status: "BLOCKED",
+      reason,
+      ...extra,
+    });
+    return 3;
+  };
+  if (Number(process.versions.node.split(".")[0]) < 22)
+    return blocked("官方 DevEco CLI 构建要求 Node.js 22 或更高版本");
+  const cli = bundledDevecoCli(deveco);
+  if (!cli)
+    return blocked(
+      "当前 DevEco Code 的官方 CLI/平台实现包缺失；使用 Node 22+ 修复该 DevEco Code 安装并包含 optional 依赖，不回退搜索 hvigorw PATH",
+    );
+  let scope: Json;
+  try {
+    const manifest = isFile(path.join(taskDir, "refactor-changes.json"))
+      ? readJson(path.join(taskDir, "refactor-changes.json"))
+      : {};
+    scope = moduleBuildPlan(source, [
+      ...(manifest.changedProductionFiles ?? []),
+      ...(manifest.changedProductionResources ?? []).map((r: string | Json) =>
+        typeof r === "string" ? r : r.filePath,
+      ),
+    ]);
+  } catch (e) {
+    return blocked("无法读取构建 profile：" + String(e));
+  }
+  const workspace = validationWorkspace(taskDir, source),
+    raw = isFile(path.join(taskDir, "task.json"))
+      ? readJson(path.join(taskDir, "task.json"))
+      : {},
+    signingOptions = {
+      taskDir,
+      source,
+      workspace,
+      stage: "build" as const,
+      required: raw.raw?.testKind === "instrument-test",
+      workspaceRoot: raw.workspace_root ?? raw.workspaceRoot,
+    },
+    signing = await prepareSigning(signingOptions);
+  console.log(
+    `SIGNING_PREPARATION status=${signing.report.status} required=${signingOptions.required}`,
+  );
+  if (!signing.ready) return blocked(signing.report.reason);
+  const command = [process.execPath, cli.entry, ...scope.args];
+  console.log(
+    `BUILD_ENGINE devecocli version=${cli.version}; cwd=${workspace}`,
+  );
+  const run = await runCommand(command, { cwd: workspace });
+  writeText(
+    path.join(taskDir, "devecocli-build.log"),
+    signing.redact(run.output),
+  );
+  console.log(signing.redact(run.output));
+  const output = run.output.replace(/\x1b\[[0-9;]*m/g, ""),
+    completed = /Build completed successfully/i.test(output),
+    evidence = {
+      engine: "devecocli",
+      runId,
+      cliVersion: cli.version,
+      devecoPackage: cli.devecoPackage,
+      command,
+      workspace,
+      product: scope.product,
+      modules: scope.modules,
+      scope: scope.scope,
+      exitCode: run.code,
+      completionEvidence: completed,
+    };
+  if (run.error || run.timedOut || run.cancelled)
+    return blocked(run.error ?? "官方 CLI 执行被中断或超时", evidence);
+  if (
+    signingOptions.required &&
+    (signingToolFailure(output) ||
+      (run.code === 0 && !/@SignHap\b/.test(output)))
+  ) {
+    signing.report.verification = "SIGNING_FAILED_OR_NOT_CONFIRMED";
+    signing.report.status = "BLOCKED";
+    saveSigningReport(signingOptions, signing.report);
+    return blocked("实际签名失败、被跳过或没有签名完成证据", evidence);
+  }
+  if (
+    run.code !== 0 &&
+    /implementation package.*not installed|DevEco (?:Studio|CLI).*not found|(?:SDK|Java|JDK|toolchain).*(?:not found|not installed|missing|invalid)|ERR_REQUIRE_ESM|not a valid DevEco|No DevEco|No supported.*(?:Studio|tool)|Could not (?:find|detect).*DevEco/i.test(
+      output,
+    )
+  )
+    return blocked("官方 CLI/SDK/构建环境不可用，详见 build.log", evidence);
+  if (run.code === 0 && !completed)
+    return blocked(
+      "CLI 退出码为 0，但缺少 Build completed successfully，不能认定构建完成",
+      evidence,
+    );
+  const passed = run.code === 0 && completed;
+  signing.report.verification =
+    passed && signingOptions.required
+      ? "BUILD_SIGNING_COMPLETED_INSTALLATION_NOT_VERIFIED"
+      : "NOT_REQUIRED_OR_NOT_CONFIRMED";
+  saveSigningReport(signingOptions, signing.report);
+  if (!passed) {
+    const baselineEvidenceFile = path.join(
+      taskDir,
+      "build-baseline-evidence.json",
+    );
+    writeJson(evidenceFile, {
+      ...evidence,
+      status: "RUNNING_BASELINE",
+      classification: "BUILD_ATTRIBUTION_PENDING",
+    });
+    writeJson(baselineEvidenceFile, { status: "RUNNING", scope, runId });
+    try {
+      const metadata = path.join(taskDir, "build-baseline-validation"),
+        baselineWorkspace = validationWorkspace(metadata, source),
+        restoration = restoreBuildBaseline(taskDir, source, baselineWorkspace),
+        baselineSigning = await prepareSigning({
+          ...signingOptions,
+          taskDir: metadata,
+          workspace: baselineWorkspace,
+        });
+      if (!baselineSigning.ready)
+        throw new Error("基线签名环境不可用：" + baselineSigning.report.reason);
+      console.log(
+        "BUILD_BASELINE: 当前构建失败，正在用相同模块参数验证重构前基线",
+      );
+      const before = await runCommand(command, { cwd: baselineWorkspace });
+      const baselineLog = path.join(taskDir, `build-baseline-${runId}.log`);
+      writeText(baselineLog, baselineSigning.redact(before.output));
+      writeText(
+        path.join(taskDir, "build-baseline.log"),
+        baselineSigning.redact(before.output),
+      );
+      const baselinePass =
+          before.code === 0 &&
+          /Build completed successfully/i.test(before.output),
+        baseline = {
+          status: baselinePass ? "PASS" : "FAIL",
+          runId,
+          log: baselineLog,
+          workspace: baselineWorkspace,
+          command,
+          exitCode: before.code,
+          completionEvidence: baselinePass,
+          ...restoration,
+        };
+      writeJson(baselineEvidenceFile, baseline);
+      if (
+        before.error ||
+        before.timedOut ||
+        before.cancelled ||
+        (before.code === 0 && !baselinePass)
+      )
+        throw new Error(before.error ?? "基线没有有效的构建完成证据");
+      if (!baselinePass)
+        return blocked(
+          "重构前基线也无法构建，不能归因于本次重构，不进入代码修复 Loop",
+          { ...evidence, classification: "BASELINE_BUILD_FAILURE", baseline },
+        );
+      writeJson(evidenceFile, {
+        ...evidence,
+        status: "FAIL",
+        classification: "INTRODUCED_BUILD_FAILURE",
+        baseline,
+      });
+      return 1;
+    } catch (e) {
+      const reason = String(e);
+      writeJson(baselineEvidenceFile, {
+        status: "UNAVAILABLE",
+        reason,
+        scope,
+        runId,
+      });
+      return blocked(
+        "无法可靠验证重构前构建基线，不进入代码修复 Loop：" + reason,
+        { ...evidence, classification: "BUILD_BASELINE_UNAVAILABLE" },
+      );
+    }
+  }
+  writeJson(evidenceFile, { ...evidence, status: passed ? "PASS" : "FAIL" });
+  if (passed)
+    writeText(
+      path.join(workspace, ".arkts-refactor-ohpm-installed"),
+      "installed by official devecocli build",
+    );
+  return passed ? 0 : run.code || 1;
+}
 export async function hvigorGate(
   taskDir: string,
   source: string,
@@ -162,16 +385,7 @@ export async function hvigorGate(
       return 3;
     }
   }
-  const toolRoot = path.resolve(fileURLToPath(import.meta.url), "../.."),
-    short = crypto.createHash("sha1").update(taskDir).digest("hex").slice(0, 8),
-    workspace = path.join(toolRoot, "v", short);
-  ensureValidationModuleScope(path.dirname(workspace));
-  writeJson(path.join(taskDir, "validation-workspace.json"), {
-    path: workspace,
-    sourceRoot: source,
-  });
-  if (!isDir(workspace)) freshCopy(source, workspace, false);
-  else copyTree(source, workspace, false);
+  const workspace = validationWorkspace(taskDir, source);
   const rawTask = isFile(path.join(taskDir, "task.json"))
     ? readJson(path.join(taskDir, "task.json"))
     : {};
@@ -294,34 +508,122 @@ export function parseLinterIssues(output: string, fallback: string): Json[] {
 export async function linterGate(
   taskDir: string,
   source: string,
-  codelinter: string,
+  deveco: string,
   config?: string,
 ): Promise<number> {
-  const changes =
+  const changes: string[] =
       readJson(path.join(taskDir, "refactor-changes.json"))
         .changedProductionFiles ?? [],
-    introduced: Json[] = [];
+    introduced: Json[] = [],
+    evidence: Json[] = [];
+  writeJson(path.join(taskDir, "linter-after.json"), []);
+  const finish = (code: number, reason?: string) => {
+    writeJson(path.join(taskDir, "linter-evidence.json"), {
+      engine: "devecocli check lint",
+      status: code === 0 ? "PASS" : code === 1 ? "FAIL" : "BLOCKED",
+      reason,
+      files: evidence,
+    });
+    if (code === 3) console.error("LINTER_GATE_BLOCKED: " + reason);
+    return code;
+  };
+  const cli = bundledDevecoCli(deveco);
+  if (!cli || Number(process.versions.node.split(".")[0]) < 22)
+    return finish(
+      3,
+      "需要 Node 22+ 及当前 DevEco Code 自带的完整官方 CLI；不搜索独立 codelinter PATH",
+    );
+  // Build and lint execute in parallel. Never share their mutable SDK/project caches.
+  const workspace = validationWorkspace(
+    path.join(taskDir, "linter-validation"),
+    source,
+  );
+  let copiedConfig: string | undefined;
+  if (config) {
+    if (!isFile(config)) return finish(3, "Linter 配置文件不存在");
+    copiedConfig = within(config, source)
+      ? path.join(workspace, relative(config, source))
+      : path.join(workspace, ".arkts-refactor-linter-config.json5");
+    if (!within(config, source)) copyFile(config, copiedConfig);
+  }
+  let configOrigin = config ? "project-config" : "project-default";
+  if (!copiedConfig) {
+    copiedConfig = path.join(workspace, "code-linter.json5");
+    if (!isFile(path.join(source, "code-linter.json5"))) {
+      const template = path.resolve(
+        path.dirname(cli.implementation),
+        "../templates/application/code-linter.json5",
+      );
+      if (!isFile(template))
+        return finish(3, "项目没有 Linter 配置，当前官方 CLI 也缺少默认模板");
+      const defaults = readJson5(template);
+      defaults.files = [...new Set([...(defaults.files ?? []), "**/*.ts"])];
+      writeJson(copiedConfig, defaults);
+      configOrigin = "official-cli-template-in-validation-copy";
+    }
+  }
   for (const r of changes) {
-    const current = path.resolve(source, r);
-    if (!within(current, source)) throw new Error("Linter 文件越界");
-    if (!isFile(current)) continue;
-    const command = [
-        codelinter,
-        current,
-        ...(config ? ["-c", config] : []),
-        "-e",
-        "error,warn,suggestion",
+    const current = path.resolve(source, r),
+      target = path.resolve(workspace, r);
+    if (!within(current, source) || !within(target, workspace))
+      return finish(3, "Linter 文件越界");
+    if (!/\.(ets|ts)$/i.test(r)) continue;
+    if (!isFile(current) || !isFile(target))
+      return finish(3, "变更源码文件不存在：" + r);
+    const report = path.join(taskDir, "linter-reports", stamp(), "report.json"),
+      command = [
+        process.execPath,
+        cli.entry,
+        "check",
+        "lint",
+        target,
+        ...(copiedConfig ? ["--config-path", copiedConfig] : []),
+        "--format",
+        "json",
+        "--output-path",
+        report,
       ],
-      result = await runCommand(command, { cwd: source, stream: true });
-    if (result.error || (result.code !== 0 && result.code !== 1))
-      return result.code ?? 3;
+      result = await runCommand(command, { cwd: workspace });
+    console.log(result.output);
+    const entry: Json = {
+      file: r,
+      command,
+      report,
+      exitCode: result.code,
+      cliVersion: cli.version,
+      configOrigin,
+    };
+    evidence.push(entry);
+    writeText(path.join(path.dirname(report), "command.log"), result.output);
+    if (
+      result.error ||
+      result.timedOut ||
+      result.cancelled ||
+      ![0, 1].includes(result.code ?? -1)
+    )
+      return finish(
+        3,
+        result.error ?? "官方 Linter 进程未正常完成，详见本轮日志",
+      );
+    if (!isFile(report))
+      return finish(3, "未生成本轮官方 Linter JSON 报告，不能视为无缺陷");
+    let parsed: Json[];
+    try {
+      const raw = readJson(report);
+      parsed = parseDevecoLintReport(raw, workspace);
+      entry.summary = raw.summary;
+    } catch (e) {
+      return finish(3, "无效的本轮 Linter 报告：" + String(e));
+    }
     const baseline = path.join(taskDir, "baseline-production", r),
       lines = changedCurrentLines(baseline, current);
-    introduced.push(
-      ...parseLinterIssues(result.output, r).filter(
-        (i) => !isFile(baseline) || lines.has(i.line),
-      ),
+    const scoped = parsed.filter(
+      (issue) =>
+        path.resolve(issue.filePath) === target &&
+        (!isFile(baseline) || lines.has(issue.line)),
     );
+    introduced.push(...scoped.map((issue) => ({ ...issue, filePath: r })));
+    entry.introducedIssues = scoped.length;
   }
   writeJson(path.join(taskDir, "linter-after.json"), introduced);
   if (introduced.length) {
@@ -329,10 +631,10 @@ export async function linterGate(
       "本次变更新增或触及 Linter 缺陷：" +
         introduced.map((i) => `${i.filePath}:${i.line}`).join(", "),
     );
-    return 1;
+    return finish(1);
   }
   console.log("本次变更范围未引入 Linter 缺陷");
-  return 0;
+  return finish(0);
 }
 export function publicContractGate(taskDir: string, source: string): number {
   const planFile = path.join(taskDir, "public-contract-plan.json"),
@@ -534,6 +836,8 @@ export async function gateMain(args: string[]): Promise<number> {
       options.model,
       options.variant,
     );
+  if (command === "build")
+    return devecoBuildGate(taskDir, source, required("deveco"));
   if (command === "hvigor")
     return hvigorGate(
       taskDir,
@@ -544,7 +848,7 @@ export async function gateMain(args: string[]): Promise<number> {
       options.module,
     );
   if (command === "linter")
-    return linterGate(taskDir, source, required("codelinter"), options.config);
+    return linterGate(taskDir, source, required("deveco"), options.config);
   if (command === "runtime-smoke")
     return runtimeSmokeGate(taskDir, source, required("hvigorw"), options.ohpm);
   if (command === "public-contract") return publicContractGate(taskDir, source);
