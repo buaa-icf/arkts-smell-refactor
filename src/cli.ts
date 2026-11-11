@@ -94,10 +94,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.log("工作区：" + workspace);
     const tools = discoverTools(workspace);
     for (const [k, v] of Object.entries(tools).filter(
-      ([name]) => name !== "homecheck",
+      ([name]) => !["homecheck", "hvigorw", "ohpm"].includes(name),
     ))
       console.log(
-        `${k}${k === "hvigorw" || k === "ohpm" ? "（测试使用，非 build 入口）" : ""}：${v ?? "未找到"}`,
+        `${k}：${v ?? "未找到"}`,
       );
     const build = bundledDevecoCli(tools.deveco);
     const nodeForBuild = Number(process.versions.node.split(".")[0]) >= 22;
@@ -109,7 +109,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return isDir(workspace) &&
       nodeForBuild &&
       !!build &&
-      Object.values(tools).every(Boolean)
+      !!tools.deveco && !!tools.homecheck
       ? 0
       : 2;
   }

@@ -10,6 +10,7 @@ import {
   agentErrorOutput,
 } from "../src/runner.js";
 import { taskFromJson } from "../src/models.js";
+import type { Json } from "../src/models.js";
 import { readJson, readText, writeJson, writeText, now } from "../src/utils.js";
 import { fixture, setupTask, goodConfig, spec } from "./helpers.js";
 
@@ -54,6 +55,16 @@ test("构建失败分析以同轮基线证据为准，警告里提及变更文�
     baseline: { status: "PASS", runId: "old" },
   });
   assert.equal(buildFailureReport(dir, task, failed, 1).repairable, false);
+});
+
+test("测试超时优先显示本轮结构化原因，不用日志里的 TLS 或 GATE_BLOCKED 掩盖", async (t) => {
+  const dir = setupTask(fixture(t)), config = goodConfig();
+  const reason = "测试阶段 awaiting-test-result 超过 300 秒，未收到下一阶段完成证据";
+  config.gates!.test = spec(`require('node:fs').writeFileSync(${JSON.stringify(path.join(dir, "test-results.json"))},JSON.stringify({status:'BLOCKED',jobs:[{status:'BLOCKED',reason:${JSON.stringify(reason)}}]}));console.log('tls:0.000\\nTEST_GATE_BLOCKED: timeout');process.exit(3);`, { blockedOutputRegex: "TLS|GATE_BLOCKED" });
+  const result = await executePipeline(dir, config);
+  const step = result.steps.find((s: Json) => s.name === "test");
+  assert.equal(step.status, "BLOCKED");
+  assert.equal(step.reason, reason);
 });
 
 test("既有构建失败记 BLOCKED 并保存基线归因，不进入修复 Loop", async (t) => {

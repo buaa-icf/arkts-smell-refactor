@@ -16,7 +16,8 @@
     ],
     "cwd": "{task_dir}",
     "timeoutSeconds": 1200,
-    "blockedOutputRegex": "GATE_BLOCKED|rate limit|service.*overloaded"
+    "blockedOutputRegex": "GATE_BLOCKED|ProviderModelNotFoundError|Model not found|Provider not found|rate limit|service.*overloaded",
+    "blockedOutputScope": "agent-errors"
   },
   "repairAgent": {
     "command": [
@@ -34,7 +35,8 @@
     ],
     "cwd": "{task_dir}",
     "timeoutSeconds": 1200,
-    "blockedOutputRegex": "GATE_BLOCKED|rate limit|service.*overloaded"
+    "blockedOutputRegex": "GATE_BLOCKED|ProviderModelNotFoundError|Model not found|Provider not found|rate limit|service.*overloaded",
+    "blockedOutputScope": "agent-errors"
   },
   "gates": {
     "smell": {
@@ -115,7 +117,7 @@
       "{review_prompt_file}"
     ],
     "cwd": "{task_dir}",
-    "blockedOutputRegex": "REVIEW_PACKET_BLOCKED|GATE_BLOCKED|product agreements|deveco auth consent|rate limit|service.*overloaded",
+    "blockedOutputRegex": "REVIEW_PACKET_BLOCKED|GATE_BLOCKED|ProviderModelNotFoundError|Model not found|Provider not found|product agreements|deveco auth consent|rate limit|service.*overloaded",
     "blockedOutputScope": "agent-errors",
     "timeoutSeconds": 1200
   },
@@ -133,7 +135,7 @@
       "--format-only"
     ],
     "cwd": "{task_dir}",
-    "blockedOutputRegex": "GATE_BLOCKED|product agreements|deveco auth consent|rate limit|service.*overloaded",
+    "blockedOutputRegex": "GATE_BLOCKED|ProviderModelNotFoundError|Model not found|Provider not found|product agreements|deveco auth consent|rate limit|service.*overloaded",
     "blockedOutputScope": "agent-errors",
     "timeoutSeconds": 90
   }

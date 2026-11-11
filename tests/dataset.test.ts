@@ -132,7 +132,9 @@ test("自动命令使用 Node 而非 Python，保留并行验证和返修配置"
     process.execPath,
   );
   assert(!JSON.stringify(config).includes("python"));
-  assert(config.gates!.test.command!.includes("auto-test"));
+  assert(config.gates!.test.command!.includes("test"));
+  assert(config.gates!.test.command!.includes("--deveco"));
+  assert(!config.gates!.test.command!.includes("--hvigorw"));
   assert(config.gates!.build.command!.includes("--deveco"));
   assert(!config.gates!.build.command!.includes("--hvigorw"));
   assert(config.gates!.linter.command!.includes("--deveco"));
@@ -154,7 +156,7 @@ test("build 只依赖 DevEco Code，不因 hvigorw/ohpm 未在 PATH 而被禁用
     { deveco: "deveco", hvigorw: null, ohpm: null },
   );
   assert(config.gates!.build.command!.includes("--deveco"));
-  assert.equal(config.gates!.test.enabled, false);
+  assert(config.gates!.test.command!.includes("--deveco"));
 });
 test("DevEco Code 未确认产品协议是环境阻塞，不进入代码修复", async (t) => {
   const root = fixture(t),
@@ -183,6 +185,33 @@ test("DevEco Code 未确认产品协议是环境阻塞，不进入代码修复",
   assert.equal(result.repairAttempts, 0);
   assert.equal(result.steps[0].status, "BLOCKED");
   assert(result.steps.slice(1).every((step: any) => step.status === "SKIPPED"));
+});
+
+test("本机模型不存在记为 BLOCKED，默认命令不注入模型或 provider 黑名单", async (t) => {
+  const p = makeProject(fixture(t));
+  writeText(path.join(p.source, "hvigor/hvigor-config.json5"), "{}");
+  const config = autoConfig(readJson(path.join(p.taskDir, "task.json")) as any, p.taskDir, { deveco: "deveco" });
+  for (const agent of [config.refactorAgent, config.repairAgent, config.reviewAgent, config.reviewFormatAgent]) {
+    assert(!(agent!.command as string[]).includes("--model"));
+    assert(new RegExp(agent!.blockedOutputRegex!, "i").test("Model not found: provider/missing"));
+  }
+  assert.deepEqual(config.agentPolicy!.disabledProviders, []);
+  assert.equal(config.agentPolicy!.refactor.modelSource, "deveco-local-config");
+  config.refactorAgent!.command = [process.execPath, "-e", "console.log(JSON.stringify({type:'error',error:{name:'UnknownError',data:{message:'Model not found: provider/missing'}}}));process.exit(1)"];
+  const result = await executePipeline(p.taskDir, config);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.repairAttempts, 0);
+});
+
+test("TLS/SSL 计时和普通文本不是错误，明确的握手/证书错误仍阻塞", (t) => {
+  const p = makeProject(fixture(t));
+  writeText(path.join(p.source, "hvigor/hvigor-config.json5"), "{}");
+  const config = autoConfig(readJson(path.join(p.taskDir, "task.json")) as any, p.taskDir, { deveco: "deveco" });
+  const re = new RegExp(config.gates!.test.blockedOutputRegex!, "i");
+  for (const text of ["NETSTACK INFO dns:0.000, connect:0.000, tls:0.000, total:0.000", "TLS 1.3 enabled", "SSL configuration loaded"])
+    assert.equal(re.test(text), false, text);
+  for (const text of ["TLS handshake failed", "SSL certificate verify failed", "SSL error", "TLS environment unavailable", "TLS: error", "SSLError", "ERR_TLS_CERT_ALTNAME_INVALID", "CERTIFICATE_VERIFY_FAILED"])
+    assert.equal(re.test(text), true, text);
 });
 test("首轮和返修保留验证限制、类型和键语义保护", (t) => {
   const root = fixture(t),

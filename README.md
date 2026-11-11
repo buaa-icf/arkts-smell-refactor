@@ -38,9 +38,13 @@ npm run batch -- --workspace "D:\ROG\Documents\harmonyos\test_supplement"
 
 重构/评审使用本机 DevEco Code（`deveco`）。**build 门禁使用该 DevEco Code 安装中自带的官方 `@deveco/deveco-cli` 执行 `devecocli build`**，通过所选 DevEco Code 的 npm 安装位置解析 CLI，不单独搜索 `devecocli`、`hvigorw` 或 `ohpm` 的 PATH，不回退旧构建入口；没有完整 CLI/平台实现包时明确 BLOCKED。其底层 SDK、Java 和官方构建工具仍需安装，由官方 CLI 定位，不表示这些工具已经内置到 refactor。
 
-Build 和 Linter 均复用所选 DevEco Code 安装中的官方 CLI，不需要额外配置检查器命令或路径。测试/Runtime Smoke 仍使用 `hvigorw` 和 ohpm，这两个入口目前按当前进程 PATH 查找（插件也可显式配置）。当前 CLI 1.3.4 没有独立的 `devecocli test` 命令，不能用 build/run 冒充测试。`doctor` 只显示官方 CLI 和仍需独立定位的测试工具；不输出 HomeCheck 条目或外部检查器路径，内置检测包缺失时才提示重新 `npm ci`。它是安装完整性检查，不能代替实际登录、SDK、签名、网络或设备验证。本项目本身无需加入 PATH。
+Build 和 Linter 均复用所选 DevEco Code 安装中的官方 CLI，不需要额外配置检查器命令或路径。当前 CLI 1.3.4 没有独立的 `devecocli test` 命令，不能用 build/run 冒充测试。**普通 test 门禁复用本轮成功 build 实际使用的 SDK、Node、Hvigor 和 Java 环境，不再从 PATH 独立选择 hvigorw/ohpm。** 平台通过仅观察子进程启动的 Node preload 捕获官方 CLI 的真实 Hvigor 命令和允许记录的环境变量，不修改官方 CLI 安装，不调用它未公开的类/函数，也不记录完整环境、签名密码或构建参数。捕获信息与当前任务、工程、CLI、验证副本和 build runId 绑定；构建失败、环境未能确认、路径失效或无当前成功构建证据时测试明确 BLOCKED，不能回退另一套 SDK。多 SDK 的选择仍由本次官方 CLI 决定，不因测试失败就随机切换环境。Runtime Smoke 是额外的专用诊断，目前仍沿用独立 hvigorw/ohpm 配置，不属于此处的普通测试入口。
+
+`doctor` 不再要求独立的测试 Hvigor/ohpm PATH，也不输出 HomeCheck 条目或外部检查器路径；内置检测包缺失时才提示重新 `npm ci`。它是安装完整性检查，不能代替实际登录、SDK、签名、网络或设备验证。插件明确配置 Studio 时会传递官方 `DEVECO_CLI_STUDIO_PATH`；没有配置时使用官方 CLI 的安装发现方式，不在本仓库硬编码任何电脑的路径。本项目本身无需加入 PATH。
 
 DevEco Code 测试版 `@deveco-test/deveco-code@0.1.0-TD.52`（以及正式版 0.2.5）的重构、修复和评审调用使用 `deveco run ... --format json --auto`；`--auto` 自动批准未被明确拒绝的权限，不覆盖用户配置中的拒绝规则。TD.52 的部分依赖要求 Node.js ≥22，使用该测试版时请使用 Node.js 22 或更高的受支持版本。升级后若提示 `Review the product agreements`，请先自行打开 DevEco Code 阅读并确认协议，或运行 `deveco auth consent` 交互确认；本工具不会代替用户接受协议，未确认时记为 BLOCKED，而非重构 FAIL。自定义旧配置中的 `--dangerously-skip-permissions` 也需要改为 `--auto`。后端修改后运行 `npm run build` 再启动。
+
+模型默认交给本机 DevEco Code 自行选择：重构、返修、评审及评审格式修复都不自动添加 `-m/--model` 或 `--variant`，不写死模型名称，不禁用任何 provider，也不注入厂商专属的推理档位参数。工具安全边界和每轮内部验证限制保持不变，不修改本机 DevEco 配置文件。需要主动覆盖时，使用 `--refactor-model` / `--review-model` 和对应的 `--refactor-variant` / `--review-variant`；显式参数优先于 `ARKTS_REFACTOR_MODEL` / `ARKTS_REVIEW_MODEL` 等环境变量，两者都未设置时使用 DevEco 本机配置。执行记录中的 `requestedModel: null`、`modelSource: deveco-local-config` 表示平台未指定模型，不代表没有使用模型，也不冒称已确认实际模型。模型/provider 不存在属于启动环境阻塞（BLOCKED），不会启动代码修复循环。
 
 TD.52 自动生成的 `.homegraph/` 数据库、锁和日志作为运行缓存处理：不复制到隔离/验证副本，不参与生产变更比较，也不回写原仓库；这不放宽测试、构建配置等文件的修改边界。如果 Agent 内部命令报 `@deveco/deveco-cli-common` 缺失，切换到 Node.js ≥22 后执行 `npm install -g @deveco-test/deveco-code@0.1.0-TD.52 --include=optional` 补齐官方可选依赖。仅升级 Node 并不会自动修复先前的全局包安装。
 
@@ -150,13 +154,13 @@ Code Clone 专属分析器为已确认同一宿主的 UI 克隆补充 `reactiveE
 
 ```sh
 # Local Test；以下为 RechargePage 的实际参数示例
-hvigorw --no-daemon test -p module=book_person -p coverage=true -p scope=RechargePageTest
+"<build使用的Node>" "<build使用的hvigorw.js>" --no-daemon test -p module=book_person -p coverage=true -p scope=RechargePageTest -p product=default
 
 # Instrument Test；模块名和套件名由计划替换
-hvigorw --no-daemon onDeviceTest -p module=模块名@ohosTest -p coverage=true -p scope=套件名 -p ohos-debug-asan=true
+"<build使用的Node>" "<build使用的hvigorw.js>" --no-daemon onDeviceTest -p module=模块名@ohosTest -p coverage=true -p scope=套件名 -p product=default -p ohos-debug-asan=true
 ```
 
-副本依赖尚未准备时会先执行 `ohpm install`。没有可精确指定的 suite 时，保守回退会省略 `scope` 参数并记录原因；本地测试要求本轮 Hypium 用例/汇总，设备测试还要求本轮设备执行完成证据，不能只凭 `BUILD SUCCESSFUL` 判定通过。
+普通测试沿用成功构建已准备的副本依赖和 product；缺少依赖准备标记时阻塞，不再临时找另一套 ohpm。`build-evidence.json` 的 `toolchain`、`build-toolchain/<runId>/` 和 `test-toolchain.json` 保存实际环境与关联构建标识。旧运行记录不含这些证据，不能凭旧日志推测 SDK，需要重新构建。没有可精确指定的 suite 时，保守回退会省略 `scope` 参数并记录原因；本地测试要求本轮 Hypium 用例/汇总，设备测试还要求本轮设备执行完成证据，不能只凭 `BUILD SUCCESSFUL` 判定通过。Hvigor `00303312`／对应 SDK 路径不可用错误记为 `BLOCKED / TEST_SDK_UNAVAILABLE`，不作为业务断言失败或进入代码返修。
 
 设备、签名、下载、网络、工具缺失或总超时通常不能通过修改生产代码解决，不进入代码返修。失败分析保留阶段、分类、归因证据、具体文件/位置和可否修复。
 

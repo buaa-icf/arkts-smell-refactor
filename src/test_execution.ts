@@ -20,6 +20,11 @@ import {
 export const TEST_TOOL_BLOCKERS =
   "\\[Fail\\]\\s*ExecuteCommand\\s+need\\s+connect-key\\b|Connect server failed|\\[Empty\\]|no (?:available |connected )?devices?\\b|device not found|device[^\\r\\n]*(?:offline|not connected)|\\bFailed[^\\r\\n]*@SignHap\\b|Invalid storeFile value|(?:hap/hsp|hap|hsp) package is signed";
 export function testToolBlocker(output: string): Json | null {
+  if (/00303312\s+Configuration Error|Cannot find the corresponding SDK version under the specified SDK path|(?:SDK|Java|JDK).*(?:not found|not installed|missing|invalid)|JAVA_HOME.*(?:not set|invalid)/i.test(output))
+    return {
+      classification: "TEST_SDK_UNAVAILABLE",
+      reason: "测试 SDK/Java 工具环境不可用或版本不匹配，测试未执行",
+    };
   if (
     /INSTALL_FAILED_NO_MATCHING_ABIS|install parse native so failed|Abi type supported by the device does not match/i.test(
       output,
@@ -195,6 +200,7 @@ export async function runTestPlan(
         "coverage=true",
       ];
     if (job.scope) command.push("-p", `scope=${job.scope}`);
+    if (plan.product) command.push("-p", `product=${plan.product}`);
     if (job.kind === "instrument") command.push("-p", "ohos-debug-asan=true");
     console.log(
       `TEST_SELECTION kind=${job.kind} module=${selector} scope=${job.scope ?? "*"} reason=${job.reason}`,

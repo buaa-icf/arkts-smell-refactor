@@ -45,6 +45,7 @@ import { prepareRepairContext } from "./repair_context.js";
 import { bundledDevecoCli } from "./deveco_cli.js";
 import { parseDevecoLintReport } from "./linter_report.js";
 import { moduleBuildPlan, restoreBuildBaseline } from "./build_validation.js";
+import { captureEnvironment, capturedToolchain, successfulBuildToolchain, toolchainEnvironment } from "./build_toolchain.js";
 import {
   prepareSigning,
   saveSigningReport,
@@ -215,10 +216,18 @@ export async function devecoBuildGate(
   );
   if (!signing.ready) return blocked(signing.report.reason);
   const command = [process.execPath, cli.entry, ...scope.args];
+  const captureDir = path.join(taskDir, "build-toolchain", runId);
+  const buildEnv = captureEnvironment(captureDir);
   console.log(
     `BUILD_ENGINE devecocli version=${cli.version}; cwd=${workspace}`,
   );
-  const run = await runCommand(command, { cwd: workspace });
+  const run = await runCommand(command, { cwd: workspace, env: buildEnv });
+  let toolchain: Json;
+  try {
+    toolchain = { ...capturedToolchain(captureDir, workspace), status: "CONFIRMED" };
+  } catch (e) {
+    toolchain = { status: "UNAVAILABLE", reason: String(e) };
+  }
   writeText(
     path.join(taskDir, "devecocli-build.log"),
     signing.redact(run.output),
@@ -233,6 +242,9 @@ export async function devecoBuildGate(
       devecoPackage: cli.devecoPackage,
       command,
       workspace,
+      sourceRoot: path.resolve(source),
+      cliEntry: cli.entry,
+      toolchain,
       product: scope.product,
       modules: scope.modules,
       scope: scope.scope,
@@ -294,7 +306,7 @@ export async function devecoBuildGate(
       console.log(
         "BUILD_BASELINE: 当前构建失败，正在用相同模块参数验证重构前基线",
       );
-      const before = await runCommand(command, { cwd: baselineWorkspace });
+      const before = await runCommand(command, { cwd: baselineWorkspace, env: buildEnv });
       const baselineLog = path.join(taskDir, `build-baseline-${runId}.log`);
       writeText(baselineLog, baselineSigning.redact(before.output));
       writeText(
@@ -363,6 +375,7 @@ export async function hvigorGate(
   ohpm: string | undefined,
   taskName: string,
   module?: string,
+  sharedToolchain?: Json,
 ): Promise<number> {
   let plan: Json | null = null;
   if (["auto-test", "test", "onDeviceTest"].includes(taskName)) {
@@ -372,6 +385,7 @@ export async function hvigorGate(
     });
     try {
       plan = buildTestPlan(taskDir, source, taskName, module);
+      if (sharedToolchain) plan.product = sharedToolchain.product;
       writeJson(path.join(taskDir, "test-plan.json"), plan);
     } catch (e) {
       console.error(
@@ -398,7 +412,7 @@ export async function hvigorGate(
       ? plan.jobs.some((job: Json) => job.kind === "instrument")
       : rawTask.raw?.testKind === "instrument-test",
     workspaceRoot: rawTask.workspace_root ?? rawTask.workspaceRoot,
-    hdc: [
+    hdc: sharedToolchain?.hdc ?? [
       path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc.exe"),
       path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc"),
     ].find(isFile),
@@ -419,6 +433,11 @@ export async function hvigorGate(
     return 3;
   }
   const marker = path.join(workspace, ".arkts-refactor-ohpm-installed");
+  if (sharedToolchain && !isFile(marker)) {
+    console.error("TEST_GATE_BLOCKED: 成功构建的依赖准备标记缺失，请重新运行 build");
+    writeTestState(path.join(taskDir, "test-results.json"), { status: "BLOCKED", classification: "TEST_BUILD_ENVIRONMENT_UNAVAILABLE", jobs: [] });
+    return 3;
+  }
   if (ohpm && !isFile(marker)) {
     const install = await runCommand([ohpm, "install"], {
       cwd: workspace,
@@ -432,8 +451,8 @@ export async function hvigorGate(
       taskDir,
       workspace,
       plan,
-      hvigorLauncher(hvigor),
-      devecoEnvironment(hvigor),
+      sharedToolchain ? [sharedToolchain.node, sharedToolchain.hvigor] : hvigorLauncher(hvigor),
+      sharedToolchain ? toolchainEnvironment(sharedToolchain) : devecoEnvironment(hvigor),
       signing.redact,
     );
     signing.report.verification =
@@ -478,6 +497,23 @@ export async function hvigorGate(
     return 3;
   }
   return result.code ?? 3;
+}
+export async function devecoTestGate(taskDir: string, source: string, deveco: string): Promise<number> {
+  try {
+    const cli = bundledDevecoCli(deveco);
+    if (!cli) throw new Error("所选 DevEco Code 的官方 CLI 不完整");
+    const workspace = readJson(path.join(taskDir, "validation-workspace.json")).path;
+    const toolchain = successfulBuildToolchain(taskDir, source, workspace, cli.entry);
+    writeJson(path.join(taskDir, "test-toolchain.json"), toolchain);
+    console.log(`TEST_ENGINE buildRunId=${toolchain.buildRunId}; SDK=${toolchain.sdk}; Hvigor=${toolchain.hvigor}`);
+    return await hvigorGate(taskDir, source, toolchain.hvigor, undefined, "auto-test", undefined, toolchain);
+  } catch (e) {
+    console.error("TEST_GATE_BLOCKED: " + String(e));
+    writeTestState(path.join(taskDir, "test-results.json"), {
+      status: "BLOCKED", classification: "TEST_BUILD_ENVIRONMENT_UNAVAILABLE", reason: String(e), jobs: [],
+    });
+    return 3;
+  }
 }
 export function ensureValidationModuleScope(storageRoot: string): void {
   // This boundary belongs to the tool, not to any copied/source Harmony project.
@@ -827,6 +863,8 @@ export async function gateMain(args: string[]): Promise<number> {
       options["source-root"] ? path.resolve(options["source-root"]) : undefined,
     );
   const source = path.resolve(required("source-root"));
+  if (command === "test")
+    return devecoTestGate(taskDir, source, required("deveco"));
   if (command === "refactor")
     return refactorGate(
       taskDir,

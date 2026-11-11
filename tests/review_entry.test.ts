@@ -7,7 +7,7 @@ import { taskFromJson } from "../src/models.js";
 import { readJson, readText, writeJson, writeText } from "../src/utils.js";
 import { fixture, setupTask } from "./helpers.js";
 
-test("示例评审配置经过平台入口，完整材料走 stdin 并应用 Coding Plan 策略", async (t) => {
+test("示例评审配置经过平台入口，完整材料走 stdin 且默认沿用本机模型", async (t) => {
   const dir = setupTask(fixture(t)), file = "entry/src/main/ets/Page.ets";
   writeText(path.join(dir, "review-prompt.md"), "只读评审集中材料");
   writeJson(path.join(dir, "review-risk.json"), { risks: [] });
@@ -40,18 +40,20 @@ process.stdin.on('data', c=>chunks.push(c)); process.stdin.on('end', ()=>{
   const result = await runSpec("review-agent", config.reviewAgent, context, dir, dir);
   assert.equal(result.status, "PASS", readText(result.output_file!));
   const captured = readJson(capture);
-  assert.equal(captured.args[captured.args.indexOf("-m") + 1], "zhipu-coding/glm-5");
+  assert(!captured.args.includes("-m"));
+  assert(!captured.args.includes("--variant"));
   assert(captured.args.includes("--auto"));
   assert(!captured.args.includes("-f"));
   assert.match(captured.input, /review-packet.json（清单）/);
   assert.match(captured.input, /return 1;/);
   assert.match(captured.input, /return 2;/);
-  assert(captured.disabledProviders.includes("deveco"));
+  assert.equal(captured.disabledProviders, undefined);
   assert.equal(captured.tools.skill, false);
   assert.equal(captured.tools.websearch, false);
   assert.equal(captured.tools.build_project, false);
   assert.equal(captured.tools.arkts_check, false);
   assert.equal(readJson(path.join(dir, "review-execution-policy.json")).promptTransport, "stdin");
+  assert.equal(readJson(path.join(dir, "review-execution-policy.json")).modelSource, "deveco-local-config");
 
   writeText(path.join(dir, "format-input.md"), "completed review JSON");
   const format = config.reviewFormatAgent;
@@ -61,6 +63,7 @@ process.stdin.on('data', c=>chunks.push(c)); process.stdin.on('end', ()=>{
     { ...context, review_format_prompt_file: path.join(dir, "format-input.md") }, dir, dir);
   assert.equal(formatted.status, "PASS");
   const formatCapture = readJson(capture);
+  assert(!formatCapture.args.includes("-m"));
   assert.equal(formatCapture.args[formatCapture.args.indexOf("--agent") + 1], "arkts-review-format");
   assert.deepEqual(formatCapture.agent.tools, { "*": false });
   assert.deepEqual(formatCapture.agent.permission, { "*": "deny" });

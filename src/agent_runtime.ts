@@ -5,7 +5,6 @@ import { runCommand } from "./process.js";
 import { validationHandoff, FINAL_CHECK_DESCRIPTION, FINAL_CHECK_INSTRUCTION } from "./validation_handoff.js";
 
 export const POLICY_VERSION = "2026-11-06-cross-host-clone-evidence";
-export const DEFAULT_AGENT_MODEL = "zhipu-coding/glm-5";
 export const DISABLED_AGENT_TOOLS = ["webfetch", "websearch", "skill"];
 export const INTERNAL_VALIDATION_TOOLS = ["build_project", "arkts_check"];
 export const MAX_INTERNAL_VALIDATION_ATTEMPTS = 2;
@@ -17,11 +16,9 @@ export function disabledAgentTools(role = "refactor", formatOnly = false): strin
 }
 export interface AgentOptions { model?: string; variant?: string }
 export interface AgentSelection { refactor?: AgentOptions; review?: AgentOptions }
-export function resolveAgentModel(model?: string): string {
-  const selected = model?.trim() || DEFAULT_AGENT_MODEL;
-  if (selected.split("/")[0].toLowerCase() === "deveco")
-    throw new Error(`本项目禁止使用 DevEco 自带提供者：${selected}；请使用 ${DEFAULT_AGENT_MODEL}`);
-  return selected;
+export function resolveAgentModel(model?: string): string | undefined {
+  // Omitting -m lets DevEco resolve its own local model/provider configuration.
+  return model?.trim() || undefined;
 }
 function object(value: unknown, name: string): Json {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} 必须是对象`);
@@ -43,18 +40,8 @@ export function agentEnvironment(
     for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
   }
   const config = object(JSON.parse(env.DEVECO_CONFIG_CONTENT?.trim() || "{}"), "DEVECO_CONFIG_CONTENT");
-  if (options.variant && resolveAgentModel(options.model) === DEFAULT_AGENT_MODEL) {
-    if (!["low", "high", "max"].includes(options.variant)) throw new Error("Coding Plan variant 必须为 low/high/max");
-    let settings = config;
-    for (const key of ["provider", "zhipu-coding", "models", "glm-5", "variants"])
-      settings = object(settings[key] ??= {}, key);
-    const previous = { ...object(settings[options.variant] ?? {}, "variant") };
-    for (const key of ["reasoningEffort", "reasoning_effort", "disabled"]) delete previous[key];
-    settings[options.variant] = { ...previous, reasoningEffort: options.variant };
-  }
-  const disabled = config.disabled_providers ?? [];
-  if (!Array.isArray(disabled) || !disabled.every(x => typeof x === "string")) throw new Error("disabled_providers 必须是字符串数组");
-  config.disabled_providers = [...new Set([...disabled, "deveco"])];
+  // Provider/model/variant settings and disabled_providers belong to the user's
+  // DevEco configuration. Do not inject provider-specific reasoning parameters.
   const disabledTools = disabledAgentTools(options.role, options.formatOnly),
     enabledTools = internalValidationAllowed(options.role, options.formatOnly) ? INTERNAL_VALIDATION_TOOLS : [];
   function restrict(settings: Json) {
@@ -77,7 +64,8 @@ export async function runAgent(
   options: AgentOptions & { role: string; title?: string; formatOnly?: boolean; promptViaStdin?: boolean },
 ): Promise<number> {
   const model = resolveAgentModel(options.model), env = agentEnvironment(process.env, { ...options, model, cwd });
-  const command = [deveco, "run", "-m", model];
+  const command = [deveco, "run"];
+  if (model) command.push("-m", model);
   if (options.variant) command.push("--variant", options.variant);
   if (options.formatOnly) command.push("--agent", "arkts-review-format");
   command.push(options.role.startsWith("review") ? "严格执行输入中的只读评审任务，只输出要求的 JSON。" :
@@ -86,9 +74,10 @@ export async function runAgent(
   command.push("--dir", cwd, "--format", "json", "--auto");
   if (options.title) command.push("--title", options.title);
   writeJson(path.join(taskDir, `${options.role}-execution-policy.json`), {
-    policyVersion: POLICY_VERSION, role: options.role, requestedModel: model, requestedVariant: options.variant ?? null,
-    requestedReasoningEffort: model === DEFAULT_AGENT_MODEL ? options.variant ?? null : null,
-    disabledTools: disabledAgentTools(options.role, options.formatOnly), disabledProviders: JSON.parse(env.DEVECO_CONFIG_CONTENT!).disabled_providers,
+    policyVersion: POLICY_VERSION, role: options.role, requestedModel: model ?? null, requestedVariant: options.variant ?? null,
+    modelSource: model ? "explicit-override" : "deveco-local-config",
+    requestedReasoningEffort: null,
+    disabledTools: disabledAgentTools(options.role, options.formatOnly), disabledProviders: JSON.parse(env.DEVECO_CONFIG_CONTENT!).disabled_providers ?? [],
     validationOwner: internalValidationAllowed(options.role, options.formatOnly) ? "agent-and-platform" : "platform",
     internalValidation: {
       enabled: internalValidationAllowed(options.role, options.formatOnly),

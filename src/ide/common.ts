@@ -234,6 +234,7 @@ export function configureEnvironment(config: BridgeConfig): void {
       if (isDir(path.join(config.studio, suffix)))
         additions.push(path.join(config.studio, suffix));
     process.env.DEVECO_HOME = config.studio;
+    process.env.DEVECO_CLI_STUDIO_PATH = config.studio;
     process.env.DEVECO_SDK_HOME = path.join(config.studio, "sdk");
   }
   process.env.PATH = [...additions, process.env.PATH ?? ""].join(
@@ -288,7 +289,7 @@ export function inspectEnvironment(config: BridgeConfig): Json {
       })),
   ];
   rows.forEach((row) => {
-    row.required = true;
+    row.required = !["hvigorw", "ohpm"].includes(row.name);
   });
   return {
     tools: rows,

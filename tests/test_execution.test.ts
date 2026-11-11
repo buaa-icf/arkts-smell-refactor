@@ -120,6 +120,17 @@ for (const [label, output, expected] of [
     if (expected === "BLOCKED")
       assert.equal(results.jobs[0].classification, "DEVICE_ABI_MISMATCH");
   });
+
+test("00303312 SDK 环境失败是 BLOCKED 而非业务断言失败", async (t) => {
+  const p = makeProject(fixture(t));
+  suite(p.source, "local");
+  const script = path.join(p.source, "sdk-error.cjs");
+  writeText(script, "console.error('00303312 Configuration Error\\nCannot find the corresponding SDK version under the specified SDK path.\\n0 task in total: 0 executed');process.exit(1);");
+  assert.equal(await runTestPlan(p.taskDir, p.source, buildTestPlan(p.taskDir, p.source), [process.execPath, script]), 3);
+  const r = readJson(path.join(p.taskDir, "test-results.json"));
+  assert.equal(r.status, "BLOCKED");
+  assert.equal(r.jobs[0].classification, "TEST_SDK_UNAVAILABLE");
+});
 test("真实 ABI 日志可识别；正常编译警告不被误判环境阻塞", () => {
   assert.equal(
     testToolBlocker(

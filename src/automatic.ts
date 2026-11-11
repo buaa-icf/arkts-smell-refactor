@@ -116,7 +116,7 @@ export function autoConfig(
   selection: AgentSelection = {},
 ): Config {
   const agents = resolveSelection(selection);
-  const agentArgs = (role: "refactor" | "review") => ["--model", agents[role]!.model!, ...(agents[role]!.variant ? ["--variant", agents[role]!.variant!] : [])];
+  const agentArgs = (role: "refactor" | "review") => [...(agents[role]!.model ? ["--model", agents[role]!.model!] : []), ...(agents[role]!.variant ? ["--variant", agents[role]!.variant!] : [])];
   const root = findHarmonyRoot(targetPath(task), task.project_root),
     gate = fileURLToPath(new URL("./gate.js", import.meta.url)),
     base = [process.execPath, gate],
@@ -125,9 +125,9 @@ export function autoConfig(
       reason: "未找到 " + name,
     });
   const network =
-    "certificate verification|unable to verify[^\\r\\n]*certificate|self[- ]signed certificate|\\b(?:SSL|TLS)(?:Error\\b|_[A-Z0-9_]+\\b|\\b)|\\b(?:CERT_[A-Z0-9_]+|CERTIFICATE_VERIFY_FAILED)\\b|authentication failed|\\bunauthorized\\b(?![-_])|\\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\\b|network[^\\r\\n]*unavailable";
+    "certificate verification|unable to verify[^\\r\\n]*certificate|self[- ]signed certificate|\\b(?:SSL|TLS)(?:Error\\b|_[A-Z0-9_]+\\b)|\\bERR_(?:SSL|TLS)_[A-Z0-9_]+\\b|\\b(?:SSL|TLS)(?:[ \\t]+(?:handshake|certificate|connection|verification|verify|environment)){0,2}[ \\t:]+(?:failed|failure|error|unavailable|invalid)\\b|\\b(?:CERT_[A-Z0-9_]+|CERTIFICATE_VERIFY_FAILED)\\b|authentication failed|\\bunauthorized\\b(?![-_])|\\b(?:ECONNRESET|ENETUNREACH|ETIMEDOUT)\\b|network[^\\r\\n]*unavailable";
   const agentBlockers =
-      "REVIEW_PACKET_BLOCKED|product agreements|deveco auth consent|model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|" +
+      "REVIEW_PACKET_BLOCKED|ProviderModelNotFoundError|Model not found|Provider not found|product agreements|deveco auth consent|model service is currently overloaded|service.*overloaded|rate limit|temporarily unavailable|" +
       network,
     environment =
       network +
@@ -157,15 +157,6 @@ export function autoConfig(
           timeoutSeconds: 3600,
         }
       : null;
-  const hvigor = (name: string) =>
-    command(
-      "hvigor",
-      "--hvigorw",
-      tools.hvigorw!,
-      "--task",
-      name,
-      ...(tools.ohpm ? ["--ohpm", tools.ohpm] : []),
-    );
   const linterConfig = findLinterConfig(targetPath(task), task.project_root),
     gates: Record<string, CommandSpec> = {
       smell:
@@ -198,9 +189,9 @@ export function autoConfig(
             }
           : missing("DevEco Code 或 Harmony 工程根目录"),
       test:
-        tools.hvigorw && root
+        tools.deveco && root
           ? {
-              command: hvigor("auto-test"),
+              command: command("test", "--deveco", tools.deveco),
               cwd: "{task_dir}",
               blockedOutputRegex:
                 environment +
@@ -208,7 +199,7 @@ export function autoConfig(
                 TEST_TOOL_BLOCKERS,
               timeoutSeconds: 3600,
             }
-          : missing("hvigorw 或 Harmony 工程根目录"),
+          : missing("DevEco Code 或 Harmony 工程根目录"),
       linter:
         mode === "skip"
           ? { enabled: false, reason: "按 linterMode=skip 跳过" }
@@ -254,7 +245,7 @@ export function autoConfig(
       timeoutSeconds: 3600,
     };
   return {
-    agentPolicy: { policyVersion: POLICY_VERSION, refactor: { requestedModel: agents.refactor!.model, requestedVariant: agents.refactor!.variant ?? null }, review: { requestedModel: agents.review!.model, requestedVariant: agents.review!.variant ?? null }, disabledTools: DISABLED_AGENT_TOOLS, disabledProviders: ["deveco"], validationOwner: "agent-and-platform", internalValidation: { tools: INTERNAL_VALIDATION_TOOLS, maxAttempts: MAX_INTERNAL_VALIDATION_ATTEMPTS } },
+    agentPolicy: { policyVersion: POLICY_VERSION, refactor: { requestedModel: agents.refactor!.model ?? null, modelSource: agents.refactor!.model ? "explicit-override" : "deveco-local-config", requestedVariant: agents.refactor!.variant ?? null }, review: { requestedModel: agents.review!.model ?? null, modelSource: agents.review!.model ? "explicit-override" : "deveco-local-config", requestedVariant: agents.review!.variant ?? null }, disabledTools: DISABLED_AGENT_TOOLS, disabledProviders: [], validationOwner: "agent-and-platform", internalValidation: { tools: INTERNAL_VALIDATION_TOOLS, maxAttempts: MAX_INTERNAL_VALIDATION_ATTEMPTS } },
     taskTimeoutSeconds: 1200,
     linterMode: mode,
     refactorAgent: agent(),
@@ -381,11 +372,11 @@ export async function runTasks(
   console.log(
     "工具发现：" +
       Object.entries(tools)
-        .filter(([name]) => name !== "homecheck")
+        .filter(([name]) => !["homecheck", "hvigorw", "ohpm"].includes(name))
         .map(([k, v]) => `${k}=${v ? "已找到" : "未找到"}`)
         .join("，"),
   );
-  console.log("构建/Linter 入口：DevEco Code 自带 CLI");
+  console.log("构建/Linter 入口：DevEco Code 自带 CLI；测试复用本轮成功构建的工具环境");
   console.log("Linter 模式：" + mode);
   for (const [i, task] of tasks.entries()) {
     const taskStarted = now(),

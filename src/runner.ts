@@ -157,6 +157,7 @@ export async function runSpec(
       reason: "单条异味总执行时间超过限制",
     });
   const started = now(),
+    wallStarted = Date.now(),
     timeout = spec.timeoutSeconds ?? 1800,
     seconds = Math.min(
       timeout,
@@ -217,6 +218,16 @@ export async function runSpec(
   let passed = run.code === 0;
   if (spec.successOutputRegex)
     passed ||= new RegExp(spec.successOutputRegex, "i").test(run.output);
+  // Fresh structured test evidence is more specific than a regex hit in noisy
+  // previewer output (for example TLS timing statistics preceding a timeout).
+  if (!passed && isTest && isFile(manifest) && fs.statSync(manifest).mtimeMs >= wallStarted) {
+    const evidence = readJson(manifest);
+    if (evidence.status === "BLOCKED") {
+      const job = evidence.jobs?.find((j: Json) => j.status === "BLOCKED");
+      const reason = evidence.reason ?? job?.reason;
+      if (reason) return result(name, "BLOCKED", { ...fields, exit_code: run.code, reason });
+    }
+  }
   const blockers =
       spec.blockedOutputScope === "agent-errors"
         ? agentErrorOutput(run.output)
@@ -657,7 +668,7 @@ export async function executePipeline(
     repairs: number,
     retries: number,
   ) => {
-const filtered = terminal.filter(
+    const filtered = terminal.filter(
       (i) =>
         !(
           mode === "skip" &&
@@ -683,22 +694,6 @@ const filtered = terminal.filter(
       ),
     };
 
-    writeJson(path.join(taskDir, "result.json"), output);
-    return output;
-  };
-    const output = {
-      ...finalResult(task.task_id, results, dry, filtered),
-      validationPolicy: policy,
-      repairAttempts: repairs,
-      reviewRetries: retries,
-      attempts,
-      durationSeconds: round(now() - started),
-      timeoutSeconds: timeout,
-      timedOut: results.some(
-        (s) =>
-          s.status === "BLOCKED" && s.reason?.includes("总执行时间超过限制"),
-      ),
-    };
     writeJson(path.join(taskDir, "result.json"), output);
     return output;
   };
