@@ -5,6 +5,7 @@ import type { Json, Config, RefactorTask, CommandResult } from "../models.js";
 import { taskFromJson } from "../models.js";
 import { loadDatasetTasks } from "../dataset.js";
 import { autoConfig, findHarmonyRoot, prepareTask } from "../automatic.js";
+import { resolveAgentModel } from "../agent_runtime.js";
 import {
   contextFor,
   executePipeline,
@@ -145,7 +146,11 @@ export function prepareCandidate(
   writeJson(path.join(run, "prepared.json"), prepared);
   return prepared;
 }
-export function pipelineConfig(ctx: BridgeContext, taskDir: string): Config {
+export function pipelineConfig(
+  ctx: BridgeContext,
+  taskDir: string,
+  mode: "execute" | "validate" = "execute",
+): Config {
   const task = taskFromJson(readJson(path.join(taskDir, "task.json"))),
     config = autoConfig(
       task,
@@ -154,8 +159,19 @@ export function pipelineConfig(ctx: BridgeContext, taskDir: string): Config {
       readJson(path.join(taskDir, "runtime-smoke-plan.json")),
       readJson(path.join(taskDir, "public-contract-plan.json")),
       ctx.config.linterMode ?? "required",
+      // Validation never edits code. Keep unused editing-agent construction independent
+      // of legacy refactor environment settings; only the reviewer model is relevant.
+      mode === "validate"
+        ? { refactor: { model: resolveAgentModel(process.env.ARKTS_REVIEW_MODEL), variant: "" } }
+        : {},
     ),
     settings = path.join(taskDir, "bridge-settings.json");
+  if (mode === "validate") {
+    delete config.refactorAgent;
+    delete config.repairAgent;
+    delete config.agentPolicy?.refactor;
+    config.maxRepairAttempts = 0;
+  }
   writeJson(settings, ctx.config);
   // All candidate/apply checks use the plugin's direct HomeCheck entry rather than the benchmark/CLOC script.
   if (ctx.config.homecheck)
@@ -532,10 +548,7 @@ export async function validateCandidate(
     readJson(path.join(taskDir, "refactor-changes.json"))
       .changedProductionFiles,
   );
-  const plan = pipelineConfig(ctx, taskDir);
-  delete plan.refactorAgent;
-  delete plan.repairAgent;
-  plan.maxRepairAttempts = 0;
+  const plan = pipelineConfig(ctx, taskDir, "validate");
   ctx.emit("workflow.changed", {
     status: "正在重新验证冻结候选：执行门禁与评审…",
   });
@@ -594,7 +607,7 @@ export async function validateApplied(
   const changes = readJson(path.join(oldRun, "backend/refactor-changes.json"));
   writeJson(path.join(taskDir, "refactor-changes.json"), changes);
   const task = taskFromJson(readJson(path.join(taskDir, "task.json"))),
-    plan = pipelineConfig(ctx, taskDir),
+    plan = pipelineConfig(ctx, taskDir, "validate"),
     started = now();
   const steps = await runAppliedGates(
     taskDir,

@@ -7,7 +7,7 @@ import type { Json } from "../src/models.js";
 import { hash, readJson, readText, writeJson, writeText } from "../src/utils.js";
 import { BridgeContext, BridgeError, snapshot } from "../src/ide/common.js";
 import { normalizeIssues } from "../src/ide/scan.js";
-import { prepareCandidate, checkCandidate, copyArtifacts, validateCandidate, validateApplied } from "../src/ide/candidates.js";
+import { prepareCandidate, checkCandidate, copyArtifacts, validateCandidate, validateApplied, runPipelineLogged, pipelineConfig } from "../src/ide/candidates.js";
 import { openWorkspace, validateWorkspace } from "../src/ide/external_workspace.js";
 import { buildTestPlan, relocateFrozenTestPlan } from "../src/test_plan.js";
 import { executePipeline } from "../src/runner.js";
@@ -107,6 +107,113 @@ test("external validation uses existing pipeline gates and reviewer without a re
   assert.equal(response.result.steps.find((s: Json) => s.name === "refactor-agent").status, "SKIPPED");
   assert.equal(response.result.steps.some((s: Json) => s.name.startsWith("repair-agent")), false);
   assert.equal(response.result.steps.find((s: Json) => s.name === "review-agent").status, "PASS");
+});
+
+test("verification ignores unused refactor model settings across external, candidate and applied checks", async t => {
+  const previous = Object.fromEntries(["ARKTS_REFACTOR_MODEL", "ARKTS_REFACTOR_VARIANT", "ARKTS_REVIEW_MODEL", "ARKTS_REVIEW_VARIANT"]
+    .map(name => [name, process.env[name]]));
+  t.after(() => {
+    for (const [name, value] of Object.entries(previous))
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  });
+  process.env.ARKTS_REFACTOR_MODEL = "deveco/obsolete-model";
+  process.env.ARKTS_REFACTOR_VARIANT = "obsolete-variant";
+  process.env.ARKTS_REVIEW_MODEL = "zhipu-coding/glm-5";
+  process.env.ARKTS_REVIEW_VARIANT = "high";
+  const f = setup(t);
+  // Actual backend editing retains its original model policy, including rejecting this provider.
+  assert.throws(() => pipelineConfig(f.ctx, path.join(f.prepareRun, "backend")), /DevEco.*deveco\/obsolete-model/);
+  f.edit();
+  const verifyPlan = async (_ctx: BridgeContext, _taskDir: string, plan: Parameters<typeof runPipelineLogged>[2]) => {
+    assert.equal(plan.refactorAgent, undefined);
+    assert.equal(plan.repairAgent, undefined);
+    assert.equal(plan.maxRepairAttempts, 0);
+    assert.equal(plan.agentPolicy?.refactor, undefined);
+    assert.ok(plan.reviewAgent?.command?.includes("zhipu-coding/glm-5"));
+    assert.ok(plan.reviewAgent?.command?.includes("high"));
+    return pass();
+  };
+  const response = await f.validate(verifyPlan);
+  const rechecked = await validateCandidate(f.ctx, { candidateId: response.candidate.candidateId },
+    f.ctx.createRun("task.validateCandidate"), verifyPlan);
+  fs.copyFileSync(path.join(rechecked.runDirectory, "content/after", name), f.target);
+  const applied = await validateApplied(f.ctx, { candidateId: rechecked.candidate.candidateId },
+    f.ctx.createRun("task.validateApplied"), async (_taskDir, _task, plan) => {
+      assert.equal(plan.refactorAgent, undefined);
+      assert.equal(plan.repairAgent, undefined);
+      return ["smell", "build", "test", "linter"].map(name => ({ name, status: "PASS", duration_seconds: 0 }));
+    });
+  assert.equal(applied.result.verdict, "PASS");
+  const invalidReview = setup(t);
+  invalidReview.edit();
+  process.env.ARKTS_REVIEW_MODEL = "deveco/invalid-review";
+  await assert.rejects(invalidReview.validate(async () => { assert.fail("invalid review must not run"); }), /DevEco.*deveco\/invalid-review/);
+  assert.equal(readJson(path.join(invalidReview.openRun, "workspace.json")).validations, 0);
+});
+
+test("logged real pipeline accepts generated evidence, offers repair on review FAIL, and seals the next PASS", async t => {
+  const f = setup(t), baseline = snapshot(f.root), stub = path.join(f.base, "pipeline-tools.mjs");
+  // Run actual child commands and the production packet builder. Only external SDK/model work is stubbed.
+  writeText(stub, `import fs from 'node:fs';
+import path from 'node:path';
+import { prepareReviewPrompt } from ${JSON.stringify(new URL("../src/review_packet.js", import.meta.url).href)};
+const [kind, dir, verdict] = process.argv.slice(2);
+const save = (name, value) => fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+if (kind === 'smell') save('smell-after.json', []);
+if (kind === 'linter') save('linter-after.json', []);
+if (kind === 'test') save('test-results.json', {status:'PASS', jobs:[]});
+if (kind === 'review') {
+  const prompt = prepareReviewPrompt(dir, path.join(dir, 'review-prompt.md'));
+  const packet = JSON.parse(fs.readFileSync(path.join(dir, 'review-packet.json'), 'utf8'));
+  save('review-stub-evidence.json', {prompt, gateAttempt:packet.gateAttempt, changes:packet.changedFiles});
+  console.log(JSON.stringify({verdict, summary:verdict === 'FAIL' ? 'deterministic semantic failure' : 'review passed',
+    issues:verdict === 'FAIL' ? [{category:'semantic-regression', filePath:'entry/src/main/ets/Page.ets', line:2,
+      reason:'preserve the original return-value contract'}] : []}));
+} else console.log(kind + ': deterministic local check passed');`);
+  let lastCandidate = "";
+  for (const [attempt, verdict] of ["FAIL", "PASS"].entries()) {
+    f.edit(attempt + 2);
+    const response = await f.validate((ctx, taskDir, plan) => {
+      assert.equal(plan.refactorAgent, undefined);
+      assert.equal(plan.repairAgent, undefined);
+      assert.equal(plan.maxRepairAttempts, 0);
+      return runPipelineLogged(ctx, taskDir, {
+        ...plan, taskTimeoutSeconds: 20,
+        gates: Object.fromEntries(Object.keys(plan.gates ?? {}).map(kind => [kind,
+          {command:[process.execPath, stub, kind, taskDir], timeoutSeconds:10}])),
+        reviewAgent: {command:[process.execPath, stub, "review", taskDir, verdict], timeoutSeconds:10},
+        reviewFormatAgent: null,
+      });
+    });
+    assert.equal(response.result.verdict, verdict);
+    assert.equal(response.candidate.verdict, verdict);
+    assert.equal(response.attempt, attempt);
+    assert.notEqual(response.candidate.candidateId, lastCandidate);
+    lastCandidate = response.candidate.candidateId;
+    const taskDir = path.join(response.runDirectory, "backend");
+    const gates = readJson(path.join(taskDir, "gates.json"));
+    assert.ok(gates.gates.every((gate: Json) => gate.status === "PASS"));
+    assert.equal(readJson(path.join(taskDir, "review.json")).verdict, verdict);
+    assert.equal(readJson(path.join(taskDir, "result.json")).verdict, verdict);
+    const evidence = readJson(path.join(taskDir, "review-stub-evidence.json"));
+    assert.equal(evidence.changes[0].after.sha256, response.candidate.changes[0].afterSha256);
+    for (const artifact of ["review-agent-prompt.md", "review-packet.json", "review-literals.json", "reactive-extraction.json"])
+      assert.ok(fs.existsSync(path.join(taskDir, artifact)), artifact);
+    if (verdict === "FAIL") {
+      assert.equal(response.repairEligible, true);
+      assert.ok(readText(response.repairPromptFile).includes("preserve the original return-value contract"));
+      assert.equal(readJson(path.join(taskDir, "failure-report.json")).classification, "SEMANTIC_REVIEW_FAILURE");
+      assert.throws(() => checkCandidate(f.ctx, response.candidate.candidateId), code("BASELINE_CHANGED"));
+    } else {
+      assert.equal(response.repairEligible, false);
+      assert.equal(response.repairPromptFile, undefined);
+      assert.equal(checkCandidate(f.ctx, response.candidate.candidateId).verdict, "PASS");
+    }
+    assert.deepEqual(snapshot(f.root), baseline);
+  }
+  assert.ok(f.events.some(event => event.event === "log.appended" && String(event.data.text).includes("deterministic local check passed")));
+  assert.ok(f.events.some(event => event.event === "step.updated" && event.data.stepId === "评审 Agent" && event.data.status === "FAIL"));
+  assert.ok(f.events.some(event => event.event === "step.updated" && event.data.stepId === "评审 Agent" && event.data.status === "PASS"));
 });
 
 test("empty edits never reach verification and do not consume an attempt", async t => {

@@ -121,10 +121,7 @@ export async function validateWorkspace(
     const frozenSource = snapshot(stage), attempt = workspace.validations;
     if (same(frozenSource, prepared.baselineFiles))
       throw new BridgeError("NO_CHANGES", "保留原源码格式后没有生产修改，未执行验收");
-    const plan = pipelineConfig(ctx, taskDir);
-    delete plan.refactorAgent;
-    delete plan.repairAgent;
-    plan.maxRepairAttempts = 0;
+    const plan = pipelineConfig(ctx, taskDir, "validate");
     plan.agentPolicy = { ...plan.agentPolicy, editingOwner: "external", externalAttempt: attempt };
     workspace.validations++;
     workspace.lastRunDirectory = run;
