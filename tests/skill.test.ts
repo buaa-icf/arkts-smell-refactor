@@ -76,6 +76,27 @@ function fakeBackend(
   };
 }
 
+test("skill delegates external workspace creation and validation without executing an inner refactor", async t => {
+  const f = setup(t), calls: string[] = [];
+  const backend = () => fakeBackend((method, params) => {
+    calls.push(method);
+    if (method === "task.openWorkspace") {
+      assert.equal(params.taskHandle, "task-1");
+      return { workspaceId: "work-1", taskHandle: "task-1", editDirectory: "edit", promptFile: "prompt", runDirectory: "run" };
+    }
+    assert.equal(method, "task.validateWorkspace");
+    assert.equal(params.workspaceId, "work-1");
+    return { result: { verdict: "BLOCKED" }, workspaceId: "work-1", attempt: 0, repairEligible: false };
+  });
+  const opened = await invoke(["open-workspace", "--config", f.config, "--task", "task-1"], backend);
+  assert.equal(opened.code, 0);
+  assert.equal(opened.value.result.workspaceId, "work-1");
+  const validated = await invoke(["validate-workspace", "--config", f.config, "--workspace", "work-1"], backend);
+  assert.equal(validated.code, 3);
+  assert.equal(validated.value.result.repairEligible, false);
+  assert.deepEqual(calls, ["task.openWorkspace", "task.validateWorkspace"]);
+});
+
 async function invoke(
   args: string[],
   backend?: (config: PluginConfig) => Backend,

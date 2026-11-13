@@ -26,6 +26,7 @@ export const IGNORED = new Set([
   ".git",
   ".idea",
   ".hvigor",
+  ".homegraph",
   ".cache",
   ".test",
   "build",

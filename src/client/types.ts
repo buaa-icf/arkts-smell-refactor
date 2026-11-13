@@ -101,6 +101,8 @@ export interface BridgeMethods {
   "scan.start": { issues: Issue[]; runDirectory: string; scopePath: string; rules?: string[]; scannedFiles?: string[] };
   "task.prepare": Prepared;
   "task.execute": { candidate: Candidate; result: PipelineResult; runDirectory: string };
+  "task.openWorkspace": { workspaceId: string; taskHandle: string; editDirectory: string; promptFile: string; runDirectory: string };
+  "task.validateWorkspace": BridgeMethods["task.execute"] & { workspaceId: string; attempt: number; repairEligible: boolean; repairPromptFile?: string };
   "task.validateCandidate": BridgeMethods["task.execute"];
   "task.validateApplied": { result: PipelineResult; issues?: Issue[]; runDirectory: string; scanScope?: ScanScope };
   "candidate.restore": { candidate: Candidate; prepared: Prepared; result: PipelineResult };

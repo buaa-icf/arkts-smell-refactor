@@ -12,6 +12,7 @@ import {
   runGates,
 } from "../runner.js";
 import { prepareReviewMaterials } from "../workspace.js";
+import { relocateFrozenTestPlan } from "../test_plan.js";
 import { candidateScanScope, preparedScanScope } from "./scan_scope.js";
 import {
   copyFile,
@@ -246,7 +247,7 @@ export function summarizeFailure(taskDir: string, result: Json): void {
     }
   }
 }
-function copyArtifacts(
+export function copyArtifacts(
   source: string,
   destination: string,
   oldStage: string,
@@ -281,6 +282,12 @@ function copyArtifacts(
   for (const dir of ["baseline-production", "runtime-smoke-baseline"])
     if (isDir(path.join(source, dir)))
       copyProject(path.join(source, dir), path.join(destination, dir));
+  // Legacy runs may not have a frozen plan. Preserve it whenever available,
+  // including candidate revalidation and post-application validation.
+  if (isFile(path.join(source, "baseline-test-plan.json")))
+    relocateFrozenTestPlan(source, destination,
+      taskFromJson(readJson(path.join(source, "task.json"))).project_root,
+      taskFromJson(readJson(path.join(destination, "task.json"))).project_root);
 }
 export function freezeCandidate(
   ctx: BridgeContext,
@@ -351,7 +358,7 @@ export function freezeCandidate(
   writeJson(path.join(run, "candidate.json"), manifest);
   return { candidate: manifest, result, runDirectory: run };
 }
-type PipelineRunner = (
+export type PipelineRunner = (
   ctx: BridgeContext,
   taskDir: string,
   config: Config,

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { Json } from "./models.js";
 import {
@@ -63,6 +64,50 @@ export function freezeTestPlan(taskDir: string, root: string): void {
       error: String(e),
     });
   }
+}
+
+/** Move pre-edit selection to a new validation copy without selecting against edited source. */
+export function relocateFrozenTestPlan(
+  sourceTaskDir: string,
+  destinationTaskDir: string,
+  sourceRoot: string,
+  destinationRoot: string,
+): void {
+  sourceRoot = path.resolve(sourceRoot);
+  destinationRoot = path.resolve(destinationRoot);
+  const sourceTaskFile = path.join(sourceTaskDir, "task.json"),
+    destinationTaskFile = path.join(destinationTaskDir, "task.json"),
+    original = readJson(sourceTaskFile),
+    destination = readJson(destinationTaskFile),
+    frozen = readJson(path.join(sourceTaskDir, "baseline-test-plan.json"));
+  const stale = (message: string): never => { throw new Error("TEST_PLAN_STALE: " + message); };
+  if (frozen.sourceRoot !== sourceRoot || frozen.taskSha256 !== hash(sourceTaskFile) ||
+      (original.project_root ?? original.projectRoot) !== sourceRoot ||
+      (destination.project_root ?? destination.projectRoot) !== destinationRoot) {
+    stale("frozen task or source root changed during relocation");
+  }
+  // copyArtifacts relocates the staging parent, including workspace_root and absolute task paths.
+  const rewrite = (value: Json): Json => JSON.parse(JSON.stringify(value)
+    .replaceAll(JSON.stringify(path.dirname(sourceRoot)).slice(1, -1), JSON.stringify(path.dirname(destinationRoot)).slice(1, -1))
+    .replaceAll(path.dirname(sourceRoot).replaceAll("\\", "/"), path.dirname(destinationRoot).replaceAll("\\", "/")));
+  if (JSON.stringify(rewrite(original)) !== JSON.stringify(destination))
+    stale("destination task differs from the original task beyond staging paths");
+  for (const [file, digest] of Object.entries(frozen.testHashes ?? {})) {
+    if (!file || path.isAbsolute(file) || file.includes("\\") || file.includes(":") ||
+        file.split("/").some(part => !part || part === ".." || part === ".")) stale("invalid frozen test path");
+    for (const root of [sourceRoot, destinationRoot]) {
+      const absolute = path.resolve(root, file);
+      if (!within(absolute, root) || !isFile(absolute) ||
+          !within(fs.realpathSync(absolute), fs.realpathSync(root)) || hash(absolute) !== digest)
+        stale("original test changed: " + file);
+    }
+  }
+  // Keep a pre-edit selection error as evidence; the test gate will report BLOCKED.
+  writeJson(path.join(destinationTaskDir, "baseline-test-plan.json"), {
+    ...rewrite(frozen),
+    sourceRoot: destinationRoot,
+    taskSha256: hash(destinationTaskFile),
+  });
 }
 export const TEST_KINDS: Record<string, [string, string]> = {
   local: ["src/test", "test"],

@@ -26,6 +26,8 @@ const commands: Record<string, string[]> = {
   import: ["file"],
   prepare: ["from", "issue", "instructions-file"],
   execute: ["task"],
+  "open-workspace": ["task"],
+  "validate-workspace": ["workspace"],
   diff: ["candidate", "file"],
   "validate-candidate": ["candidate"],
   apply: ["candidate", "confirm"],
@@ -42,6 +44,8 @@ Usage: node dist/skill.js <command> --config <settings.json> [options]
   import --file <report.json>
   prepare --from <responseFile> --issue <issueId> [--instructions-file <text>]
   execute --task <taskHandle>
+  open-workspace --task <taskHandle>
+  validate-workspace --workspace <workspaceId>
   diff --candidate <candidateId> [--file <relativePath>]
   validate-candidate --candidate <candidateId>
   apply --candidate <candidateId> --confirm <candidateId>
@@ -92,6 +96,7 @@ interface Receipt {
 }
 export interface SkillOptions {
   directory?: string;
+  config?: PluginConfig;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   backend?: (config: PluginConfig) => Backend;
@@ -130,7 +135,7 @@ export async function runSkill(
     ]) {
       if (options[flag]) settings[key] = options[flag];
     }
-    const config = await loadConfig(settings, directory);
+    const config = io.config ?? await loadConfig(settings, directory);
     const projectRoot = await realpath(config.projectRoot);
     if (within(projectRoot, await canonicalPath(config.runs)))
       invalid("runs 实际路径必须位于业务工程之外");
@@ -230,6 +235,16 @@ export async function runSkill(
       case "execute":
         result = await request("task.execute", {
           taskHandle: required("task"),
+        });
+        break;
+      case "open-workspace":
+        result = await request("task.openWorkspace", {
+          taskHandle: required("task"),
+        });
+        break;
+      case "validate-workspace":
+        result = await request("task.validateWorkspace", {
+          workspaceId: required("workspace"),
         });
         break;
       case "validate-candidate": {

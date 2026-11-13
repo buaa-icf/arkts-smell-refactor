@@ -205,7 +205,12 @@ export function prepareReviewMaterials(
     productionDependencies: unique(copied),
   });
 }
-export function syncProductionChanges(mirror: string, source: string): number {
+export function syncProductionChanges(
+  mirror: string,
+  source: string,
+  output: (text: string) => void = console.log,
+  error: (text: string) => void = console.error,
+): number {
   const taskDir = path.dirname(mirror),
     forbidden: string[] = [],
     discarded: string[] = [],
@@ -252,13 +257,13 @@ export function syncProductionChanges(mirror: string, source: string): number {
     },
   );
   if (forbidden.length) {
-    console.error(
+    error(
       "Refactor Agent 尝试修改非生产代码或删除文件：" + forbidden.join(", "),
     );
     return 4;
   }
   if (!allowed.length) {
-    console.error("Refactor Agent 未产生允许的生产代码修改");
+    error("Refactor Agent 未产生允许的生产代码修改");
     return 5;
   }
   const manifest = path.join(taskDir, "refactor-changes.json"),
@@ -303,7 +308,7 @@ export function syncProductionChanges(mirror: string, source: string): number {
     rejectedFiles: [],
   });
   prepareReviewMaterials(taskDir, source, combined, unique([...(previous.changedProductionResources ?? []), ...allowed.filter(a => a.kind === "resource").map(a => a.relative)]));
-  console.log(
+  output(
     "已同步生产代码修改：" + allowed.map((a) => a.relative).join(", "),
   );
   return 0;

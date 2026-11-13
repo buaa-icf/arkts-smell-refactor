@@ -16,6 +16,7 @@ import {
   validatePolicy,
 } from "./ide/common.js";
 import { normalizeIssues, scan, smellCandidateGate } from "./ide/scan.js";
+import { openWorkspace, validateWorkspace } from "./ide/external_workspace.js";
 import {
   checkCandidate,
   executeCandidate,
@@ -70,6 +71,10 @@ export async function dispatch(
       return prepareCandidate(ctx, params, run!);
     case "task.execute":
       return executeCandidate(ctx, params, run!);
+    case "task.openWorkspace":
+      return openWorkspace(ctx, params, run!);
+    case "task.validateWorkspace":
+      return validateWorkspace(ctx, params, run!);
     case "task.validateCandidate":
       return validateCandidate(ctx, params, run!);
     case "task.validateApplied": {
