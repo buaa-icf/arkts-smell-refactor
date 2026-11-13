@@ -38,7 +38,7 @@ SDK 优先使用显式 studio 或 DEVECO_HOME；未设置时从 DEVECO_SDK_HOME�
     npm ci
     npm run package:skill
 
-默认生成 releases/arkts-smell-refactor 完整目录，以及同名 .zip 和 .tgz。可用 --output 指定发行目录；产物已存在时需要 --force，旧制品先备份。发行包包含 INSTALL.txt、SKILL.md、参考资料、批处理和 JavaScript 脚本，以及 runtime 下 JavaScript 后端、生产依赖和桥接资源。发布时提供完整 ZIP；使用者安装和运行无需再次编译。
+默认生成 releases/arkts-smell-refactor 完整目录，以及同名 .zip 和 .tgz。可用 --output 指定发行目录。重复执行会在新目录及两种归档全部生成并校验后替换旧产物，只保留最新一套；失败时保留或恢复上次产物，并清理本次临时文件。--force 仅作为兼容参数保留，无需再添加。发行包包含 INSTALL.txt、SKILL.md、参考资料、批处理和 JavaScript 脚本，以及 runtime 下 JavaScript 后端、生产依赖和桥接资源。发布时提供完整 ZIP；使用者安装和运行无需再次编译。
 
 也可直接从完整发行目录运行 JavaScript 安装器：
 

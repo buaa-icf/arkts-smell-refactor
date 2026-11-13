@@ -30,13 +30,13 @@ const writeJson = (file, data) => {
 
 function parse(args) {
   let output = path.join(repository, "releases/arkts-smell-refactor");
-  let force = false;
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (seen.has(flag)) throw new Error(`重复参数：${flag}`);
     seen.add(flag);
-    if (flag === "--force") force = true;
+    if (flag === "--force")
+      continue; // Accepted for compatibility; replacement is now the default.
     else if (
       flag === "--output" &&
       args[index + 1] &&
@@ -47,12 +47,6 @@ function parse(args) {
   }
   noLinks(output);
   output = canonical(output);
-  for (const suffix of [".tgz", ".zip"]) {
-    noLinks(output + suffix);
-    const archive = info(output + suffix);
-    if (archive && !archive.isFile())
-      throw new Error(`归档目标不是普通文件：${output + suffix}`);
-  }
   if (within(output, repository))
     throw new Error("输出目录不能是仓库本身或仓库的祖先目录");
   for (const source of [
@@ -64,9 +58,42 @@ function parse(args) {
   ])
     if (within(path.join(repository, source), output))
       throw new Error("输出目录不能覆盖源码或依赖");
-  if (!force && [output, output + ".tgz", output + ".zip"].some(info))
-    throw new Error("制品已存在；使用 --force 备份旧制品后重新打包");
-  return { output, force };
+  checkOutput(output);
+  return { output };
+}
+
+function checkOutput(output) {
+  noLinks(output);
+  if (info(output)) {
+    files(output); // Refuse links anywhere inside a directory that may be replaced.
+    const manifest = path.join(output, "package-manifest.json");
+    if (
+      !info(manifest)?.isFile() ||
+      readJson(manifest).format !== "arkts-smell-refactor-portable"
+    )
+      throw new Error(`输出目录不是已有 Skill 制品，拒绝覆盖：${output}`);
+  }
+  for (const suffix of [".tgz", ".zip"]) {
+    noLinks(output + suffix);
+    const archive = info(output + suffix);
+    if (archive && !archive.isFile())
+      throw new Error(`归档目标不是普通文件：${output + suffix}`);
+  }
+}
+
+/** Every recursive removal is confined to the explicitly checked artifact/transaction directory. */
+function removeBuildPath(root, target) {
+  const absolute = checkedPath(root, target),
+    entry = info(absolute);
+  if (!entry) return;
+  if (entry.isDirectory()) files(absolute);
+  else if (!entry.isFile())
+    throw new Error(`清理目标不是普通文件或目录：${absolute}`);
+  fs.rmSync(absolute, {
+    recursive: entry.isDirectory(),
+    maxRetries: 3,
+    retryDelay: 100,
+  });
 }
 
 function sourceDigest() {
@@ -190,15 +217,7 @@ function createZip(directory, archive) {
   });
 }
 
-function build(args) {
-  const { output, force } = parse(args);
-  const parent = path.dirname(output);
-  fs.mkdirSync(parent, { recursive: true });
-  const staging = checkedPath(
-    parent,
-    path.join(parent, `.arkts-skill-package-${randomUUID()}`),
-  );
-  fs.mkdirSync(staging);
+function buildContents(staging) {
   const inputDigest = sourceDigest();
   const pkg = readJson(path.join(repository, "package.json"));
   const lock = readJson(path.join(repository, "package-lock.json"));
@@ -305,7 +324,7 @@ function build(args) {
     ]),
   );
   if (inputDigest !== sourceDigest())
-    throw new Error(`打包期间源码发生变化，请重试；暂存制品：${staging}`);
+    throw new Error("打包期间源码发生变化，请重试");
   writeJson(path.join(staging, "package-manifest.json"), {
     schemaVersion: 1,
     format: "arkts-smell-refactor-portable",
@@ -316,65 +335,148 @@ function build(args) {
     files: content,
   });
   validatePackage(staging);
-  if (!force && [output, output + ".tgz", output + ".zip"].some(info))
-    throw new Error("目标制品在打包期间出现，已保留；请检查后重试");
-  const stamp = `${Date.now()}-${randomUUID()}`;
-  if (info(output)) {
-    files(output);
-    fs.renameSync(output, checkedPath(parent, `${output}.previous-${stamp}`));
-  }
-  for (const suffix of [".tgz", ".zip"])
-    if (info(output + suffix)) {
-      noLinks(output + suffix);
-      fs.renameSync(
-        output + suffix,
-        checkedPath(parent, `${output}${suffix}.previous-${stamp}`),
-      );
-    }
-  fs.renameSync(staging, checkedPath(parent, output));
-  const archive = output + ".tgz";
-  const temporaryArchive = checkedPath(
-    parent,
-    archive + ".tmp-" + randomUUID(),
-  );
-  const packed = spawnSync(
-    "tar",
-    ["-czf", temporaryArchive, "-C", parent, "--", path.basename(output)],
-    { encoding: "utf8", windowsHide: true },
-  );
-  if (packed.error || packed.status !== 0)
-    throw new Error(
-      `完整目录已生成，但 tar 归档失败：${packed.error?.message || packed.stderr}`,
-    );
-  fs.renameSync(temporaryArchive, checkedPath(parent, archive));
-  const zipArchive = output + ".zip";
-  const temporaryZip = checkedPath(
-    parent,
-    output + ".tmp-" + randomUUID() + ".zip",
-  );
-  const zipped = createZip(output, temporaryZip);
-  if (zipped.error || zipped.status !== 0)
-    throw new Error(
-      `完整目录和 tgz 已生成，但 ZIP 归档失败（Windows 需要系统 PowerShell，其他平台需要 zip）：${zipped.error?.message || zipped.stderr}`,
-    );
-  fs.renameSync(temporaryZip, checkedPath(parent, zipArchive));
   return {
-    ok: true,
-    directory: output,
-    archive,
-    zipArchive,
     files: Object.keys(content).length,
     productionPackages: dependencies.length,
     sourceDigest: inputDigest,
-    archiveSha256: digest(fs.readFileSync(archive)),
-    zipSha256: digest(fs.readFileSync(zipArchive)),
   };
+}
+
+/** Retain the old set only while publishing, then delete it with the transaction directory. */
+function publish(output, staging, transaction) {
+  const parent = path.dirname(output),
+    previous = path.join(transaction, "previous");
+  checkOutput(output);
+  fs.mkdirSync(checkedPath(transaction, previous));
+  const entries = ["", ".tgz", ".zip"].map((suffix) => ({
+    target: checkedPath(parent, output + suffix),
+    next: checkedPath(transaction, staging + suffix),
+    old: checkedPath(
+      transaction,
+      path.join(previous, path.basename(output) + suffix),
+    ),
+  }));
+  const moved = [],
+    published = [];
+  try {
+    for (const entry of entries) {
+      if (!info(entry.target)) continue;
+      fs.renameSync(entry.target, entry.old);
+      moved.push(entry);
+    }
+    for (const entry of entries) {
+      fs.renameSync(entry.next, entry.target);
+      published.push(entry);
+    }
+  } catch (error) {
+    try {
+      for (const entry of published.reverse())
+        removeBuildPath(parent, entry.target);
+      for (const entry of moved.reverse()) {
+        if (info(entry.target))
+          throw new Error(`恢复位置被占用：${entry.target}`);
+        fs.renameSync(
+          checkedPath(transaction, entry.old),
+          checkedPath(parent, entry.target),
+        );
+      }
+    } catch (recovery) {
+      const failure = new Error(
+        `发布失败：${error.message}；恢复失败：${recovery.message}；恢复材料已保留在 ${transaction}`,
+      );
+      failure.preserveTransaction = true;
+      throw failure;
+    }
+    throw error;
+  }
+}
+
+function build(args) {
+  const { output } = parse(args),
+    parent = path.dirname(output);
+  fs.mkdirSync(parent, { recursive: true });
+  const lockPath = checkedPath(
+    parent,
+    path.join(parent, `.${path.basename(output)}.package.lock`),
+  );
+  let lock;
+  try {
+    lock = fs.openSync(lockPath, "wx");
+  } catch (error) {
+    if (error.code === "EEXIST")
+      throw new Error(
+        `已有打包任务或中断遗留锁：${lockPath}；请确认原任务已结束后处理`,
+      );
+    throw error;
+  }
+  const transaction = checkedPath(
+    parent,
+    path.join(parent, `.arkts-skill-package-${randomUUID()}`),
+  );
+  let preserveTransaction = false;
+  try {
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+    const staging = path.join(transaction, "next", path.basename(output));
+    fs.mkdirSync(checkedPath(parent, staging), { recursive: true });
+    const metadata = buildContents(staging);
+    const packed = spawnSync(
+      "tar",
+      [
+        "-czf",
+        staging + ".tgz",
+        "-C",
+        path.dirname(staging),
+        "--",
+        path.basename(staging),
+      ],
+      { encoding: "utf8", windowsHide: true },
+    );
+    if (packed.error || packed.status !== 0)
+      throw new Error(
+        `tar 归档失败：${packed.error?.message || packed.stderr}`,
+      );
+    const zipped = createZip(staging, staging + ".zip");
+    if (zipped.error || zipped.status !== 0)
+      throw new Error(
+        `ZIP 归档失败（Windows 需要系统 PowerShell，其他平台需要 zip）：${zipped.error?.message || zipped.stderr}`,
+      );
+    for (const suffix of [".tgz", ".zip"]) {
+      const archive = info(staging + suffix);
+      if (!archive?.isFile() || !archive.size)
+        throw new Error(`归档未生成有效文件：${staging + suffix}`);
+    }
+    validatePackage(staging);
+    if (metadata.sourceDigest !== sourceDigest())
+      throw new Error("打包期间源码发生变化，请重试");
+    const archiveSha256 = digest(fs.readFileSync(staging + ".tgz")),
+      zipSha256 = digest(fs.readFileSync(staging + ".zip"));
+    publish(output, staging, transaction);
+    return {
+      ok: true,
+      directory: output,
+      archive: output + ".tgz",
+      zipArchive: output + ".zip",
+      ...metadata,
+      archiveSha256,
+      zipSha256,
+    };
+  } catch (error) {
+    preserveTransaction = error.preserveTransaction === true;
+    throw error;
+  } finally {
+    try {
+      if (!preserveTransaction) removeBuildPath(parent, transaction);
+    } finally {
+      fs.closeSync(lock);
+      fs.unlinkSync(checkedPath(parent, lockPath));
+    }
+  }
 }
 
 try {
   if (process.argv.length === 3 && ["--help", "-h"].includes(process.argv[2]))
     process.stdout.write(
-      "Usage: node scripts/package-skill.mjs [--output <directory>] [--force]\n",
+      "Usage: node scripts/package-skill.mjs [--output <directory>] [--force]\nReplaces the latest directory, ZIP and TGZ only after a successful build. --force is accepted for compatibility.\n",
     );
   else
     process.stdout.write(JSON.stringify(build(process.argv.slice(2))) + "\n");

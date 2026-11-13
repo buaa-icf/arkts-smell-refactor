@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const repository = path.resolve(".");
@@ -30,9 +31,40 @@ function write(file: string, data: string) {
   fs.writeFileSync(file, data);
 }
 
+function publishedState(output: string) {
+  const result: Record<string, string> = {};
+  function visit(file: string, name: string) {
+    const stat = fs.lstatSync(file);
+    assert.equal(stat.isSymbolicLink(), false);
+    if (stat.isDirectory()) {
+      result[name + "/"] = "directory";
+      for (const child of fs.readdirSync(file).sort())
+        visit(path.join(file, child), name + "/" + child);
+    } else
+      result[name] = createHash("sha256")
+        .update(fs.readFileSync(file))
+        .digest("hex");
+  }
+  for (const suffix of ["", ".tgz", ".zip"])
+    visit(output + suffix, path.basename(output) + suffix);
+  return result;
+}
+
+function onlyLatestArtifacts(output: string) {
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(output)).sort(),
+    [
+      path.basename(output),
+      path.basename(output) + ".tgz",
+      path.basename(output) + ".zip",
+    ].sort(),
+    "completed or failed builds must not leave previous releases or transaction files",
+  );
+}
+
 test(
   "standalone Skill package runs offline outside its repository and selects two projects at invocation",
-  { timeout: 120_000 },
+  { timeout: 180_000 },
   (t) => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "arkts-skill-package-"));
     t.after(() => {
@@ -42,6 +74,8 @@ test(
     });
     assert.equal(base.startsWith(repository + path.sep), false);
     const output = path.join(base, "构建 & Output/arkts-smell-refactor");
+    // An interrupted/manual delivery may have only one artifact. Default packaging replaces it.
+    write(output + ".zip", "old ZIP delivery");
     const packaged = node(
       packager,
       ["--output", output],
@@ -50,6 +84,7 @@ test(
       90_000,
     );
     assert.equal(packaged.status, 0, packaged.stderr + packaged.stdout);
+    onlyLatestArtifacts(output);
     const summary = JSON.parse(packaged.stdout);
     assert.equal(summary.directory, output);
     assert.ok(fs.statSync(summary.archive).size > 1_000_000);
@@ -268,6 +303,102 @@ test(
       assert.deepEqual(JSON.parse(history.stdout).result.records, []);
       assert.equal(fs.existsSync(path.join(project, ".deveco")), false);
     }
+
+    // Exercise actual packaging failures without adding production-only test switches.
+    const preload = path.join(base, "package-failure.cjs");
+    const observed = path.join(base, "injected-failure.txt");
+    write(
+      preload,
+      `
+const fs = require('node:fs');
+const path = require('node:path');
+const cp = require('node:child_process');
+const { syncBuiltinESMExports } = require('node:module');
+const spawn = cp.spawnSync;
+const rename = fs.renameSync;
+let injected = false;
+function trigger(message) {
+  injected = true;
+  fs.writeFileSync(process.env.ARKTS_TEST_OBSERVED, message);
+}
+cp.spawnSync = function(command, args, options) {
+  const executable = path.basename(String(command)).toLowerCase();
+  const zip = executable === 'zip' || (executable === 'powershell.exe' && Array.isArray(args) && args.some(arg => String(arg).includes('CreateFromDirectory')));
+  if (!injected && process.env.ARKTS_TEST_FAILURE === 'archive' && zip) {
+    trigger('injected ZIP archive failure');
+    return { status: 17, stdout: '', stderr: 'injected ZIP archive failure' };
+  }
+  return spawn.apply(this, arguments);
+};
+fs.renameSync = function(source, destination) {
+  if (!injected && process.env.ARKTS_TEST_FAILURE === 'publish' && path.resolve(String(destination)) === path.resolve(process.env.ARKTS_TEST_OUTPUT + '.zip')) {
+    trigger('injected ZIP publication failure');
+    const error = new Error('injected ZIP publication failure');
+    error.code = 'EACCES';
+    throw error;
+  }
+  return rename.apply(this, arguments);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const beforeFailure = publishedState(output);
+    for (const failure of ["archive", "publish"]) {
+      const failed = node(
+        packager,
+        ["--output", output, "--force"],
+        base,
+        {
+          ...process.env,
+          NODE_OPTIONS: `--require="${preload.replaceAll("\\", "/")}"`,
+          ARKTS_TEST_FAILURE: failure,
+          ARKTS_TEST_OBSERVED: observed,
+          ARKTS_TEST_OUTPUT: output,
+        },
+        90_000,
+      );
+      assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+      assert.match(
+        fs.readFileSync(observed, "utf8"),
+        failure === "archive" ? /archive failure/ : /publication failure/,
+      );
+      assert.deepEqual(
+        publishedState(output),
+        beforeFailure,
+        `${failure} failure must retain the previous delivery byte-for-byte`,
+      );
+      onlyLatestArtifacts(output);
+    }
+    const marker = path.join(output, "old-build-marker.txt");
+    write(marker, "obsolete build output");
+    const repeated = node(
+      packager,
+      ["--output", output],
+      base,
+      process.env,
+      90_000,
+    );
+    assert.equal(repeated.status, 0, repeated.stderr + repeated.stdout);
+    assert.equal(
+      fs.existsSync(marker),
+      false,
+      "the latest directory replaces the old tree instead of merging obsolete files",
+    );
+    onlyLatestArtifacts(output);
+    const latest = JSON.parse(repeated.stdout);
+    assert.equal(latest.sourceDigest, summary.sourceDigest);
+    assert.equal(
+      createHash("sha256")
+        .update(fs.readFileSync(latest.archive))
+        .digest("hex"),
+      latest.archiveSha256,
+    );
+    assert.equal(
+      createHash("sha256")
+        .update(fs.readFileSync(latest.zipArchive))
+        .digest("hex"),
+      latest.zipSha256,
+    );
   },
 );
 
@@ -284,20 +415,45 @@ test("Skill packager rejects unsafe output and malformed options before building
   }
 });
 
-test("Skill packager preserves an existing ZIP unless force is explicit", (t) => {
-  const base = fs.mkdtempSync(
-    path.join(os.tmpdir(), "arkts-skill-existing-zip-"),
-  );
+test("Skill packager refuses to replace an unmanaged directory", (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "arkts-skill-unmanaged-"));
   t.after(() => {
     const actual = fs.realpathSync.native(base);
     assert.equal(path.dirname(actual), fs.realpathSync.native(os.tmpdir()));
     fs.rmSync(actual, { recursive: true, force: true });
   });
   const output = path.join(base, "arkts-smell-refactor");
-  write(output + ".zip", "existing delivery");
-  const result = node(packager, ["--output", output], base);
+  write(path.join(output, "keep.txt"), "unrelated content");
+  for (const flags of [[], ["--force"]]) {
+    const result = node(packager, ["--output", output, ...flags], base);
+    assert.equal(result.status, 2);
+    assert.equal(
+      fs.readFileSync(path.join(output, "keep.txt"), "utf8"),
+      "unrelated content",
+    );
+    assert.deepEqual(fs.readdirSync(base), ["arkts-smell-refactor"]);
+  }
+});
+
+test("Skill packager preserves another publisher's lock and delivery", (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "arkts-skill-locked-"));
+  t.after(() => {
+    const actual = fs.realpathSync.native(base);
+    assert.equal(path.dirname(actual), fs.realpathSync.native(os.tmpdir()));
+    fs.rmSync(actual, { recursive: true, force: true });
+  });
+  const output = path.join(base, "arkts-smell-refactor");
+  const lock = path.join(base, ".arkts-smell-refactor.package.lock");
+  const lockText = JSON.stringify({ pid: process.pid });
+  write(output + ".zip", "previous ZIP");
+  write(lock, lockText);
+  const result = node(packager, ["--output", output, "--force"], base);
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /制品已存在/);
-  assert.equal(fs.readFileSync(output + ".zip", "utf8"), "existing delivery");
-  assert.equal(fs.existsSync(output), false);
+  assert.match(result.stderr, /打包任务|遗留锁/);
+  assert.equal(fs.readFileSync(lock, "utf8"), lockText);
+  assert.equal(fs.readFileSync(output + ".zip", "utf8"), "previous ZIP");
+  assert.deepEqual(
+    fs.readdirSync(base).sort(),
+    [path.basename(lock), "arkts-smell-refactor.zip"].sort(),
+  );
 });
