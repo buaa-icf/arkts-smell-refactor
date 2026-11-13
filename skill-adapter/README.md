@@ -2,40 +2,51 @@
 
 Skill 在 DevEco 对话中展示检测结果、风险、建议、候选 Diff 和反馈。外层 DevEco 原生子 Agent 负责重构与返修；Skill 自带的运行时准备编辑副本、接收修改、执行验收和独立评审，再按用户选择应用或回滚。TUI 与 Skill 继续复用检测、风险、门禁、证据和事务实现。
 
-## 打包与用户级安装
+## Windows 使用者安装
 
-维护者在工具仓库构建发行包：
+1. 下载发布者提供的 arkts-smell-refactor.zip，**完整解压**到一个目录。目录中应同时有 install.bat、SKILL.md、scripts 和 runtime；不要在压缩包预览中运行。
+2. 确认本机有 Node.js **20.19 或更高版本**，且 node 在 PATH 中；DevEco Code 要求更高版本时以其要求为准。没有 Node 或版本过低时，安装入口会明确提示并结束，不会自动下载或安装。可从 [Node.js 官方下载页](https://nodejs.org/en/download) 安装受支持的 LTS 版本，重新打开终端后运行 `node --version` 检查。
+3. 双击解压目录中的 **install.bat**。已有同名安装时自动备份升级，并保留原有工具设置；查看窗口中的安装结果、实际位置和备份路径。
+4. 退出并重启 DevEco Code，在目标业务工程打开聊天，通过 /skills 确认 arkts-smell-refactor，然后说“使用 arkts-smell-refactor，先检查环境，再检测 entry/src/main/ets/pages/Index.ets”。请把文件路径换成工程中的实际文件。
 
-    npm ci
-    npm run build
-    npm run package:skill
+安装入口是批处理，后续执行包内 JavaScript。使用者无需 TypeScript、npm 或开发仓库。安装成功只表示文件就绪；首次流程仍会预检 SDK、工具和审查模型配置，缺项时列出补齐方法并结束本次执行。完整包内向导见 [INSTALL.txt](../skills/arkts-smell-refactor/INSTALL.txt)。
 
-默认生成 releases/arkts-smell-refactor 完整目录及同名 .tgz；可用 --output 指定发行目录。产物已存在时需要 --force，旧目录和归档先备份。发行包包含 SKILL.md、参考资料、启动和安装脚本，以及 runtime 下编译产物、生产依赖和桥接资源。使用者复制完整目录或解压 .tgz 即可，不需要开发仓库，也不需要从源码安装 npm 依赖；完整发行目录也可直接运行 scripts/run.mjs。
+如需从终端安装或提供工具路径，在完整解压目录执行：
 
-在解压后的发行目录执行：
+    .\install.bat --no-pause
+    .\install.bat --no-pause --studio "D:/tool/DevEco/DevEco Studio"
+    .\install.bat --no-pause --config "D:/settings/arkts-tools.json"
 
-    node scripts/install.mjs
-
-可设置 SDK 或读取现有工具配置：
-
-    node scripts/install.mjs --studio "D:/tool/DevEco/DevEco Studio"
-    node scripts/install.mjs --config "D:/settings/arkts-tools.json"
-
-也可在维护仓库安装已经打好的包：
-
-    npm run skill:install -- --package "releases/arkts-smell-refactor"
+--no-pause 仅关闭结束前的按键等待。--studio 使用绝对路径；--config 读取 JSON 工具设置。
 
 安装位置是用户级 ~/.config/deveco/skills/arkts-smell-refactor，Windows 对应用户主目录下的 .config/deveco/skills。设置了绝对 XDG_CONFIG_HOME 时使用其下的 deveco/skills。安装时不选择业务工程；不把某个工程、开发仓库或历史 runs 路径写入用户级绑定。
 
 --config 仅复制受支持的工具设置，如 studio、deveco、hvigor、ohpm、linter、linterMode 和 timeoutMs，见 [工具设置示例](examples/settings.example.json)。旧配置中的 projectRoot、backend、bridgePath、runs、node 不作为发行包绑定；原配置不改写。安装内 settings.json 可保存共用工具设置，运行时还可单次传 --config。
 
---dry-run 仅预览；已有同名安装默认拒绝覆盖，--force 会备份旧目录再更新，失败时尝试恢复旧目录。升级默认沿用旧安装中的工具设置，本次 --config 和 --studio 可覆盖；旧工程和仓库路径不迁移。脚本不改业务工程的配置、宿主权限、协议或登录。
+批处理入口自动启用备份升级；升级默认沿用旧安装中的工具设置，本次 --config 和 --studio 可覆盖，旧工程和仓库路径不迁移。脚本不改业务工程的配置、宿主权限、协议或登录。
 
 退出并重启 DevEco Code，在 /skills 中确认 arkts-smell-refactor。官方支持此用户级目录，见 [华为常用配置文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-common-configure/)。若有旧项目级同名 Skill，通过 deveco debug skill 的 location 核对实际加载版本。IDE 插件也可导入完整目录或 ZIP，但应保留 runtime 和脚本，见 [官方 Skill 配置页面](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-plugin-skill)。
 
-运行仍需要本机 Node.js、DevEco Code 和工程要求的 DevEco SDK、构建及测试环境；发行包包含 JavaScript 运行时依赖，不包含平台专用 Node、SDK 或设备。Node 基础要求为 ≥20.19，使用 DevEco Code 按其实际版本要求准备 Node.js 22 或更高版本。
+运行仍需要本机 Node.js、DevEco Code 和工程要求的 DevEco SDK、构建及测试环境；发行包包含 JavaScript 运行时依赖，不包含平台专用 Node、SDK 或设备。
 
 SDK 优先使用显式 studio 或 DEVECO_HOME；未设置时从 DEVECO_SDK_HOME、已有 Hvigor/OHPM/codelinter 命令的安装位置发现标准 SDK 目录。无法发现时 doctor 会列出配置方法。
+
+## 维护者打包与其他安装入口
+
+维护者在工具仓库编译 TypeScript 源码并构建发行包：
+
+    npm ci
+    npm run package:skill
+
+默认生成 releases/arkts-smell-refactor 完整目录，以及同名 .zip 和 .tgz。可用 --output 指定发行目录；产物已存在时需要 --force，旧制品先备份。发行包包含 INSTALL.txt、SKILL.md、参考资料、批处理和 JavaScript 脚本，以及 runtime 下 JavaScript 后端、生产依赖和桥接资源。发布时提供完整 ZIP；使用者安装和运行无需再次编译。
+
+也可直接从完整发行目录运行 JavaScript 安装器：
+
+    node scripts/install.mjs
+    node scripts/install.mjs --dry-run
+    node scripts/install.mjs --force
+
+JavaScript 安装器默认拒绝覆盖，--force 才备份升级；--dry-run 仅预览。覆盖失败时尝试恢复旧目录。维护仓库可用 `npm run skill:install -- --package "releases/arkts-smell-refactor"` 安装已经打好的包。完整发行目录也可直接运行 scripts/run.mjs。
 
 ## 切换工程与启动预检
 

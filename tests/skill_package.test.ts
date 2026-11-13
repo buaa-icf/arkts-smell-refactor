@@ -41,7 +41,7 @@ test(
       fs.rmSync(actual, { recursive: true, force: true, maxRetries: 3 });
     });
     assert.equal(base.startsWith(repository + path.sep), false);
-    const output = path.join(base, "build/arkts-smell-refactor");
+    const output = path.join(base, "构建 & Output/arkts-smell-refactor");
     const packaged = node(
       packager,
       ["--output", output],
@@ -53,6 +53,8 @@ test(
     const summary = JSON.parse(packaged.stdout);
     assert.equal(summary.directory, output);
     assert.ok(fs.statSync(summary.archive).size > 1_000_000);
+    assert.ok(fs.statSync(summary.zipArchive).size > 1_000_000);
+    assert.match(summary.zipSha256, /^[a-f0-9]{64}$/);
     assert.match(summary.sourceDigest, /^[a-f0-9]{64}$/);
     const manifest = JSON.parse(
       fs.readFileSync(path.join(output, "package-manifest.json"), "utf8"),
@@ -107,8 +109,58 @@ test(
       archive.stdout.includes("arkts-smell-refactor/scripts/install.mjs"),
     );
 
+    const unpacked = path.join(base, "ZIP 解压目录");
+    const extraction =
+      process.platform === "win32"
+        ? spawnSync(
+            path.join(
+              process.env.SystemRoot || "C:\\Windows",
+              "System32/WindowsPowerShell/v1.0/powershell.exe",
+            ),
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:ARKTS_TEST_ARCHIVE, $env:ARKTS_TEST_DESTINATION)",
+            ],
+            {
+              env: {
+                ...process.env,
+                ARKTS_TEST_ARCHIVE: summary.zipArchive,
+                ARKTS_TEST_DESTINATION: unpacked,
+              },
+              encoding: "utf8",
+              windowsHide: true,
+            },
+          )
+        : spawnSync("unzip", ["-q", summary.zipArchive, "-d", unpacked], {
+            encoding: "utf8",
+            windowsHide: true,
+          });
+    assert.ifError(extraction.error);
+    assert.equal(extraction.status, 0, extraction.stderr);
     const delivered = path.join(base, "用户收到的独立目录");
-    fs.renameSync(output, delivered);
+    fs.renameSync(path.join(unpacked, "arkts-smell-refactor"), delivered);
+    for (const name of [
+      "install.bat",
+      "INSTALL.txt",
+      "scripts/install-windows.mjs",
+    ])
+      assert.ok(
+        fs.statSync(path.join(delivered, name)).isFile(),
+        `${name} must ship in the ZIP`,
+      );
+    const batch = fs.readFileSync(path.join(delivered, "install.bat"), "utf8");
+    assert.ok(batch.includes("\r\n"));
+    assert.doesNotMatch(
+      batch,
+      /(?<!\r)\n|\r(?!\n)/,
+      "Windows batch files must use CRLF even when built on another platform",
+    );
+    assert.equal(
+      fs.readFileSync(path.join(delivered, "scripts/run.mjs"), "utf8"),
+      fs.readFileSync(path.join(output, "scripts/run.mjs"), "utf8"),
+    );
     const userConfig = path.join(base, "用户 配置");
     const emptyPath = path.join(base, "empty-bin");
     fs.mkdirSync(emptyPath);
@@ -230,4 +282,22 @@ test("Skill packager rejects unsafe output and malformed options before building
     assert.equal(result.status, 2);
     assert.match(result.stderr, /输出目录|参数无效/);
   }
+});
+
+test("Skill packager preserves an existing ZIP unless force is explicit", (t) => {
+  const base = fs.mkdtempSync(
+    path.join(os.tmpdir(), "arkts-skill-existing-zip-"),
+  );
+  t.after(() => {
+    const actual = fs.realpathSync.native(base);
+    assert.equal(path.dirname(actual), fs.realpathSync.native(os.tmpdir()));
+    fs.rmSync(actual, { recursive: true, force: true });
+  });
+  const output = path.join(base, "arkts-smell-refactor");
+  write(output + ".zip", "existing delivery");
+  const result = node(packager, ["--output", output], base);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /制品已存在/);
+  assert.equal(fs.readFileSync(output + ".zip", "utf8"), "existing delivery");
+  assert.equal(fs.existsSync(output), false);
 });

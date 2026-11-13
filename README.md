@@ -1,8 +1,10 @@
 # ArkTS 代码异味重构与验证工具
 
-`deveco-plugin/` 包含 DevEco Studio 的 Java 插件，`opencode-plugin/` 包含 DevEco Code／OpenCode 的原生终端工作台。两者均通过 Node JSONL 桥接调用本仓库 TypeScript 后端。下文命令用于后端 CLI；TUI 的配置、`/arkts` 入口、候选 Diff、确认应用及回滚流程见 [TUI 使用说明](opencode-plugin/docs/usage-and-validation.md)。
+**安装 Skill（Windows）：** 下载发行 ZIP → 完整解压 → 双击根目录的 **install.bat** → 重启 DevEco Code，在业务工程中加载 arkts-smell-refactor。需要 PATH 中可用的 Node.js **20.19+**；缺失或版本过低时会提示并结束。已有安装会自动备份升级，保留工具设置。安装和运行使用批处理及包内 JavaScript，**无需 TypeScript、npm 或开发仓库**。详见 [安装向导](skills/arkts-smell-refactor/INSTALL.txt) 和 [Skill 使用说明](skill-adapter/README.md)。
 
-新增 [Skill 对话方案（试验版）](skill-adapter/README.md)：外层 DevEco Code 调度重构和返修子 Agent，共享后端提供编辑副本、验收、独立审查及候选应用/回滚。现有 TUI 继续使用原流程。运行 `npm run package:skill` 生成包含后端、HomeCheck 和生产依赖的独立发行包，再运行 `npm run skill:install` 安装到用户级目录；安装后不需要本仓库或 npm。目标工程由当前目录或 `--project` 选择。流程首先执行 `doctor`，缺少 SDK、工具或审查模型配置时明确报告并终止。使用相同工程、后端和 `runs` 配置的两个入口可共享候选及事务记录。
+[Skill 对话方案（试验版）](skill-adapter/README.md) 由外层 DevEco Code 调度重构和返修子 Agent，共享后端提供编辑副本、验收、独立审查及应用/回滚。目标工程由当前目录或 --project 选择；流程首先预检，缺少 SDK、工具或审查模型配置时报告并终止。
+
+`deveco-plugin/` 包含 DevEco Studio 的 Java 插件，`opencode-plugin/` 包含 DevEco Code／OpenCode 的原生终端工作台。两者均通过 Node JSONL 桥接调用共享后端。以下命令用于源码开发及后端 CLI；TUI 的配置、`/arkts` 入口、候选 Diff、确认应用及回滚流程见 [TUI 使用说明](opencode-plugin/docs/usage-and-validation.md)。
 
 ## 1. 安装和启动
 

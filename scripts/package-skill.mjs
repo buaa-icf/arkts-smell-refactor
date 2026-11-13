@@ -47,6 +47,12 @@ function parse(args) {
   }
   noLinks(output);
   output = canonical(output);
+  for (const suffix of [".tgz", ".zip"]) {
+    noLinks(output + suffix);
+    const archive = info(output + suffix);
+    if (archive && !archive.isFile())
+      throw new Error(`归档目标不是普通文件：${output + suffix}`);
+  }
   if (within(output, repository))
     throw new Error("输出目录不能是仓库本身或仓库的祖先目录");
   for (const source of [
@@ -58,7 +64,7 @@ function parse(args) {
   ])
     if (within(path.join(repository, source), output))
       throw new Error("输出目录不能覆盖源码或依赖");
-  if (!force && (info(output) || info(output + ".tgz")))
+  if (!force && [output, output + ".tgz", output + ".zip"].some(info))
     throw new Error("制品已存在；使用 --force 备份旧制品后重新打包");
   return { output, force };
 }
@@ -152,6 +158,38 @@ function productionDependencies(runtime, rootPackage, lock) {
   return [...visited.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function createZip(directory, archive) {
+  if (process.platform === "win32") {
+    const powershell = path.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32/WindowsPowerShell/v1.0/powershell.exe",
+    );
+    return spawnSync(
+      powershell,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:ARKTS_PACKAGE_DIRECTORY, $env:ARKTS_PACKAGE_ARCHIVE, [System.IO.Compression.CompressionLevel]::Optimal, $true, [System.Text.Encoding]::UTF8)",
+      ],
+      {
+        env: {
+          ...process.env,
+          ARKTS_PACKAGE_DIRECTORY: directory,
+          ARKTS_PACKAGE_ARCHIVE: archive,
+        },
+        encoding: "utf8",
+        windowsHide: true,
+      },
+    );
+  }
+  return spawnSync("zip", ["-q", "-r", archive, path.basename(directory)], {
+    cwd: path.dirname(directory),
+    encoding: "utf8",
+    windowsHide: true,
+  });
+}
+
 function build(args) {
   const { output, force } = parse(args);
   const parent = path.dirname(output);
@@ -180,7 +218,10 @@ function build(args) {
       throw new Error(`Skill 源目录包含不应发布的文件：${name}`);
     const destination = path.join(staging, name);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(path.join(skillSource, name), destination);
+    if (/\.bat$/i.test(name)) {
+      const batch = fs.readFileSync(path.join(skillSource, name), "utf8");
+      fs.writeFileSync(destination, batch.replace(/\r\n|\r|\n/g, "\r\n"));
+    } else fs.copyFileSync(path.join(skillSource, name), destination);
   }
   for (const [source, destination] of [
     ["install-deveco-skill.mjs", "install.mjs"],
@@ -275,20 +316,21 @@ function build(args) {
     files: content,
   });
   validatePackage(staging);
-  if (!force && (info(output) || info(output + ".tgz")))
+  if (!force && [output, output + ".tgz", output + ".zip"].some(info))
     throw new Error("目标制品在打包期间出现，已保留；请检查后重试");
   const stamp = `${Date.now()}-${randomUUID()}`;
   if (info(output)) {
     files(output);
     fs.renameSync(output, checkedPath(parent, `${output}.previous-${stamp}`));
   }
-  if (info(output + ".tgz")) {
-    noLinks(output + ".tgz");
-    fs.renameSync(
-      output + ".tgz",
-      checkedPath(parent, `${output}.tgz.previous-${stamp}`),
-    );
-  }
+  for (const suffix of [".tgz", ".zip"])
+    if (info(output + suffix)) {
+      noLinks(output + suffix);
+      fs.renameSync(
+        output + suffix,
+        checkedPath(parent, `${output}${suffix}.previous-${stamp}`),
+      );
+    }
   fs.renameSync(staging, checkedPath(parent, output));
   const archive = output + ".tgz";
   const temporaryArchive = checkedPath(
@@ -305,14 +347,27 @@ function build(args) {
       `完整目录已生成，但 tar 归档失败：${packed.error?.message || packed.stderr}`,
     );
   fs.renameSync(temporaryArchive, checkedPath(parent, archive));
+  const zipArchive = output + ".zip";
+  const temporaryZip = checkedPath(
+    parent,
+    output + ".tmp-" + randomUUID() + ".zip",
+  );
+  const zipped = createZip(output, temporaryZip);
+  if (zipped.error || zipped.status !== 0)
+    throw new Error(
+      `完整目录和 tgz 已生成，但 ZIP 归档失败（Windows 需要系统 PowerShell，其他平台需要 zip）：${zipped.error?.message || zipped.stderr}`,
+    );
+  fs.renameSync(temporaryZip, checkedPath(parent, zipArchive));
   return {
     ok: true,
     directory: output,
     archive,
+    zipArchive,
     files: Object.keys(content).length,
     productionPackages: dependencies.length,
     sourceDigest: inputDigest,
     archiveSha256: digest(fs.readFileSync(archive)),
+    zipSha256: digest(fs.readFileSync(zipArchive)),
   };
 }
 
