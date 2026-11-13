@@ -15,7 +15,7 @@ const sourceLauncher = path.join(
 );
 function setup(t: TestContext) {
   const base = fixture(t);
-  const source = path.join(base, "完整 Skill 制品");
+  const source = path.join(base, "完整 Skill & 制品 (测试)!");
   writeText(
     path.join(source, "SKILL.md"),
     "---\nname: arkts-smell-refactor\ndescription: fixture\n---\n",
@@ -36,6 +36,15 @@ function setup(t: TestContext) {
   ])
     writeText(path.join(source, name), "// controlled installation fixture\n");
   fs.mkdirSync(path.join(source, "scripts"), { recursive: true });
+  for (const name of [
+    "install.bat",
+    "INSTALL.txt",
+    "scripts/install-windows.mjs",
+  ])
+    fs.copyFileSync(
+      path.join(repository, "skills/arkts-smell-refactor", name),
+      path.join(source, name),
+    );
   fs.copyFileSync(sourceLauncher, path.join(source, "scripts/run.mjs"));
   fs.copyFileSync(installer, path.join(source, "scripts/install.mjs"));
   fs.copyFileSync(
@@ -98,6 +107,112 @@ function run(
   assert.ifError(result.error);
   return result;
 }
+
+function batch(
+  file: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const quoted = [file, "--no-pause", ...args]
+    .map((arg) => {
+      assert.ok(
+        !/["%\r\n]/.test(arg),
+        "fixture arguments must be literal cmd tokens",
+      );
+      return `"${arg}"`;
+    })
+    .join(" ");
+  const result = spawnSync(
+    process.env.ComSpec || "cmd.exe",
+    ["/d", "/s", "/c", `"${quoted}"`],
+    {
+      cwd,
+      env,
+      encoding: "utf8",
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+      timeout: 30_000,
+    },
+  );
+  assert.ifError(result.error);
+  return result;
+}
+
+test(
+  "Windows batch installs and upgrades via plain JavaScript from paths containing spaces, Chinese and shell metacharacters",
+  { skip: process.platform !== "win32" },
+  (t) => {
+    const f = setup(t),
+      entry = path.join(f.source, "install.bat"),
+      settings = path.join(f.base, "工具 & 配置.json");
+    writeJson(settings, {
+      linterMode: "skip",
+      studio: path.join(f.base, "Studio & SDK (tools)!"),
+    });
+    const installed = batch(entry, ["--config", settings], f.base, f.env);
+    assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    assert.match(installed.stdout, /安装成功/);
+    assert.ok(fs.existsSync(path.join(f.skill, "installation.json")));
+    assert.deepEqual(
+      readJson(path.join(f.skill, "settings.json")),
+      readJson(settings),
+    );
+    const upgraded = batch(entry, [], f.base, f.env);
+    assert.equal(upgraded.status, 0, upgraded.stdout + upgraded.stderr);
+    assert.match(upgraded.stdout, /旧版本备份/);
+    assert.deepEqual(
+      readJson(path.join(f.skill, "settings.json")),
+      readJson(settings),
+    );
+    const backups = fs.readdirSync(
+      path.join(f.configDirectory, "arkts-skill-backups"),
+    );
+    assert.equal(backups.length, 1);
+    assert.ok(
+      fs.existsSync(
+        path.join(
+          f.configDirectory,
+          "arkts-skill-backups",
+          backups[0],
+          "installation.json",
+        ),
+      ),
+    );
+  },
+);
+
+test(
+  "Windows batch stops before writing when Node is absent, too old or the extracted package is incomplete",
+  { skip: process.platform !== "win32" },
+  (t) => {
+    const f = setup(t),
+      entry = path.join(f.source, "install.bat"),
+      emptyPath = path.join(f.base, "empty-bin");
+    fs.mkdirSync(emptyPath);
+    const absent = batch(entry, [], f.base, { ...f.env, PATH: emptyPath });
+    assert.equal(absent.status, 3, absent.stdout + absent.stderr);
+    assert.match(absent.stdout, /未找到可运行的 Node.js/);
+    assert.equal(fs.existsSync(f.skill), false);
+    const preload = path.join(f.base, "old-node.cjs");
+    writeText(
+      preload,
+      "Object.defineProperty(process.versions, 'node', {value:'18.0.0'});\n",
+    );
+    const old = batch(entry, [], f.base, {
+      ...f.env,
+      NODE_OPTIONS: `--require="${preload}"`,
+    });
+    assert.equal(old.status, 3, old.stdout + old.stderr);
+    assert.match(old.stdout, /版本过低/);
+    assert.equal(fs.existsSync(f.skill), false);
+    fs.unlinkSync(f.portableInstaller);
+    const incomplete = batch(entry, [], f.base, f.env);
+    assert.equal(incomplete.status, 3, incomplete.stdout + incomplete.stderr);
+    assert.match(incomplete.stderr, /完整解压/);
+    assert.equal(fs.existsSync(f.skill), false);
+  },
+);
 
 test("offline Skill installs without a project and forwards each invocation to its relative bundled runtime", (t) => {
   const f = setup(t);
