@@ -18,6 +18,7 @@
     "package:homecheck": "node scripts/package-homecheck.mjs",
     "cli": "node dist/cli.js",
     "skill": "node dist/skill.js",
+    "skill:install": "node scripts/install-deveco-skill.mjs",
     "test": "npm run build && node scripts/run-tests.mjs",
     "pretest": "tsc -p tsconfig.test.json"
   },

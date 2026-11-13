@@ -7,7 +7,7 @@ description: 通过对话调用共享 ArkTS 后端，检测代码异味、解释
 
 你负责对话中的结果解释和步骤衔接；检测、候选生成、验证和文件事务由已有后端执行。支持 Feature Envy、Long Method、Switch Statement、Code Clone。候选重构与独立评审仍由后端调用 DevEco Agent，不能把聊天中的建议当作已执行的重构或验证结论。
 
-首次执行前阅读 [CLI 调用与结果约定](references/cli.md)。确定工具仓库 `backend` 和设置文件的绝对路径，以及设置中的 `projectRoot`。优先沿用本次对话或现有项目设置；仅在无法确定目标时询问。后端需要已完成 `npm ci`、`npm run build`，入口是 `<backend>/dist/skill.js`。Skill 可以安装在业务工程，命令仍使用工具仓库的绝对路径。
+首次执行前阅读 [CLI 调用与结果约定](references/cli.md)。若 Skill 目录有 `installation.json`，先读取其中的后端和设置文件绑定，并通过 `node "<Skill目录>/scripts/run.mjs" <命令>` 调用；启动脚本会自动传入该工程的设置。核对设置中的 `projectRoot` 与用户目标一致，不需要用户重复填写安装时已绑定的路径。若没有安装绑定，确定工具仓库 `backend` 和设置文件的绝对路径；优先沿用本次对话或现有项目设置，仅在无法确定目标时询问。后端需要已完成 `npm ci`、`npm run build`，直接入口是 `<backend>/dist/skill.js`。
 
 ## 对话流程
 

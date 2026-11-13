@@ -1,5 +1,13 @@
 # CLI 调用与结果约定
 
+通过安装脚本安装的 Skill 已在 `installation.json` 中绑定工具仓库和设置文件。优先使用以下入口，不再附加 `--config`：
+
+```text
+node "<Skill目录>/scripts/run.mjs" <command> [选项]
+```
+
+启动脚本保持命令的输出及退出码；相对的检测路径仍相对于调用时的工作目录。它不接受 `--config`、`--project`、`--backend` 或 `--runs` 覆盖绑定。切换业务工程时使用该工程安装的 Skill；工具仓库搬迁或安装配置变化时重新安装。
+
 所有命令使用同一设置文件。下面的 `<backend>`、`<settings>`、`<id>` 表示实际绝对路径或返回的标识，执行时替换并对路径加引号。
 
 ```text

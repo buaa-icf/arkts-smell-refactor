@@ -16,43 +16,52 @@ dist/skill.js ────────── src/client ────────
 src/client/apply.ts：双方共用的冻结候选 Diff、应用事务与回滚
 ```
 
-## 安装与配置
+## DevEco Code 便捷安装
 
-在工具仓库根目录执行：
+终端版 DevEco Code 从工程的 `.deveco/skills/<name>/SKILL.md` 发现技能，重启后在 `/skills` 中查看。用户级位置为 `~/.config/deveco/skills/`；本脚本使用项目级安装，以便每个工程绑定自己的配置。依据 [华为官方常用配置文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-common-configure/)。
+
+在工具仓库根目录执行，替换工程和 DevEco Studio 路径：
 
 ```powershell
 npm ci
 npm run build
-Copy-Item .\skill-adapter\examples\settings.example.json .\skill-adapter\examples\config.local.json
+npm run skill:install -- --project "D:/harmonyos/MyApplication" --studio "D:/tool/DevEco/DevEco Studio"
 ```
 
-编辑 `skill-adapter/examples/config.local.json`，填写业务工程 `projectRoot`、本工具仓库 `backend` 及工程外的 `runs` 绝对路径。配置可直接沿用现有 TUI 设置文件；两种入口共用历史时必须使用同一工程、配置与 `runs`。命令工具需要 Node.js ≥20.19，使用本仓库既有 DevEco 测试版时按根 README 使用 Node.js 22 或更高版本。
-
-执行扫描时，`studio` 需填写包含 `sdk/default/openharmony/ets` 的 DevEco Studio 安装目录；`deveco`、`hvigor`、`ohpm`、`linter` 留空时使用现有工具发现逻辑。HomeCheck 始终来自本仓库固定 npm 包，不需要另配 HomeCheck 路径。`linterMode` 默认为 `required`，只有明确接受跳过 Linter 时才改成 `skip`。
-
-将完整的 `skills/arkts-smell-refactor/` 目录复制到目标工程的 `.opencode/skills/arkts-smell-refactor/`。例如，在工具仓库根目录执行以下命令前，将工程路径改为自己的路径：
+也可直接沿用现有 TUI 设置，脚本从配置中读取工程路径：
 
 ```powershell
-$skillProject = 'D:/harmonyos/MyApplication'
-New-Item -ItemType Directory -Force -Path "$skillProject/.opencode/skills" | Out-Null
-Copy-Item -LiteralPath './skills/arkts-smell-refactor' -Destination "$skillProject/.opencode/skills/arkts-smell-refactor" -Recurse
+npm run skill:install -- --config "./opencode-plugin/examples/settings.local.json"
 ```
 
-上述是首次安装示例；已有同名 Skill 时先检查已有内容，再选择更新。无需将 Skill 添加到 TUI 插件配置。OpenCode 官方支持项目内的 `.opencode/skills/<id>/SKILL.md`，可随 Skill 放置参考资料，见 [Skills 文档](https://opencode.ai/docs/skills/)。DevEco 的发现路径与调用方式需以实际安装版本为准，不能将 OpenCode 新版配置字段直接当作 DevEco 配置。
+脚本复制 Skill 及参考资料，生成 `installation.json` 绑定和 `scripts/run.mjs` 启动入口。未指定 `--config` 时生成该工程的 `settings.json`，记录当前工具仓库、Node、SDK 和工程外的证据目录。`--studio` 省略时尝试 `DEVECO_HOME`；`--runs` 可显式指定持久化证据目录。已有配置会被直接引用，且必须使用绝对目录路径；脚本不会改写它。
 
-宿主需要提供读取文件和执行命令的能力，以及对 `arkts-smell-refactor` Skill 的访问权限。复制 Skill 只提供流程说明；工具仓库、已构建的后端、DevEco 登录及工程所需 SDK/设备仍须可用。此试验不修改用户全局配置，也不自动接受产品协议。
+两种入口共用历史时使用同一设置和 `runs`。命令工具要求 Node.js ≥20.19，使用既有 DevEco 测试版时按根 README 使用 Node.js 22 或更高版本。扫描需要 `studio` 下的 `sdk/default/openharmony/ets`；HomeCheck 来自本仓库固定 npm 包。默认 `linterMode: required`，工具路径可在生成的设置中调整。
+
+先预览，或更新已有安装：
+
+```powershell
+npm run skill:install -- --project "D:/harmonyos/MyApplication" --dry-run
+npm run skill:install -- --project "D:/harmonyos/MyApplication" --studio "D:/tool/DevEco/DevEco Studio" --force
+```
+
+`--dry-run` 不写文件。已有同名目录时默认拒绝覆盖；`--force` 先把旧目录完整备份到工程的 `.deveco/arkts-skill-backups/`，返回具体备份路径，再安装新版本。重新生成设置时沿用需要的 SDK、证据目录参数；旧设置可从备份取回。脚本不改 `deveco.jsonc`、工具权限、协议或登录，也不安装 npm 依赖。需要更新绑定时重新运行安装命令。
+
+安装后退出 DevEco Code，从业务工程目录重新运行 `deveco`，输入 `/skills` 查看 `arkts-smell-refactor`。本机版本还支持只读检查 `deveco debug skill`。若不可见，检查 `SKILL.md` 文件名和 `permission.skill`、Agent 的 `tools.skill` 设置；无需打开全局自动允许权限。
+
+若使用 IDE 内的 DevEco Code 插件，官方另提供 **File → Settings → AI → Skills** 导入目录或 ZIP 的界面；可导入脚本生成的完整 Skill 目录。该界面流程与终端版的项目目录扫描不同，见 [官方插件 Skill 文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-plugin-skill)。OpenCode 的项目目录是 `.opencode/skills/`，手工安装时使用完整源 Skill 目录并提供后端和设置路径，见 [OpenCode 文档](https://opencode.ai/docs/skills/)。
 
 ## 试用
 
-先直接检查入口与配置：
+在业务工程目录先检查已安装入口：
 
 ```powershell
-node ./dist/skill.js doctor --config ./skill-adapter/examples/config.local.json
+node ./.deveco/skills/arkts-smell-refactor/scripts/run.mjs doctor
 ```
 
-在已加载 Skill 的聊天中发送类似请求，并替换绝对路径：
+在已加载 Skill 的聊天中发送：
 
-> 使用 arkts-smell-refactor 检测 D:/harmonyos/MyApplication/entry/src/main/ets/pages/Index.ets。后端在 C:/tools/arkts-smell-refactor，设置文件是 C:/tools/arkts-smell-refactor/skill-adapter/examples/config.local.json。先展示检测结果。
+> 使用 arkts-smell-refactor 检测 entry/src/main/ets/pages/Index.ets，先展示检测结果和重构建议。
 
 接下来可以说“分析第 2 个问题”“保留公开接口，生成候选”“查看这个文件的 Diff”“应用当前候选并复检”或“回滚刚才的应用”。Skill 根据已获得的授权继续；原工程应用通过候选事务执行。
 
@@ -92,4 +101,6 @@ node ./dist/skill.js doctor --config ./skill-adapter/examples/config.local.json
 - TUI 类型检查、25 项 Node 测试、6 项原生界面测试通过。沙箱下 Bun 使用显式 preload 路径 `./node_modules/@opentui/solid/scripts/preload.ts` 执行界面测试。
 - Skill 结构验证与示例 JSON 检查通过。Windows 使用 `python -X utf8` 调用 Skill 验证器。
 - 在隔离 Harmony 示例中使用本机 SDK 和内置 HomeCheck，实际完成 `doctor → 指定单文件扫描 → prepare`，独立试用确认范围外文件未被扫描、生产源码哈希未变。
-- 应用、跨调用恢复、应用后复检衔接和回滚通过受控后端与真实文件事务测试；回滚冲突会保留用户后续修改。尚未在真实 OpenCode/DevEco 聊天宿主中验收 Skill 加载，也未重新跑真实模型生成、签名和设备上的完整重构流程。
+- 应用、跨调用恢复、应用后复检衔接和回滚通过受控后端与真实文件事务测试；回滚冲突会保留用户后续修改。未重新跑真实模型生成、签名和设备上的完整重构流程。
+- DevEco 安装阶段：在隔离示例工程运行安装脚本后，本机 DevEco Code `0.2.5` 的 `deveco --pure debug skill` 确认发现该 Skill；安装后的 `scripts/run.mjs doctor` 返回 `canDetect/canRefactor: true`。这证明发现与命令绑定可用，尚不等于模型在聊天中完整遵循 Skill 的端到端验收。
+- 安装器新增 5 项回归，覆盖中文空格路径、跨目录调用、现有配置不变、预览零写入、备份更新与失败恢复、路径链接拒绝；最终 `npm test` 共 326 项通过，无跳过。启动入口直接调用已构建的 `runSkill`，复用现有取消和事务处理。
