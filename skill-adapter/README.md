@@ -18,7 +18,7 @@ src/client/apply.ts：双方共用的冻结候选 Diff、应用事务与回滚
 
 ## DevEco Code 便捷安装
 
-终端版 DevEco Code 从工程的 `.deveco/skills/<name>/SKILL.md` 发现技能，重启后在 `/skills` 中查看。用户级位置为 `~/.config/deveco/skills/`；本脚本使用项目级安装，以便每个工程绑定自己的配置。依据 [华为官方常用配置文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-common-configure/)。
+脚本默认安装到用户级 `~/.config/deveco/skills/arkts-smell-refactor/`，Windows 对应 `%USERPROFILE%/.config/deveco/skills/arkts-smell-refactor/`。设置了绝对路径 `XDG_CONFIG_HOME` 时使用其下的 `deveco/skills/arkts-smell-refactor/`，与 DevEco 的用户配置路径一致。安装位置不随业务工程变化；重启后在 `/skills` 中查看。用户级 Skill 路径依据 [华为官方常用配置文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-common-configure/)。
 
 在工具仓库根目录执行，替换工程和 DevEco Studio 路径：
 
@@ -34,7 +34,9 @@ npm run skill:install -- --project "D:/harmonyos/MyApplication" --studio "D:/too
 npm run skill:install -- --config "./opencode-plugin/examples/settings.local.json"
 ```
 
-脚本复制 Skill 及参考资料，生成 `installation.json` 绑定和 `scripts/run.mjs` 启动入口。未指定 `--config` 时生成该工程的 `settings.json`，记录当前工具仓库、Node、SDK 和工程外的证据目录。`--studio` 省略时尝试 `DEVECO_HOME`；`--runs` 可显式指定持久化证据目录。已有配置会被直接引用，且必须使用绝对目录路径；脚本不会改写它。
+脚本复制 Skill 及参考资料，生成 `installation.json` 绑定和 `scripts/run.mjs` 启动入口。`--project` 只选择绑定的业务工程，不指定安装位置；未指定 `--config` 时在用户级 Skill 目录生成该工程的 `settings.json`。设置记录工具仓库、Node、SDK 和工程外的证据目录。`--studio` 省略时尝试 `DEVECO_HOME`；`--runs` 可显式指定持久化证据目录。已有配置会被直接引用，且必须使用绝对目录路径；脚本不会改写它。
+
+用户级 Skill 在各工程中都可发现，但当前启动入口仍绑定安装时选择的工程，不会随当前工作目录自动换工程。Skill 执行前会核对用户目标与设置中的 `projectRoot`；切换绑定用 `--force --project ...` 或 `--force --config ...` 重新安装。
 
 两种入口共用历史时使用同一设置和 `runs`。命令工具要求 Node.js ≥20.19，使用既有 DevEco 测试版时按根 README 使用 Node.js 22 或更高版本。扫描需要 `studio` 下的 `sdk/default/openharmony/ets`；HomeCheck 来自本仓库固定 npm 包。默认 `linterMode: required`，工具路径可在生成的设置中调整。
 
@@ -45,9 +47,11 @@ npm run skill:install -- --project "D:/harmonyos/MyApplication" --dry-run
 npm run skill:install -- --project "D:/harmonyos/MyApplication" --studio "D:/tool/DevEco/DevEco Studio" --force
 ```
 
-`--dry-run` 不写文件。已有同名目录时默认拒绝覆盖；`--force` 先把旧目录完整备份到工程的 `.deveco/arkts-skill-backups/`，返回具体备份路径，再安装新版本。重新生成设置时沿用需要的 SDK、证据目录参数；旧设置可从备份取回。脚本不改 `deveco.jsonc`、工具权限、协议或登录，也不安装 npm 依赖。需要更新绑定时重新运行安装命令。
+`--dry-run` 不写文件。已有同名目录时默认拒绝覆盖；`--force` 先把旧目录完整备份到用户配置目录的 `deveco/arkts-skill-backups/`，返回具体备份路径，再安装新版本。重新生成设置时沿用需要的 SDK、证据目录参数；旧设置可从备份取回。脚本不向业务工程写入 `.deveco`，不改 `deveco.jsonc`、工具权限、协议或登录，也不安装 npm 依赖。
 
 安装后退出 DevEco Code，从业务工程目录重新运行 `deveco`，输入 `/skills` 查看 `arkts-smell-refactor`。本机版本还支持只读检查 `deveco debug skill`。若不可见，检查 `SKILL.md` 文件名和 `permission.skill`、Agent 的 `tools.skill` 设置；无需打开全局自动允许权限。
+
+已有旧项目级安装时，脚本保留该目录；通过 `deveco debug skill` 的 `location` 确认实际使用的是用户级版本。
 
 若使用 IDE 内的 DevEco Code 插件，官方另提供 **File → Settings → AI → Skills** 导入目录或 ZIP 的界面；可导入脚本生成的完整 Skill 目录。该界面流程与终端版的项目目录扫描不同，见 [官方插件 Skill 文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-plugin-skill)。OpenCode 的项目目录是 `.opencode/skills/`，手工安装时使用完整源 Skill 目录并提供后端和设置路径，见 [OpenCode 文档](https://opencode.ai/docs/skills/)。
 
@@ -56,8 +60,10 @@ npm run skill:install -- --project "D:/harmonyos/MyApplication" --studio "D:/too
 在业务工程目录先检查已安装入口：
 
 ```powershell
-node ./.deveco/skills/arkts-smell-refactor/scripts/run.mjs doctor
+node "$env:USERPROFILE/.config/deveco/skills/arkts-smell-refactor/scripts/run.mjs" doctor
 ```
+
+上例适用于未设置 `XDG_CONFIG_HOME` 的 Windows；其他环境使用安装结果返回的 `skillDirectory` 下的 `scripts/run.mjs`。
 
 在已加载 Skill 的聊天中发送：
 
@@ -106,3 +112,9 @@ node ./.deveco/skills/arkts-smell-refactor/scripts/run.mjs doctor
 - 应用、跨调用恢复、应用后复检衔接和回滚通过受控后端与真实文件事务测试；回滚冲突会保留用户后续修改。未重新跑真实模型生成、签名和设备上的完整重构流程。
 - DevEco 安装阶段：在隔离示例工程运行安装脚本后，本机 DevEco Code `0.2.5` 的 `deveco --pure debug skill` 确认发现该 Skill；安装后的 `scripts/run.mjs doctor` 返回 `canDetect/canRefactor: true`。这证明发现与命令绑定可用，尚不等于模型在聊天中完整遵循 Skill 的端到端验收。
 - 安装器新增 5 项回归，覆盖中文空格路径、跨目录调用、现有配置不变、预览零写入、备份更新与失败恢复、路径链接拒绝；最终 `npm test` 共 326 项通过，无跳过。启动入口直接调用已构建的 `runSkill`，复用现有取消和事务处理。
+
+## 用户级安装调整（2026-11-14）
+
+默认目录改为用户配置下的 `deveco/skills/arkts-smell-refactor/`，支持绝对路径 `XDG_CONFIG_HOME`。备份与暂存均留在用户配置目录，业务工程不再生成 `.deveco`。安装测试增加不同工程共用用户安装时的防覆盖及固定绑定验证；完整回归 327 项通过，无跳过。
+
+已沿用现有 TUI 配置安装到本机用户目录；正常权限下的 `deveco debug skill` 确认 `location` 指向用户级 `SKILL.md`，安装入口 `doctor` 的检测与重构能力检查均通过。Windows 沙箱中的全局目录发现可能受限，应在正常终端核验；本次没有执行业务重构。

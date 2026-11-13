@@ -14,8 +14,10 @@ const usage = `Usage: node scripts/install-deveco-skill.mjs --project <directory
        [--config <existing.json>] [--studio <directory>] [--runs <directory>]
        [--dry-run] [--force]
 Or use --config alone when it contains an absolute projectRoot.
+Installs for the current user in ~/.config/deveco/skills/arkts-smell-refactor.
+An absolute XDG_CONFIG_HOME overrides ~/.config. --project selects the bound business project.
 Existing config files are reused unchanged; --studio and --runs apply only to generated settings.
---force preserves the previous installation in .deveco/arkts-skill-backups/.
+--force preserves the previous installation in the user config directory's deveco/arkts-skill-backups/.
 `;
 
 function parse(args) {
@@ -113,13 +115,13 @@ function canonical(file) {
   }
 }
 
-function projectPath(project, file) {
+function installationPath(root, file) {
   const absolute = path.resolve(file);
-  if (absolute === project || !within(project, absolute))
-    throw new Error(`安装路径超出工程：${file}`);
+  if (absolute === root || !within(root, absolute))
+    throw new Error(`安装路径超出用户配置目录：${file}`);
   noLinks(absolute);
-  if (!within(project, canonical(absolute)))
-    throw new Error(`安装实际路径超出工程：${file}`);
+  if (!within(root, canonical(absolute)))
+    throw new Error(`安装实际路径超出用户配置目录：${file}`);
   return absolute;
 }
 
@@ -187,9 +189,16 @@ function install(args) {
   const projectRoot = fs.realpathSync.native(requested);
   if (settings && fs.realpathSync.native(settings.projectRoot) !== projectRoot)
     throw new Error("--project 与现有配置的 projectRoot 不一致");
-  const skillDirectory = projectPath(
-    projectRoot,
-    path.join(projectRoot, ".deveco/skills/arkts-smell-refactor"),
+  const configHome =
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  if (!path.isAbsolute(configHome))
+    throw new Error("XDG_CONFIG_HOME 必须是绝对路径");
+  const requestedConfigDirectory = path.join(configHome, "deveco");
+  noLinks(requestedConfigDirectory);
+  const configDirectory = canonical(requestedConfigDirectory);
+  const skillDirectory = installationPath(
+    configDirectory,
+    path.join(configDirectory, "skills/arkts-smell-refactor"),
   );
   if (externalSettings && within(skillDirectory, canonical(externalSettings)))
     throw new Error(
@@ -250,11 +259,11 @@ function install(args) {
   const settingsFile =
     externalSettings || path.join(skillDirectory, "settings.json");
   const backupDirectory = old
-    ? projectPath(
-        projectRoot,
+    ? installationPath(
+        configDirectory,
         path.join(
-          projectRoot,
-          ".deveco/arkts-skill-backups",
+          configDirectory,
+          "arkts-skill-backups",
           `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID()}`,
         ),
       )
@@ -262,6 +271,8 @@ function install(args) {
   const result = {
     ok: true,
     dryRun: !!options["--dry-run"],
+    scope: "user",
+    configDirectory,
     projectRoot,
     skillDirectory,
     backend,
@@ -271,19 +282,19 @@ function install(args) {
   };
   if (options["--dry-run"]) return result;
 
-  const staging = projectPath(
-    projectRoot,
+  const staging = installationPath(
+    configDirectory,
     path.join(
       path.dirname(skillDirectory),
       `.arkts-smell-refactor-stage-${randomUUID()}`,
     ),
   );
-  fs.mkdirSync(projectPath(projectRoot, path.dirname(staging)), {
+  fs.mkdirSync(installationPath(configDirectory, path.dirname(staging)), {
     recursive: true,
   });
   let movedPrevious = false;
   try {
-    fs.cpSync(source, projectPath(projectRoot, staging), {
+    fs.cpSync(source, installationPath(configDirectory, staging), {
       recursive: true,
       force: false,
       errorOnExist: true,
@@ -303,30 +314,36 @@ function install(args) {
         { flag: "wx" },
       );
     if (backupDirectory) {
-      fs.mkdirSync(projectPath(projectRoot, path.dirname(backupDirectory)), {
-        recursive: true,
-      });
-      noTreeLinks(projectPath(projectRoot, skillDirectory));
-      fs.renameSync(skillDirectory, projectPath(projectRoot, backupDirectory));
+      fs.mkdirSync(
+        installationPath(configDirectory, path.dirname(backupDirectory)),
+        {
+          recursive: true,
+        },
+      );
+      noTreeLinks(installationPath(configDirectory, skillDirectory));
+      fs.renameSync(
+        skillDirectory,
+        installationPath(configDirectory, backupDirectory),
+      );
       movedPrevious = true;
-    } else if (info(projectPath(projectRoot, skillDirectory))) {
+    } else if (info(installationPath(configDirectory, skillDirectory))) {
       throw new Error("安装目标在准备期间出现，请重新检查后重试");
     }
     fs.renameSync(
-      projectPath(projectRoot, staging),
-      projectPath(projectRoot, skillDirectory),
+      installationPath(configDirectory, staging),
+      installationPath(configDirectory, skillDirectory),
     );
   } catch (error) {
     let recovery = "";
     if (movedPrevious) {
       try {
-        if (info(projectPath(projectRoot, skillDirectory)))
+        if (info(installationPath(configDirectory, skillDirectory)))
           recovery = "\n安装目标已出现，保留备份供人工恢复";
         else {
-          noTreeLinks(projectPath(projectRoot, backupDirectory));
+          noTreeLinks(installationPath(configDirectory, backupDirectory));
           fs.renameSync(
             backupDirectory,
-            projectPath(projectRoot, skillDirectory),
+            installationPath(configDirectory, skillDirectory),
           );
           recovery = "\n旧版已恢复到原安装目录";
         }

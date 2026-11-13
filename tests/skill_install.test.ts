@@ -34,15 +34,28 @@ function setup(t: TestContext) {
     ],
   });
   const runs = path.join(base, "持久证据 runs");
-  const skill = path.join(project, ".deveco/skills/arkts-smell-refactor");
+  const configHome = path.join(base, "用户 配置");
+  const configDirectory = path.join(configHome, "deveco");
+  const skill = path.join(configDirectory, "skills/arkts-smell-refactor");
   const launcher = path.join(skill, "scripts/run.mjs");
   const studio = path.join(base, "DevEco Studio");
   const env = {
     ...process.env,
     LOCALAPPDATA: path.join(base, "Local App Data"),
     DEVECO_HOME: studio,
+    XDG_CONFIG_HOME: configHome,
   };
-  return { base, project, runs, skill, launcher, studio, env };
+  return {
+    base,
+    project,
+    runs,
+    configHome,
+    configDirectory,
+    skill,
+    launcher,
+    studio,
+    env,
+  };
 }
 
 function run(
@@ -63,7 +76,7 @@ function run(
   return result;
 }
 
-test("DevEco skill installs into a Chinese spaced project and launches the real backend with caller-relative inputs", (t) => {
+test("DevEco skill installs into a user config directory and launches the bound Chinese spaced project with caller-relative inputs", (t) => {
   const f = setup(t);
   const installation = run(
     installer,
@@ -73,8 +86,14 @@ test("DevEco skill installs into a Chinese spaced project and launches the real 
   );
   assert.equal(installation.status, 0, installation.stderr);
   const output = JSON.parse(installation.stdout);
+  assert.equal(output.scope, "user");
+  assert.equal(
+    output.configDirectory,
+    fs.realpathSync.native(f.configDirectory),
+  );
   assert.equal(output.skillDirectory, f.skill);
   assert.equal(output.dryRun, false);
+  assert.equal(fs.existsSync(path.join(f.project, ".deveco")), false);
   assert.ok(fs.existsSync(path.join(f.skill, "SKILL.md")));
   assert.equal(
     fs.readFileSync(path.join(f.skill, "references/cli.md"), "utf8"),
@@ -156,6 +175,7 @@ test("DevEco skill reuses an existing absolute config without changing its bytes
     f.env,
   );
   assert.equal(installation.status, 0, installation.stderr);
+  assert.equal(fs.existsSync(path.join(f.project, ".deveco")), false);
   assert.equal(fs.readFileSync(settingsFile, "utf8"), original);
   assert.equal(fs.existsSync(path.join(f.skill, "settings.json")), false);
   assert.equal(
@@ -180,7 +200,10 @@ test("DevEco skill dry-run validates and reports persistent defaults without wri
   assert.equal(installation.status, 0, installation.stderr);
   const plan = JSON.parse(installation.stdout);
   assert.equal(plan.dryRun, true);
+  assert.equal(plan.scope, "user");
+  assert.equal(plan.configDirectory, f.configDirectory);
   assert.equal(plan.skillDirectory, f.skill);
+  assert.equal(fs.existsSync(f.configHome), false);
   assert.equal(fs.existsSync(path.join(f.project, ".deveco")), false);
   assert.equal(fs.existsSync(plan.runs), false);
   assert.equal(fs.existsSync(f.env.LOCALAPPDATA!), false);
@@ -206,7 +229,7 @@ test("DevEco skill refuses replacement by default and force preserves the whole 
   assert.match(duplicate.stderr, /已存在/);
   assert.equal(fs.readFileSync(sentinel, "utf8"), "保留旧版用户文件\n");
   assert.equal(
-    fs.existsSync(path.join(f.project, ".deveco/arkts-skill-backups")),
+    fs.existsSync(path.join(f.configDirectory, "arkts-skill-backups")),
     false,
   );
 
@@ -237,7 +260,7 @@ fs.renameSync = (from, to) => {
   const backup = JSON.parse(forced.stdout).backupDirectory;
   assert.equal(
     path.dirname(backup),
-    path.join(f.project, ".deveco/arkts-skill-backups"),
+    path.join(f.configDirectory, "arkts-skill-backups"),
   );
   assert.equal(
     fs.readFileSync(path.join(backup, "custom.txt"), "utf8"),
@@ -249,6 +272,47 @@ fs.renameSync = (from, to) => {
   );
   assert.equal(fs.existsSync(sentinel), false);
   assert.ok(fs.existsSync(f.launcher));
+  assert.equal(fs.existsSync(path.join(f.project, ".deveco")), false);
+});
+
+test("a second project cannot silently replace the user's fixed skill binding", (t) => {
+  const first = setup(t);
+  const second = setup(t);
+  const installed = run(
+    installer,
+    ["--project", first.project, "--runs", first.runs],
+    repository,
+    first.env,
+  );
+  assert.equal(installed.status, 0, installed.stderr);
+  const settingsFile = path.join(first.skill, "settings.json");
+  const originalSettings = fs.readFileSync(settingsFile);
+  const originalBinding = fs.readFileSync(
+    path.join(first.skill, "installation.json"),
+  );
+  const sharedEnv = { ...second.env, XDG_CONFIG_HOME: first.configHome };
+  const replacement = run(
+    installer,
+    ["--project", second.project, "--runs", second.runs],
+    repository,
+    sharedEnv,
+  );
+  assert.equal(replacement.status, 2);
+  assert.match(replacement.stderr, /已存在/);
+  assert.deepEqual(fs.readFileSync(settingsFile), originalSettings);
+  assert.deepEqual(
+    fs.readFileSync(path.join(first.skill, "installation.json")),
+    originalBinding,
+  );
+  const history = run(first.launcher, ["history"], second.project, sharedEnv);
+  assert.equal(history.status, 0, history.stderr + history.stdout);
+  assert.equal(
+    JSON.parse(history.stdout).projectRoot,
+    fs.realpathSync.native(first.project),
+  );
+  assert.equal(fs.existsSync(second.configHome), false);
+  assert.equal(fs.existsSync(path.join(first.project, ".deveco")), false);
+  assert.equal(fs.existsSync(path.join(second.project, ".deveco")), false);
 });
 
 test("DevEco skill rejects invalid options, unsafe configs, and links before changing installation paths", (t) => {
@@ -262,6 +326,14 @@ test("DevEco skill rejects invalid options, unsafe configs, and links before cha
     ["--project", f.project, "--runs", path.join(f.project, "runs")],
   ])
     assert.equal(run(installer, args, repository, f.env).status, 2);
+  const relativeConfigHome = run(
+    installer,
+    ["--project", f.project, "--runs", f.runs],
+    f.base,
+    { ...f.env, XDG_CONFIG_HOME: "relative-config" },
+  );
+  assert.equal(relativeConfigHome.status, 2);
+  assert.equal(fs.existsSync(path.join(f.base, "relative-config")), false);
   const settingsFile = path.join(f.base, "invalid-settings.json");
   for (const config of [
     {
@@ -293,6 +365,7 @@ test("DevEco skill rejects invalid options, unsafe configs, and links before cha
     );
   }
   assert.equal(fs.existsSync(path.join(f.project, ".deveco")), false);
+  assert.equal(fs.existsSync(f.configHome), false);
   const uninstalled = run(sourceLauncher, ["doctor"], f.base, f.env);
   assert.equal(uninstalled.status, 2);
   assert.match(uninstalled.stderr, /请先.*安装 Skill/);
@@ -318,7 +391,7 @@ test("DevEco skill rejects invalid options, unsafe configs, and links before cha
     "unchanged\n",
   );
   assert.equal(
-    fs.existsSync(path.join(f.project, ".deveco/arkts-skill-backups")),
+    fs.existsSync(path.join(f.configDirectory, "arkts-skill-backups")),
     false,
   );
 
@@ -359,14 +432,15 @@ test("DevEco skill rejects invalid options, unsafe configs, and links before cha
   assert.equal(linkedResource.status, 2);
   assert.match(linkedResource.stderr, /链接|junction/);
   assert.equal(
-    fs.existsSync(path.join(nested.project, ".deveco/arkts-skill-backups")),
+    fs.existsSync(path.join(nested.configDirectory, "arkts-skill-backups")),
     false,
   );
 
   const ancestor = setup(t);
+  fs.mkdirSync(ancestor.configHome);
   fs.symlinkSync(
     outside,
-    path.join(ancestor.project, ".deveco"),
+    ancestor.configDirectory,
     process.platform === "win32" ? "junction" : "dir",
   );
   const linkedAncestor = run(
