@@ -2,6 +2,8 @@
 
 `deveco-plugin/` 包含 DevEco Studio 的 Java 插件，`opencode-plugin/` 包含 DevEco Code／OpenCode 的原生终端工作台。两者均通过 Node JSONL 桥接调用本仓库 TypeScript 后端。下文命令用于后端 CLI；TUI 的配置、`/arkts` 入口、候选 Diff、确认应用及回滚流程见 [TUI 使用说明](opencode-plugin/docs/usage-and-validation.md)。
 
+新增 [Skill 对话方案（试验版）](skill-adapter/README.md)：通过对话完成检测、选择问题、分析风险、生成候选、查看 Diff、应用、复检和回滚。Skill 与 TUI 共用 `src/client/` 客户端和现有后端；使用同一份配置即可读取同一候选及事务记录。Skill 源文件位于 `skills/arkts-smell-refactor/`，命令入口为 `node dist/skill.js`（或 `npm run skill -- --help`）。安装 Skill 后无需加载 TUI 插件；候选生成和独立评审仍依赖现有 DevEco Agent。
+
 ## 1. 安装和启动
 
 需要 Node.js **20.19 或更高版本**。
@@ -235,6 +237,7 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 ```text
 src/
 ├─ cli.ts / automatic.ts           命令行、配置、粘贴输入和批量调度
+├─ skill.ts / client/              Skill 分步命令及与 TUI 共用的桥接、Diff、应用和回滚
 ├─ models.ts / dataset.ts          任务类型和数据集解析
 ├─ risk.ts / analysis/             通用风险与六类专项分析（含 literals、long_method、detector_rules）
 ├─ prompts.ts / linter_profile.ts  提示词和项目规则摘要（含 ruleSet 继承与生成检查）

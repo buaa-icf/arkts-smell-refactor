@@ -8,7 +8,8 @@
     "node": ">=20.19"
   },
   "bin": {
-    "arkts-refactor": "dist/cli.js"
+    "arkts-refactor": "dist/cli.js",
+    "arkts-refactor-skill": "dist/skill.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -16,6 +17,7 @@
     "batch": "node dist/cli.js batch",
     "package:homecheck": "node scripts/package-homecheck.mjs",
     "cli": "node dist/cli.js",
+    "skill": "node dist/skill.js",
     "test": "npm run build && node scripts/run-tests.mjs",
     "pretest": "tsc -p tsconfig.test.json"
   },

@@ -19,6 +19,8 @@ cd ..
 
 插件使用宿主的 Solid 转换器直接加载 TSX，插件目录的 `npm run build` 执行类型检查；仓库根目录的同名命令构建 TypeScript 后端。推荐 Node.js 22+（后端要求至少 20.19）；不再依赖 Python。Bun 测试运行时已包含在插件开发依赖中。`check` 的 Node 测试前会重新构建后端，单独运行 TUI 测试前也须先完成根目录构建。
 
+Skill 试验版将无界面的配置、桥接、Diff 和应用事务提取至根目录 `src/client/`，插件原入口转出 `dist/client/` 中的编译实现。因此首次加载 TUI 或单独做类型检查前也必须完成根目录构建。两种交互入口的共用方式见 [Skill 说明](../../skill-adapter/README.md)。
+
 ## 2. 配置工程和工具
 
 复制配置示例：
