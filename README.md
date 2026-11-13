@@ -2,7 +2,7 @@
 
 `deveco-plugin/` 包含 DevEco Studio 的 Java 插件，`opencode-plugin/` 包含 DevEco Code／OpenCode 的原生终端工作台。两者均通过 Node JSONL 桥接调用本仓库 TypeScript 后端。下文命令用于后端 CLI；TUI 的配置、`/arkts` 入口、候选 Diff、确认应用及回滚流程见 [TUI 使用说明](opencode-plugin/docs/usage-and-validation.md)。
 
-新增 [Skill 对话方案（试验版）](skill-adapter/README.md)：通过对话完成检测、选择问题、分析风险、生成候选、查看 Diff、应用、复检和回滚。Skill 与 TUI 共用 `src/client/` 客户端和现有后端；使用同一份配置即可读取同一候选及事务记录。Skill 源文件位于 `skills/arkts-smell-refactor/`，命令入口为 `node dist/skill.js`（或 `npm run skill -- --help`）。安装 Skill 后无需加载 TUI 插件；候选生成和独立评审仍依赖现有 DevEco Agent。
+新增 [Skill 对话方案（试验版）](skill-adapter/README.md)：外层 DevEco Code 调度重构和返修子 Agent，共享后端提供编辑副本、验收、独立审查及候选应用/回滚。现有 TUI 继续使用原流程。运行 `npm run package:skill` 生成包含后端、HomeCheck 和生产依赖的独立发行包，再运行 `npm run skill:install` 安装到用户级目录；安装后不需要本仓库或 npm。目标工程由当前目录或 `--project` 选择。流程首先执行 `doctor`，缺少 SDK、工具或审查模型配置时明确报告并终止。使用相同工程、后端和 `runs` 配置的两个入口可共享候选及事务记录。
 
 ## 1. 安装和启动
 

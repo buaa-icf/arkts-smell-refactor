@@ -1,9 +1,5 @@
 {
-  "projectRoot": "D:/harmonyos/MyApplication",
-  "backend": "C:/tools/arkts-smell-refactor",
-  "runs": "D:/arkts-runs/MyApplication",
   "studio": "D:/tool/DevEco/DevEco Studio",
-  "node": "node",
   "deveco": "",
   "hvigor": "",
   "ohpm": "",

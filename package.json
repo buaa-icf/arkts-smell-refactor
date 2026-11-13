@@ -16,6 +16,7 @@
     "start": "node dist/cli.js start",
     "batch": "node dist/cli.js batch",
     "package:homecheck": "node scripts/package-homecheck.mjs",
+    "package:skill": "node scripts/package-skill.mjs",
     "cli": "node dist/cli.js",
     "skill": "node dist/skill.js",
     "skill:install": "node scripts/install-deveco-skill.mjs",

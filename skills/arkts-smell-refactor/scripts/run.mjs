@@ -3,49 +3,61 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+let prerequisite = "runtime";
+
 try {
   const [major, minor] = process.versions.node.split(".").map(Number);
-  if (major < 20 || (major === 20 && minor < 19))
+  if (major < 20 || (major === 20 && minor < 19)) {
+    prerequisite = "Node.js";
     throw new Error("需要 Node.js >=20.19");
-  const args = process.argv.slice(2);
-  if (args.some((arg) => /^--(?:config|project|backend|runs)(?:=|$)/.test(arg)))
-    throw new Error(
-      "此 Skill 已绑定工程和配置，不接受 --config/--project/--backend/--runs 覆盖；请重新安装以改变绑定",
-    );
-  const binding = path.resolve(
+  }
+  const skillRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
-    "../installation.json",
+    "..",
   );
-  if (!fs.existsSync(binding))
+  const metadata = path.join(skillRoot, "installation.json");
+  if (fs.existsSync(metadata)) {
+    const installed = JSON.parse(fs.readFileSync(metadata, "utf8"));
+    if (
+      installed.schemaVersion !== 2 ||
+      installed.runtime !== "runtime" ||
+      installed.settingsFile !== "settings.json"
+    )
+      throw new Error("Skill 安装元数据无效，请使用独立制品重新安装");
+  }
+  const runtimeRoot = path.join(skillRoot, "runtime");
+  const entry = path.join(runtimeRoot, "dist/portable_skill.js");
+  if (!fs.existsSync(entry))
     throw new Error(
-      "请先运行工具仓库的 scripts/install-deveco-skill.mjs 安装 Skill，再使用安装目录中的 scripts/run.mjs",
+      "缺少独立 runtime，请使用完整 Skill 制品；开发时先运行 npm run package:skill",
     );
-  const installation = JSON.parse(fs.readFileSync(binding, "utf8"));
-  if (
-    installation.schemaVersion !== 1 ||
-    typeof installation.backend !== "string" ||
-    !path.isAbsolute(installation.backend) ||
-    typeof installation.settingsFile !== "string" ||
-    !path.isAbsolute(installation.settingsFile)
-  )
-    throw new Error("Skill 安装绑定无效，请重新安装");
-  const cli = path.join(installation.backend, "dist/skill.js");
-  if (!fs.existsSync(cli))
-    throw new Error(
-      "找不到 dist/skill.js，请在绑定的后端目录运行 npm ci && npm run build",
-    );
-  if (!fs.existsSync(installation.settingsFile))
-    throw new Error(
-      `绑定配置不存在：${installation.settingsFile}；请重新安装或恢复配置`,
-    );
-  const help =
-    args.length === 0 ||
-    (args.length === 1 && ["help", "--help", "-h"].includes(args[0]));
-  const { runSkill } = await import(pathToFileURL(cli).href);
-  process.exitCode = await runSkill(
-    help ? args : [...args, "--config", installation.settingsFile],
-  );
+  const settingsFile = path.join(skillRoot, "settings.json");
+  const { runPortableSkill } = await import(pathToFileURL(entry).href);
+  process.exitCode = await runPortableSkill(process.argv.slice(2), {
+    runtimeRoot,
+    ...(fs.existsSync(settingsFile) ? { settingsFile } : {}),
+  });
 } catch (error) {
-  process.stderr.write(`启动失败：${error.message}\n`);
-  process.exitCode = 2;
+  process.stdout.write(
+    JSON.stringify({
+      schemaVersion: 1,
+      ok: false,
+      command: process.argv[2],
+      result: {
+        verdict: "BLOCKED",
+        stop: true,
+        missing: [
+          {
+            name: prerequisite,
+            reason: error.message,
+            action:
+              prerequisite === "Node.js"
+                ? "安装受支持的 Node.js 后重试"
+                : "重新获取并安装完整独立 Skill 制品；开发时运行 npm run package:skill",
+          },
+        ],
+      },
+    }) + "\n",
+  );
+  process.exitCode = 3;
 }
