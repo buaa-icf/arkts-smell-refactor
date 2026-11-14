@@ -20,6 +20,7 @@ import {
   writeText,
 } from "./utils.js";
 import { installCancellationHandlers, runCommand, which } from "./process.js";
+import { deviceToolEnvironment, resolveHdc } from "./device_tools.js";
 import {
   changedCurrentLines,
   freshCopy,
@@ -131,7 +132,7 @@ export function devecoEnvironment(hvigor: string): NodeJS.ProcessEnv {
     env.JAVA_HOME = java;
     env.PATH = path.join(java, "bin") + path.delimiter + (env.PATH ?? "");
   }
-  return env;
+  return deviceToolEnvironment(hvigor, env);
 }
 export async function hvigorGate(
   taskDir: string,
@@ -175,6 +176,7 @@ export async function hvigorGate(
   const rawTask = isFile(path.join(taskDir, "task.json"))
     ? readJson(path.join(taskDir, "task.json"))
     : {};
+  const executionEnv = devecoEnvironment(hvigor);
   const signingOptions = {
     taskDir,
     source,
@@ -184,10 +186,8 @@ export async function hvigorGate(
       ? plan.jobs.some((job: Json) => job.kind === "instrument")
       : rawTask.raw?.testKind === "instrument-test",
     workspaceRoot: rawTask.workspace_root ?? rawTask.workspaceRoot,
-    hdc: [
-      path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc.exe"),
-      path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc"),
-    ].find(isFile),
+    hdc: resolveHdc({ hvigor, env: executionEnv }) ?? "",
+    env: executionEnv,
   };
   const signing = await prepareSigning(signingOptions);
   console.log(
@@ -200,6 +200,9 @@ export async function hvigorGate(
         status: "BLOCKED",
         classification: "SIGNING_UNAVAILABLE",
         reason: signing.report.reason,
+        reasonCode: signing.report.reasonCode,
+        action: signing.report.action,
+        deviceCheck: signing.report.deviceCheck,
         jobs: [],
       });
     return 3;
@@ -219,7 +222,7 @@ export async function hvigorGate(
       workspace,
       plan,
       hvigorLauncher(hvigor),
-      devecoEnvironment(hvigor),
+      executionEnv,
       signing.redact,
     );
     signing.report.verification =
@@ -233,7 +236,7 @@ export async function hvigorGate(
   }
   const result = await runCommand(
     [...hvigorLauncher(hvigor), taskName, "--no-daemon"],
-    { cwd: workspace, env: devecoEnvironment(hvigor) },
+    { cwd: workspace, env: executionEnv },
   );
   console.log(signing.redact(result.output));
   if (

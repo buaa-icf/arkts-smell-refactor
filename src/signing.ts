@@ -4,6 +4,7 @@ import path from "node:path";
 import { X509Certificate } from "node:crypto";
 import type { Json } from "./models.js";
 import { runCommand, which } from "./process.js";
+import { resolveHdc } from "./device_tools.js";
 import { isFile, readJson5, walk, within, writeJson } from "./utils.js";
 
 // Profile content is CMS SignedData. This bounded DER reader extracts only its
@@ -160,12 +161,37 @@ export interface SigningOptions {
   workspaceRoot?: string;
   materialRoots?: string[];
   hdc?: string;
+  env?: NodeJS.ProcessEnv;
 }
 export interface SigningPreparation {
   ready: boolean;
   report: Json;
   redact: (text: string) => string;
 }
+const signingActions: Record<string, string> = {
+  HDC_UNAVAILABLE: "未找到可用 hdc；请检查本次 DevEco Studio/SDK 工具路径或 PATH。已有签名无需因此重新生成。",
+  HDC_LIST_FAILED: "hdc list targets 执行失败；请检查 HDC 工具、服务和设备连接。",
+  HDC_LIST_TIMEOUT: "读取设备列表超时；请检查 HDC 服务和设备连接后重试。",
+  NO_CONNECTED_DEVICE: "hdc 未列出可用设备；请连接并授权调试设备，确认本次 SDK 的 hdc list targets 能列出目标。",
+  TOO_MANY_DEVICES: "连接设备超过安全探测上限 8 台；请减少连接设备后重试。",
+  DEVICE_UDID_UNAVAILABLE: "无法读取已连接设备的 UDID；请检查调试授权及 hdc shell bm get -u 是否可用。",
+  DEVICE_UDID_TIMEOUT: "读取设备 UDID 超时；请检查设备调试连接后重试。",
+  DEVICE_PROBE_CANCELLED: "设备探测已中止；确认环境就绪后重新发起验收。",
+  DEVICE_NOT_AUTHORIZED: "已连接设备未全部包含在当前 Profile 授权中；请核对目标设备及 Profile，或断开本次不使用的设备。",
+  PROFILE_DEVICE_AUTHORIZATION_INVALID: "当前 debug Profile 的设备授权列表为空或格式无效；请在 DevEco 中核对该 Profile 的设备授权。",
+  PROFILE_EXPIRED_OR_INVALID: "Profile 已过期或有效期无效；请更新对应应用的 Profile。",
+  CERTIFICATE_EXPIRED: "签名证书已过期或尚未生效；请核对证书有效期。",
+  BUNDLE_MISMATCH: "签名 Profile 的应用标识与当前工程不同；请使用该应用的 Profile。",
+  PROFILE_CERTIFICATE_MISMATCH: "Profile 与本机配置的证书不匹配；请核对签名材料对应关系。",
+  PROFILE_CERTIFICATE_INVALID: "Profile 内的证书无法解析；请检查签名材料。",
+  PROFILE_SIGNATURE_INVALID: "Profile 的 CMS 签名校验失败；请检查签名材料是否完整。",
+  MATERIAL_FILES_MISSING_OR_AMBIGUOUS: "签名配置已存在，但材料文件缺失或同名材料无法唯一定位；请检查证书、Profile 和密钥库路径。",
+  MATERIAL_UNREADABLE_OR_INVALID: "签名材料无法读取或解析；请检查本机签名文件及权限。",
+  KEY_CONFIGURATION_MISSING: "签名配置缺少密钥别名、算法或密码字段；请核对签名配置。",
+  RUNTIME_MISMATCH: "签名配置与当前产品系统或配置引用不匹配；请核对产品及签名引用。",
+  MULTIPLE_MATCHING_SIGNING_CONFIGS: "发现多个可用签名配置，无法确定本次使用项；请为当前产品明确指定签名配置。",
+  NO_MATCHING_LOCAL_SIGNING_CONFIG: "未找到可检查的本地签名配置；请为当前应用配置签名材料。",
+};
 export function saveSigningReport(
   options: Pick<SigningOptions, "taskDir" | "stage">,
   report: Json,
@@ -191,6 +217,7 @@ export async function prepareSigning(
     candidates: [],
     verification: "NOT_RUN",
     sourceModified: false,
+    deviceCheck: { status: "NOT_RUN" },
   };
   const secrets = new Set<string>();
   const redact = (text: string) => {
@@ -202,6 +229,12 @@ export async function prepareSigning(
     Object.assign(report, { status, reason });
     saveSigningReport(options, report);
     return { ready, report, redact };
+  };
+  const blocked = (reasonCode: string, reasons: string[] = [reasonCode]) => {
+    const action = [...new Set(reasons.map(code => signingActions[code] ?? "请查看 signing-report-test.json 中的具体拒绝原因。"))].join(" ");
+    Object.assign(report, { reasonCode, action });
+    const detail = reasonCode === "SIGNING_CANDIDATES_REJECTED" ? `（${reasons.join("、")}）` : "";
+    return finish(false, "BLOCKED", `${reasonCode}${detail}；${action}`);
   };
   const profileFile = path.join(source, "build-profile.json5");
   let config: Json;
@@ -267,35 +300,52 @@ export async function prepareSigning(
     );
   const openssl = which("openssl");
   let devices: string[] | null | undefined;
+  let deviceProbe: Json | undefined;
   const deviceUdids = async (): Promise<string[] | null> => {
-    if (devices !== undefined) return devices;
-    const hdc = options.hdc ?? which("hdc");
-    if (!hdc) return (devices = null);
+    if (devices !== undefined) {
+      report.deviceCheck = { ...deviceProbe };
+      return devices;
+    }
+    const hdc = resolveHdc({ hdc: options.hdc, env: options.env });
+    const failure = (reasonCode: string, extra: Json = {}) => {
+      deviceProbe = { status: "BLOCKED", reasonCode, action: signingActions[reasonCode],
+        ...(hdc ? { hdc } : {}), ...extra };
+      report.deviceCheck = { ...deviceProbe };
+      return (devices = null);
+    };
+    if (!hdc) return failure("HDC_UNAVAILABLE");
     const listed = await runCommand([hdc, "list", "targets"], {
       cwd: source,
+      env: options.env,
       timeoutSeconds: 15,
     });
-    const targets =
-      listed.code === 0
-        ? listed.output
-            .trim()
-            .split(/\r?\n/)
-            .filter((s) => /^[\w.:-]+$/.test(s))
-        : [];
-    if (!targets.length || targets.length > 8) return (devices = null);
+    if (listed.cancelled) return failure("DEVICE_PROBE_CANCELLED");
+    if (listed.timedOut) return failure("HDC_LIST_TIMEOUT");
+    if (listed.code !== 0 || listed.error || /(?:^|\n)\s*\[Fail\]/i.test(listed.output))
+      return failure("HDC_LIST_FAILED", { exitCode: listed.code });
+    const targets = [...new Set(listed.output.trim().split(/\r?\n/).map(line => line.trim())
+      .filter(line => /^[\w.:-]+$/.test(line)))];
+    for (const target of targets) secrets.add(target);
+    if (!targets.length) return failure("NO_CONNECTED_DEVICE", { connectedCount: 0 });
+    if (targets.length > 8) return failure("TOO_MANY_DEVICES", { connectedCount: targets.length });
     const result: string[] = [];
     for (const target of targets) {
       const read = await runCommand(
         [hdc, "-t", target, "shell", "bm", "get", "-u"],
-        { cwd: source, timeoutSeconds: 15 },
+        { cwd: source, env: options.env, timeoutSeconds: 15 },
       );
+      if (read.cancelled) return failure("DEVICE_PROBE_CANCELLED", { connectedCount: targets.length });
+      if (read.timedOut) return failure("DEVICE_UDID_TIMEOUT", { connectedCount: targets.length });
       const udid =
         read.code === 0
           ? /(?:^|\s)([a-fA-F0-9]{32,128})(?:\s|$)/.exec(read.output)?.[1]
           : null;
-      if (!udid) return (devices = null);
+      if (!udid) return failure("DEVICE_UDID_UNAVAILABLE", { connectedCount: targets.length, exitCode: read.code });
+      secrets.add(udid);
       result.push(udid);
     }
+    deviceProbe = { status: "IDENTIFIED", hdc, connectedCount: targets.length };
+    report.deviceCheck = { ...deviceProbe };
     return (devices = result);
   };
   const candidates: {
@@ -305,6 +355,7 @@ export async function prepareSigning(
     cert: string;
     profile: string;
     store: string;
+    deviceCheck: Json;
   }[] = [];
   function* localSources(): Generator<string> {
     yield source;
@@ -422,26 +473,36 @@ export async function prepareSigning(
           audit.profileIntegrity = "CMS_SIGNATURE_VERIFIED_CHAIN_DEFERRED";
         } else audit.profileIntegrity = "DEFERRED_TO_TOOLCHAIN_AND_DEVICE";
         if (content.type === "debug") {
-          const allowed = content["debug-info"]?.["device-ids"],
-            current = await deviceUdids();
+          const allowed = content["debug-info"]?.["device-ids"];
           if (
-            !Array.isArray(allowed) ||
+            !Array.isArray(allowed) || !allowed.length ||
+            allowed.some(id => typeof id !== "string" || !id.trim()) ||
             (content["debug-info"]?.["device-id-type"] &&
               String(content["debug-info"]["device-id-type"]).toLowerCase() !==
-                "udid") ||
-            !current ||
-            current.some(
+                "udid")
+          ) {
+            audit.reason = "PROFILE_DEVICE_AUTHORIZATION_INVALID";
+            continue;
+          }
+          const current = await deviceUdids();
+          if (!current) {
+            audit.reason = report.deviceCheck.reasonCode;
+            continue;
+          }
+          if (current.some(
               (udid) =>
                 !allowed.some(
                   (id) =>
                     typeof id === "string" &&
                     id.toLowerCase() === udid.toLowerCase(),
                 ),
-            )
-          ) {
-            audit.reason = "DEVICE_AUTHORIZATION_UNVERIFIED_OR_MISMATCH";
+            )) {
+            audit.reason = "DEVICE_NOT_AUTHORIZED";
+            report.deviceCheck = { ...report.deviceCheck, status: "BLOCKED", reasonCode: audit.reason,
+              action: signingActions[audit.reason] };
             continue;
           }
+          report.deviceCheck = { ...report.deviceCheck, status: "AUTHORIZED" };
         }
         audit.status = "MATCHED";
         audit.certificateFingerprint = cert.fingerprint256;
@@ -458,6 +519,7 @@ export async function prepareSigning(
           cert: cert.fingerprint256,
           profile: p7b,
           store,
+          deviceCheck: content.type === "debug" ? { ...report.deviceCheck } : { status: "NOT_REQUIRED" },
         });
       } catch {
         audit.reason = "MATERIAL_UNREADABLE_OR_INVALID";
@@ -484,14 +546,14 @@ export async function prepareSigning(
   ];
   const selected =
     current.length === 1 ? current[0] : unique.length === 1 ? unique[0] : null;
-  if (!selected)
-    return finish(
-      false,
-      "BLOCKED",
-      unique.length
-        ? "MULTIPLE_MATCHING_SIGNING_CONFIGS"
-        : "NO_MATCHING_LOCAL_SIGNING_CONFIG；请在 DevEco 中为该应用/设备完成签名授权",
-    );
+  if (!selected) {
+    if (unique.length) return blocked("MULTIPLE_MATCHING_SIGNING_CONFIGS");
+    const reasons = [...new Set<string>(report.candidates.map((candidate: Json) => candidate.reason).filter(Boolean))];
+    report.rejectionReasons = reasons;
+    if (!reasons.length) return blocked("NO_MATCHING_LOCAL_SIGNING_CONFIG");
+    return blocked(reasons.length === 1 ? reasons[0] : "SIGNING_CANDIDATES_REJECTED", reasons);
+  }
+  report.deviceCheck = selected.deviceCheck;
   const name = "arktsRefactorAuto";
   config.app.signingConfigs = [
     ...(config.app.signingConfigs ?? []).filter((c: Json) => c.name !== name),
