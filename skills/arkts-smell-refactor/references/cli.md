@@ -29,6 +29,8 @@
 
 检查范围以返回证据为准。Node、打包依赖、HomeCheck、SDK、工具路径、模型可见性、凭据存在性，与真实网络调用、凭据有效性、签名和设备运行分别说明。未执行的能力不能报告为已验证。history、diff、restore、rollback、apply、finish 不要求 SDK/模型预检，便于环境故障时查看、恢复或清理已有任务；apply 自身仍要求有效 PASS 候选、基线一致和应用授权。
 
+设备测试出现签名相关 BLOCKED 时，读取该轮 backend/signing-report-test.json 的 reasonCode、action、candidates 与 deviceCheck。已有签名但 HDC 未找到、设备未连接或 UDID 无法读取，都不能描述成“用户没有签名”，也不能直接要求重新签名。设备授权匹配只表示前置检查通过，实际安装与测试仍以门禁结果为准；报告中不要展示设备标识、签名密码或原始 Profile。
+
 import 的命令实现也支持离线读取报告，无须 SDK 或模型。但在 Skill 发起的新检测/重构对话中，仍必须先 doctor，再 import；不能在预检失败后用离线导入继续该流程。
 
 后端独立评审默认使用 zhipu-coding/glm-5，沿用现有模型策略。使用其他已配置模型时，在启动 DevEco 的环境中设置 ARKTS_REVIEW_MODEL=provider/model；可选 ARKTS_REVIEW_VARIANT。doctor 同时检查模型可见性和认证配置存在性，不显示凭据。自定义 provider 可通过用户级 DevEco 配置的 provider.options.apiKey（支持环境变量引用）配置；只有 models 列表而没有认证不能通过预检。
