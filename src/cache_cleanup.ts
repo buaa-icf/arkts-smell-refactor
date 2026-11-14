@@ -52,10 +52,14 @@ function cacheFiles(target: string): string[] | undefined {
   if (!stat.isDirectory()) throw new Error("缓存目标不是目录：" + target);
   const files: string[] = [];
   const visit = (directory: string): void => {
+    noLinkedAncestors(directory);
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = childPath(target, path.relative(target, path.join(directory, entry.name)));
+      noLinkedAncestors(directory);
       const current = fs.lstatSync(file);
-      if (current.isSymbolicLink()) throw new Error("缓存内容包含符号链接或 junction：" + file);
+      // OHPM creates dependency links inside its cache. Treat them as leaves:
+      // never enumerate their targets or archive target files, even for internal links.
+      if (current.isSymbolicLink()) continue;
       if (current.isDirectory()) visit(file);
       else if (current.isFile()) files.push(file);
       else throw new Error("缓存包含非普通文件：" + file);
@@ -63,6 +67,32 @@ function cacheFiles(target: string): string[] | undefined {
   };
   visit(target);
   return files;
+}
+
+/** Unlink nested links themselves; do not delegate traversal to recursive rm. */
+function removeWithoutFollowingLinks(target: string): void {
+  noLinkedAncestors(target);
+  const remove = (entry: string): void => {
+    // Check ancestors again before every destructive operation. A directory that
+    // was replaced with a junction after inspection must not redirect a child path.
+    noLinkedAncestors(path.dirname(entry));
+    const stat = fs.lstatSync(entry);
+    if (stat.isSymbolicLink()) {
+      if (entry === target) throw new Error("缓存根已被替换为符号链接或 junction：" + entry);
+      noLinkedAncestors(path.dirname(entry));
+      fs.unlinkSync(entry);
+    } else if (stat.isDirectory()) {
+      noLinkedAncestors(entry);
+      for (const name of fs.readdirSync(entry))
+        remove(childPath(target, path.relative(target, path.join(entry, name))));
+      noLinkedAncestors(entry);
+      fs.rmdirSync(entry);
+    } else if (stat.isFile()) {
+      noLinkedAncestors(path.dirname(entry));
+      fs.unlinkSync(entry);
+    } else throw new Error("缓存包含非普通文件：" + entry);
+  };
+  remove(target);
 }
 
 /** Normal test runs already copy these into test-attempts; preserve any remaining raw reports too. */
@@ -93,9 +123,9 @@ function removeCache(target: string, result: CacheCleanupReport, archive?: { tas
     const files = cacheFiles(target);
     if (!files) return;
     if (archive) preserveTestReports(archive.taskDir, target, files, archive.label, result);
-    // Recheck after archiving; never traverse a link introduced into a cache while it was inspected.
+    // Recheck after archiving, then delete entries without following dependency links.
     cacheFiles(target);
-    fs.rmSync(target, { recursive: true, force: false, maxRetries: 2, retryDelay: 50 });
+    removeWithoutFollowingLinks(target);
     result.removed.push(target);
   } catch (error) {
     result.retained.push(target);

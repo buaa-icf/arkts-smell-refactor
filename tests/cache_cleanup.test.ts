@@ -93,19 +93,97 @@ test("an ancestor junction cannot redirect run cleanup", t => {
   assert(fs.existsSync(path.join(actual, "run/edit/keep.txt")));
 });
 
-test("target and nested junctions cause the whole selected copy to be retained", t => {
+test("a cache root junction is retained while nested dependency junctions are unlinked", t => {
   const root = fixture(t), run = path.join(root, "run"), outside = path.join(root, "outside");
   writeText(path.join(outside, "keep.txt"), "keep");
   fs.mkdirSync(run);
   if (!junction(t, outside, path.join(run, "edit"))) return;
-  writeText(path.join(run, "staging/ordinary.txt"), "keep entire cache on refusal");
+  writeText(path.join(run, "staging/ordinary.txt"), "disposable cache");
   if (!junction(t, outside, path.join(run, "staging/linked"))) return;
   const cleaned = cleanupRunCopies(run, ["edit", "staging"]);
-  assert.equal(cleaned.removed.length, 0);
-  assert.equal(cleaned.retained.length, 2);
-  assert.equal(cleaned.warnings.length, 2);
-  assert(fs.existsSync(path.join(run, "staging/ordinary.txt")));
+  assert.deepEqual(cleaned.removed, [path.join(run, "staging")]);
+  assert.deepEqual(cleaned.retained, [path.join(run, "edit")]);
+  assert.equal(cleaned.warnings.length, 1);
+  assert.equal(fs.existsSync(path.join(run, "staging")), false);
   assert(fs.existsSync(path.join(outside, "keep.txt")));
+  assert(fs.lstatSync(path.join(run, "edit")).isSymbolicLink());
+});
+
+test("OHPM internal, external, broken and cyclic junctions do not prevent cleanup or expose target logs", t => {
+  const f = taskCaches(t), outside = path.join(f.root, "external-project");
+  const dependency = path.join(f.validation, "oh_modules/.ohpm/vendor+sdk@1.0.0/oh_modules/@vendor/sdk");
+  const modules = path.join(f.validation, "commons/common/oh_modules");
+  writeText(path.join(dependency, "sdk.ets"), "package source");
+  writeText(path.join(outside, "external.log"), "must not read or delete");
+  writeText(path.join(f.validation, ".hvigor/build.log"), "own build log");
+  writeText(path.join(f.validation, "entry/.test/coverage_data/test_result.txt"), "own test report");
+  fs.mkdirSync(path.join(modules, "@vendor"), { recursive: true });
+  if (!junction(t, dependency, path.join(modules, "@vendor/sdk"))) return;
+  if (!junction(t, outside, path.join(modules, "external"))) return;
+  if (!junction(t, path.join(f.root, "missing"), path.join(modules, "broken"))) return;
+  if (!junction(t, f.validation, path.join(modules, "cycle"))) return;
+  const cleaned = cleanupTaskCaches(f.taskDir);
+  assert.deepEqual(cleaned.warnings, []);
+  assert.deepEqual(cleaned.removed, [f.validation]);
+  assert.equal(fs.existsSync(f.validation), false);
+  assert.equal(fs.readFileSync(path.join(outside, "external.log"), "utf8"), "must not read or delete\n");
+  assert.equal(cleaned.archived?.length, 2);
+  assert(cleaned.archived?.every(file => !file.includes("external.log")));
+  assert.equal(fs.readFileSync(path.join(f.taskDir, "cache-evidence/validation/.hvigor/build.log"), "utf8"), "own build log\n");
+});
+
+test("file symlinks are unlinked without reading target reports or changing external files", t => {
+  const f = taskCaches(t), outside = path.join(f.root, "original.log");
+  writeText(outside, "external evidence");
+  fs.mkdirSync(f.validation, { recursive: true });
+  const alias = path.join(f.validation, "aliased.log");
+  try { fs.symlinkSync(outside, alias, "file"); }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      // Creating file symlinks requires a Windows privilege even though directory
+      // junctions do not. A hardlink preserves real unlink/target survival behavior;
+      // only lstat's link classification is simulated for this branch coverage.
+      fs.linkSync(outside, alias);
+      const lstat = fs.lstatSync;
+      t.mock.method(fs, "lstatSync", (file: fs.PathLike) => {
+        const stat = lstat(file);
+        if (file === alias) stat.isSymbolicLink = () => true;
+        return stat;
+      });
+      t.diagnostic("File symlink creation is unavailable; lstat classification simulated with a real hardlink/unlink.");
+    } else throw error;
+  }
+  const cleaned = cleanupTaskCaches(f.taskDir);
+  assert.deepEqual(cleaned.warnings, []);
+  assert.deepEqual(cleaned.removed, [f.validation]);
+  assert.deepEqual(cleaned.archived, []);
+  assert.equal(fs.readFileSync(outside, "utf8"), "external evidence\n");
+});
+
+test("a directory changed to a junction during deletion cannot redirect subsequent child deletion", t => {
+  const root = fixture(t), run = path.join(root, "run"), target = path.join(run, "edit");
+  const directory = path.join(target, "dependency"), moved = path.join(target, "moved-dependency");
+  const outside = path.join(root, "outside");
+  writeText(path.join(directory, "first.txt"), "cache");
+  writeText(path.join(directory, "second.txt"), "cache");
+  writeText(path.join(outside, "second.txt"), "original");
+  const probe = path.join(root, "probe");
+  if (!junction(t, outside, probe)) return;
+  fs.unlinkSync(probe);
+  const unlink = fs.unlinkSync;
+  const mock = t.mock.method(fs, "unlinkSync", (file: fs.PathLike) => {
+    unlink(file);
+    if (file === path.join(directory, "first.txt")) {
+      fs.renameSync(directory, moved);
+      fs.symlinkSync(outside, directory, process.platform === "win32" ? "junction" : "dir");
+    }
+  });
+  try {
+    const cleaned = cleanupRunCopies(run, ["edit"]);
+    assert.deepEqual(cleaned.retained, [target]);
+    assert.match(cleaned.warnings[0], /链接|junction/);
+    assert.equal(fs.readFileSync(path.join(outside, "second.txt"), "utf8"), "original\n");
+  } finally { mock.mock.restore(); }
 });
 
 test("test report archive junction is rejected before deleting the source cache", t => {
@@ -135,10 +213,10 @@ test("deletion failure is reported without throwing or deleting other evidence",
   const run = path.join(fixture(t), "run"), target = path.join(run, "edit");
   writeText(path.join(target, "keep.txt"), "keep");
   writeText(path.join(run, "backend/test.log"), "log");
-  const original = fs.rmSync;
-  const mock = t.mock.method(fs, "rmSync", (file: fs.PathLike, options?: fs.RmOptions) => {
-    if (file === target) throw Object.assign(new Error("simulated Windows file in use"), { code: "EBUSY" });
-    return original(file, options);
+  const original = fs.unlinkSync;
+  const mock = t.mock.method(fs, "unlinkSync", (file: fs.PathLike) => {
+    if (file === path.join(target, "keep.txt")) throw Object.assign(new Error("simulated Windows file in use"), { code: "EBUSY" });
+    return original(file);
   });
   try {
     const cleaned = cleanupRunCopies(run, ["edit"]);
