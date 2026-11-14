@@ -74,6 +74,34 @@ export function files(root) {
   visit(root);
   return result.sort();
 }
+
+/** Old installations include mutable build caches; inspect their links without following targets.
+ * New packages must still pass files()/validatePackage(), which reject every link.
+ */
+export function inspectInstalledSkill(root) {
+  noLinks(root);
+  if (!info(root)?.isDirectory()) throw new Error(`不是普通目录：${root}`);
+  function visit(directory) {
+    noLinks(directory);
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name);
+      const relative = path.relative(root, file).replaceAll("\\", "/");
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink()) {
+        // A cache root and its ancestors must remain actual directories. Only
+        // links strictly below the gate's task-derived cache root are leaves.
+        if (/^runtime\/v\/[0-9a-f]{8}\/.+/i.test(relative)) continue;
+        throw new Error(`不支持符号链接或 junction：${file}`);
+      }
+      if ((relative === "runtime/v" || /^runtime\/v\/[0-9a-f]{8}$/i.test(relative)) && !stat.isDirectory())
+        throw new Error(`运行缓存根不是普通目录：${file}`);
+      if (stat.isDirectory()) visit(file);
+      else if (!stat.isFile()) throw new Error(`不是普通文件：${file}`);
+    }
+  }
+  visit(root);
+}
+
 export function validatePackage(root) {
   const names = files(root).filter((name) => name !== "package-manifest.json");
   const manifest = JSON.parse(

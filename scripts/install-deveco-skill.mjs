@@ -10,7 +10,7 @@ import {
   noLinks,
   canonical,
   checkedPath,
-  files,
+  inspectInstalledSkill,
   validatePackage,
 } from "./skill-package-integrity.mjs";
 
@@ -155,7 +155,7 @@ function install(args) {
     throw new Error("请从安装目录之外的原始制品执行安装");
   const old = info(skillDirectory);
   if (old) {
-    files(skillDirectory);
+    inspectInstalledSkill(skillDirectory);
     if (!options["--force"])
       throw new Error(
         `Skill 已存在：${skillDirectory}；使用 --force 先备份再更新`,
@@ -225,7 +225,7 @@ function install(args) {
         checkedPath(configDirectory, path.dirname(backupDirectory)),
         { recursive: true },
       );
-      files(checkedPath(configDirectory, skillDirectory));
+      inspectInstalledSkill(checkedPath(configDirectory, skillDirectory));
       fs.renameSync(
         skillDirectory,
         checkedPath(configDirectory, backupDirectory),
@@ -244,7 +244,7 @@ function install(args) {
         if (info(checkedPath(configDirectory, skillDirectory)))
           recovery = "\n安装目标已出现，保留备份供人工恢复";
         else {
-          files(checkedPath(configDirectory, backupDirectory));
+          inspectInstalledSkill(checkedPath(configDirectory, backupDirectory));
           fs.renameSync(
             backupDirectory,
             checkedPath(configDirectory, skillDirectory),

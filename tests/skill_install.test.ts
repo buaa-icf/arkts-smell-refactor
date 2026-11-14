@@ -472,3 +472,97 @@ test("offline installation rejects invalid flags, nonportable tool paths, links,
     false,
   );
 });
+
+function cacheLinks(f: ReturnType<typeof setup>) {
+  const cache = path.join(f.skill, "runtime/v/a1dfff36");
+  const dependency = path.join(cache, "oh_modules/.ohpm/@cashier_alipay+cashiersdk@15.8.43/oh_modules/@cashier_alipay/cashiersdk");
+  const outside = path.join(f.base, "outside-cache");
+  writeText(path.join(dependency, "index.ets"), "internal dependency");
+  writeText(path.join(outside, "sentinel.txt"), "external data");
+  writeText(path.join(cache, "build.log"), "previous build evidence");
+  const targets = {
+    "commons/common/oh_modules/@cashier_alipay/cashiersdk": dependency,
+    "oh_modules/external": outside,
+    "oh_modules/missing": path.join(f.base, "missing-dependency"),
+    "oh_modules/loop": cache,
+  };
+  for (const [name, target] of Object.entries(targets)) {
+    const link = path.join(cache, name);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  }
+  return { cache, dependency, outside, names: Object.keys(targets),
+    links: Object.fromEntries(Object.keys(targets).map(name => [name, fs.readlinkSync(path.join(cache, name))])) };
+}
+
+test("offline upgrade backs up OHPM cache links as leaves without following internal, external, broken or cyclic targets", t => {
+  const f = setup(t);
+  assert.equal(run(f.portableInstaller, [], f.base, f.env).status, 0);
+  const cache = cacheLinks(f);
+  const tools = { linterMode: "skip", studio: path.join(f.base, "Existing Studio") };
+  writeJson(path.join(f.skill, "settings.json"), tools);
+  const dry = run(f.portableInstaller, ["--force", "--dry-run"], f.base, f.env);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(fs.existsSync(path.join(f.configDirectory, "arkts-skill-backups")), false);
+  const upgraded = run(f.portableInstaller, ["--force"], f.base, f.env);
+  assert.equal(upgraded.status, 0, upgraded.stderr);
+  const backup = JSON.parse(upgraded.stdout).backupDirectory;
+  const backupCache = path.join(backup, "runtime/v/a1dfff36");
+  for (const name of cache.names) {
+    assert.equal(fs.lstatSync(path.join(backupCache, name)).isSymbolicLink(), true);
+    assert.equal(fs.readlinkSync(path.join(backupCache, name)), cache.links[name]);
+  }
+  assert.equal(fs.readFileSync(path.join(backupCache, "build.log"), "utf8"), "previous build evidence\n");
+  assert.equal(fs.readFileSync(path.join(cache.outside, "sentinel.txt"), "utf8"), "external data\n");
+  assert.equal(fs.existsSync(path.join(f.skill, "runtime/v")), false);
+  assert.deepEqual(readJson(path.join(f.skill, "settings.json")), tools);
+});
+
+test("failed upgrade restores the old installation and its OHPM links without changing targets", t => {
+  const f = setup(t);
+  assert.equal(run(f.portableInstaller, [], f.base, f.env).status, 0);
+  const cache = cacheLinks(f);
+  const originalSettings = fs.readFileSync(path.join(f.skill, "settings.json"));
+  const preload = path.join(f.base, "fail-cache-upgrade.cjs");
+  writeText(preload, `const fs = require('node:fs'); const rename = fs.renameSync;
+    fs.renameSync = (from,to) => { if (String(from).includes('.arkts-smell-refactor-stage-'))
+      throw new Error('controlled publication failure'); return rename(from,to); };`);
+  const failed = run(f.portableInstaller, ["--force"], f.base, f.env, ["--require", preload]);
+  assert.equal(failed.status, 2);
+  assert.match(failed.stderr, /controlled publication failure/);
+  assert.match(failed.stderr, /旧版已恢复/);
+  for (const name of cache.names)
+    assert.equal(fs.readlinkSync(path.join(cache.cache, name)), cache.links[name]);
+  assert.equal(fs.readFileSync(path.join(cache.dependency, "index.ets"), "utf8"), "internal dependency\n");
+  assert.equal(fs.readFileSync(path.join(cache.outside, "sentinel.txt"), "utf8"), "external data\n");
+  assert.deepEqual(fs.readFileSync(path.join(f.skill, "settings.json")), originalSettings);
+});
+
+test("upgrade cache exception never permits links at cache roots, ancestors, code, or unknown cache namespaces", t => {
+  for (const name of ["runtime/v", "runtime/v/a1dfff36", "runtime/dist/redirect", "runtime/v/unknown/redirect"]) {
+    const f = setup(t);
+    assert.equal(run(f.portableInstaller, [], f.base, f.env).status, 0);
+    const outside = path.join(f.base, "protected-target"), link = path.join(f.skill, name);
+    writeText(path.join(outside, "keep.txt"), "protected");
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    const rejected = run(f.portableInstaller, ["--force"], f.base, f.env);
+    assert.equal(rejected.status, 2, name);
+    assert.match(rejected.stderr, /链接|junction/);
+    assert.equal(fs.existsSync(path.join(f.configDirectory, "arkts-skill-backups")), false);
+    assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "protected\n");
+  }
+});
+
+test("new package validation continues rejecting links even under a cache-shaped path", t => {
+  const f = setup(t), target = path.join(f.base, "outside-package");
+  writeText(path.join(target, "keep.txt"), "unchanged");
+  const link = path.join(f.source, "runtime/v/a1dfff36/oh_modules/dependency");
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  const rejected = run(f.portableInstaller, ["--force"], f.base, f.env);
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /链接|junction/);
+  assert.equal(fs.existsSync(f.configHome), false);
+  assert.equal(fs.readFileSync(path.join(target, "keep.txt"), "utf8"), "unchanged\n");
+});
