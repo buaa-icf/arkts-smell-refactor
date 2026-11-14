@@ -51,6 +51,11 @@ function resultShape(method: keyof BridgeMethods, value: unknown): boolean {
   if (method === "history.list") return Array.isArray(value.records);
   if (method === "issues.import" || method === "scan.start") return Array.isArray(value.issues);
   if (method === "task.prepare") return typeof value.taskHandle === "string" && object(value.risk);
+  if (method === "task.openWorkspace") return ["workspaceId", "taskHandle", "editDirectory", "promptFile", "runDirectory"]
+    .every(key => typeof value[key] === "string" && value[key].length > 0);
+  if (method === "task.finish") return value.state === "FINISHED" &&
+    ["taskHandle", "runDirectory"].every(key => typeof value[key] === "string" && value[key].length > 0) &&
+    ["removed", "retained", "warnings"].every(key => Array.isArray(value[key]) && value[key].every(item => typeof item === "string"));
   if (method.startsWith("candidate.") && method !== "candidate.restore") return typeof value.candidateId === "string" && Array.isArray(value.changes);
   if (method === "candidate.restore") return object(value.candidate) && object(value.prepared) && object(value.result);
   return object(value.result) && typeof value.result.verdict === "string" &&

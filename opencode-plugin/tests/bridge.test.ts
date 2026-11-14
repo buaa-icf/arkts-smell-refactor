@@ -34,6 +34,10 @@ test("real Node bridge hello, import and prepare run without model calls or sour
   assert.equal(prepared.instructions, "保持行为");
   assert.ok(events.includes("run.started"));
   assert.ok(events.includes("workflow.changed"));
+  const workspace = await client.request("task.openWorkspace", { taskHandle: prepared.taskHandle });
+  assert.equal(workspace.taskHandle, prepared.taskHandle);
+  assert.ok(workspace.editDirectory.endsWith("edit"));
+  assert.ok((await readFile(workspace.promptFile, "utf8")).includes(workspace.editDirectory));
   assert.deepEqual(await readFile(resolve(f.projectRoot, f.name)), f.before);
   const history = await client.request("history.list");
   assert.ok(history.records.some((record) => record.method === "task.prepare"));
@@ -53,7 +57,7 @@ process.stdin.on('end', ()=>{
    send({protocolVersion:1,type:'event',seq:1,event:'child',data:{pid:child.pid}});
    setTimeout(()=>{},60000);return;
  }
- send({protocolVersion:1,type:'response',requestId:r.requestId,ok:true,result:{protocolVersion:1,transport:'test',supportedRules:[]}});
+ send({protocolVersion:1,type:'response',requestId:r.requestId,ok:true,result:r.params.result??{protocolVersion:1,transport:'test',supportedRules:[]}});
 });
 `;
 test("bridge reports EOF, mismatched requests and sequence gaps", async (t) => {
@@ -63,6 +67,22 @@ test("bridge reports EOF, mismatched requests and sequence gaps", async (t) => {
   await assert.rejects(client.request("session.hello", { mode: "crash" }), /未返回响应.*诊断信息/);
   await assert.rejects(client.request("session.hello", { mode: "wrong" }), /响应关联/);
   await assert.rejects(client.request("session.hello", { mode: "sequence" }), /序号/);
+});
+test("bridge accepts workspace and finish results without pipeline verdicts, and rejects malformed fields", async (t) => {
+  const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
+  const path = resolve(f.directory, "results.cjs"); await writeFile(path, fakeBackend);
+  const client = new BridgeClient({ ...f.config, bridgePath: path });
+  const workspace = { workspaceId: "workspace", taskHandle: "task", editDirectory: resolve(f.directory, "edit"),
+    promptFile: resolve(f.directory, "prompt.md"), runDirectory: f.directory };
+  assert.deepEqual(await client.request("task.openWorkspace", { result: workspace }), workspace);
+  for (const field of ["workspaceId", "taskHandle", "editDirectory", "promptFile", "runDirectory"])
+    await assert.rejects(client.request("task.openWorkspace", { result: { ...workspace, [field]: "" } }), /必要字段/);
+  const finished = { taskHandle: "task", state: "FINISHED", removed: [resolve(f.directory, "edit")],
+    retained: [resolve(f.directory, "baseline")], warnings: [], runDirectory: f.directory };
+  assert.deepEqual(await client.request("task.finish", { result: finished }), finished);
+  for (const change of [{ state: "RUNNING" }, { taskHandle: "" }, { runDirectory: 5 }, { removed: "edit" },
+    { retained: [null] }, { warnings: [1] }])
+    await assert.rejects(client.request("task.finish", { result: { ...finished, ...change } }), /必要字段/);
 });
 test("user cancellation terminates the Node worker and its child", async (t) => {
   const f = await fixture(); t.after(() => rm(f.directory, { recursive: true, force: true }));
