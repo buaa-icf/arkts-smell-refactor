@@ -4,6 +4,8 @@
 
 [Skill 对话方案（试验版）](skill-adapter/README.md) 由外层 DevEco Code 调度重构和返修子 Agent，共享后端提供编辑副本、验收、独立审查及应用/回滚。目标工程由当前目录或 --project 选择；流程首先预检，缺少 SDK、工具或审查模型配置时报告并终止。
 
+Skill 在每轮验收完成后回收构建缓存，外层在所有子任务停止且不再返修时执行 `finish --task <taskHandle>`，回收重复工程副本。保留一份完整基线、候选前后内容、未验收草稿、日志及应用/回滚事务；结束后的候选仍可查看、复验和应用。强制退出可能留下待清理材料；超时或残留运行状态不能确认进程停止时会保留并报告，详见 [任务收尾](skills/arkts-smell-refactor/references/cli.md#任务收尾与保留材料)。
+
 `deveco-plugin/` 包含 DevEco Studio 的 Java 插件，`opencode-plugin/` 包含 DevEco Code／OpenCode 的原生终端工作台。两者均通过 Node JSONL 桥接调用共享后端。以下命令用于源码开发及后端 CLI；TUI 的配置、`/arkts` 入口、候选 Diff、确认应用及回滚流程见 [TUI 使用说明](opencode-plugin/docs/usage-and-validation.md)。
 
 ## 1. 安装和启动

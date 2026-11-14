@@ -79,11 +79,23 @@ JavaScript 安装器默认拒绝覆盖，--force 才备份升级；--dry-run 仅
       → 外层 DevEco task / general 在 editDirectory 编辑
       → validate-workspace（门禁 + 后端独立 reviewer）
            ├─ 可归因 FAIL 且允许返修 → 外层定向返修 → 再验收
-           ├─ BLOCKED / 无返修资格 → 报告并结束
-           └─ PASS → 展示 Diff → 按授权 apply → validate-applied
+           ├─ BLOCKED / 无返修资格 → finish → 报告并结束
+           └─ PASS → finish → 展示 Diff → 按授权 apply → validate-applied
                                                      → 按选择 rollback
 
 每个工作区首次重构后最多三次返修。外层不启动独立 reviewer，评审仍在后端验收内；execute 保留兼容 TUI 和旧自动编排，不是 Skill 的默认路径。
+
+## 任务收尾与缓存
+
+每轮验收完成并封存证据后，后端回收该轮 staging、编辑输入副本及构建缓存。返修仍使用独立保留的 workspace/edit；所有子 Agent 已完成或停止且不再返修时，外层执行：
+
+    node "<已安装Skill目录>/scripts/run.mjs" finish --task "<taskHandle>" --project "<工程目录>"
+
+收尾回收同一任务的重复 staging/edit 副本，保留一份 prepared/baseline、候选 before/after、风险与冻结选测材料、验收和评审日志、应用/回滚事务。未封存的编辑先保存为标记 UNVALIDATED_DRAFT 的草稿，不能直接应用。原工程不会因清理而被改写。已结束的工作区不能继续编辑或验收；保留候选仍支持 Diff、restore、validate-candidate、apply、validate-applied 和 rollback。
+
+默认运行记录位于系统临时目录下 arkts-refactor-tui/<工程标识>/runs（Windows 通常是 AppData/Local/Temp）。构建副本位于 Skill 的 runtime/v，运行时 smoke 副本位于系统临时目录 arkts-smell-refactor-runtime；清理只处理对应任务的派生目录，不清空这些目录下的其他任务。必要证据仍占磁盘空间，不按保留天数自动删除。
+
+finish 不依赖 SDK 或模型预检，可幂等重试。返回 removed、retained、warnings 说明实际清理结果；清理失败不会更改验收结论。若 cleanup.deferred 为 true，先确认残留编辑、构建和测试进程全部停止；遗留 RUNNING 状态、操作锁或路径链接会阻止清理并保留数据。关闭宿主窗口不保证已执行 finish，不应伪造结束状态、擅自删锁或直接删除整个 runs。
 
 详细命令见 [CLI 参考](../skills/arkts-smell-refactor/references/cli.md)，子任务调用见 [外层 Agent 指南](../skills/arkts-smell-refactor/references/outer-agent.md)，实现边界见 [编排说明](agent-orchestration.md)。
 

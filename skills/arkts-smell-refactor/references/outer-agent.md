@@ -32,6 +32,16 @@ promptFile 和 editDirectory 都是后端返回的绝对路径。父对话通常
 
 每个工作区最多三次返修。环境、设备、签名、登录、证据或超时阻塞不进入返修。不得用“再试一次”绕过 repairEligible 为 false，不得新建工作区重置次数。
 
+## 外层负责结束任务
+
+子 Agent 完成编辑后仍先 validate-workspace；只有不再继续返修时才调用 finish --task <本轮 taskHandle>。PASS 展示候选前、BLOCKED 或不可返修 FAIL 结束回复前，以及用户取消本次任务时，都由父对话完成这一步。若相关原生子任务还在运行，先等待或停止并确认结束，不可一边编辑、一边收尾。repairEligible 为 true 且将继续返修时保留工作区。
+
+finish 保留候选、完整基线、选测与评审证据、日志及回滚材料，只回收重复副本。读取 removed、retained、warnings 并报告实际结果；清理失败不改变验收结论。收尾后不再使用旧 editDirectory/workspaceId，后续改用候选 restore/validate-candidate；配置或源码漂移仍要重新 prepare。
+
+后端不能观察宿主窗口或聊天是否关闭。强制退出可能跳过此收尾步骤；恢复对话后先确认相关子任务全部停止，再用原 taskHandle 幂等补做 finish。不要要求子 Agent 自己清理副本，也不要直接删除候选或日志。
+
+异常或超时若返回 cleanup.deferred，先确认残留构建及测试进程也已停止，再尝试收尾。若后端报告遗留 RUNNING 状态或锁，保留材料并报告，不能修改证据状态或删除锁来绕过阻塞。
+
 ## 独立评审仍在后端
 
 子 Agent 输出只是编辑反馈。完整门禁和独立只读 reviewer 由 validate-workspace 调用，最终状态及候选以其结果为准。当前流程不向外层请求评审 JSON，也没有 finalize-review 命令。
