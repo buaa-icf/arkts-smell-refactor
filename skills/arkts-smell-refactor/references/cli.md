@@ -73,6 +73,8 @@ finish 是外层对话的收尾步骤，在本任务所有原生子 Agent 已完
 
 每轮验收结束后后端自动回收可重建的构建副本。finish 结束对应任务并回收重复工程副本，保留一份完整基线、prepared/backend 选测与风险材料、候选前后内容、验收与评审日志、事务记录，以及需要保护的未封存修改。返回 result.state 为 FINISHED；result.removed 是已清理目录，result.retained 是保留目录，result.warnings 是清理失败或需保留的说明。向用户报告警告和保留路径，不覆盖原 PASS/FAIL/BLOCKED 结论。
 
+OHPM 等工具在缓存内部创建的 junction/symlink 作为链接本身清除，不进入其目标目录；日志归档只读取缓存中的真实文件。缓存根、祖先目录以及草稿/日志归档路径仍不允许链接。对外部链接目标不进行读取、递归删除或日志复制。
+
 已 finish 的 workspace 不可再编辑或续验。需要重新验收已有候选时使用 restore、validate-candidate；应用、应用后复检和回滚仍使用保留的候选材料。配置或原工程变化时仍按基线检查拒绝结果重新检测、prepare，不能用旧 ID 绕过。
 
 宿主强制退出、断电或对话中断时，外层可能没有执行 finish。确认所有相关子任务和验收进程停止后，使用原 taskHandle 再运行 finish；重复执行可重试尚未清理的缓存。不要手工删除整个 runs、基线或候选目录来代替收尾。

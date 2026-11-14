@@ -20,6 +20,8 @@ ArkTS 对话式重构 Skill：Windows 安装说明
      %USERPROFILE%\.config\deveco\skills\arkts-smell-refactor
    如已设置绝对路径 XDG_CONFIG_HOME，则使用其下的 deveco\skills 目录。
    已有同名安装时，入口会先备份再升级，并保留原有工具设置。
+   旧版本构建缓存中的 OHPM 依赖链接可随目录备份，不会遍历链接目标。
+   新发行包及安装根目录仍不允许符号链接或 junction。
    安装成功时会显示实际安装位置；升级时同时显示备份位置。
 
 4. 退出并重启 DevEco Code，在目标 HarmonyOS 业务工程中开始聊天。

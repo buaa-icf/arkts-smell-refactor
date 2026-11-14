@@ -1,6 +1,6 @@
 {
   "name": "arkts-smell-refactor",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Dataset-driven ArkTS refactoring and evidence-based validation",
   "type": "module",

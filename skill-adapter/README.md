@@ -25,6 +25,8 @@ Skill 在 DevEco 对话中展示检测结果、风险、建议、候选 Diff 和
 
 批处理入口自动启用备份升级；升级默认沿用旧安装中的工具设置，本次 --config 和 --studio 可覆盖，旧工程和仓库路径不迁移。脚本不改业务工程的配置、宿主权限、协议或登录。
 
+旧安装中的 runtime/v/<任务标识> 是运行后生成的构建缓存。升级检查允许该缓存内部的 OHPM 依赖链接，备份与失败恢复移动整个旧目录而不遍历链接目标；安装根目录、缓存根和祖先目录仍须为真实目录，缓存之外的安装文件仍拒绝链接。新发行包继续进行完整文件清单与哈希校验。
+
 退出并重启 DevEco Code，在 /skills 中确认 arkts-smell-refactor。官方支持此用户级目录，见 [华为常用配置文档](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-common-configure/)。若有旧项目级同名 Skill，通过 deveco debug skill 的 location 核对实际加载版本。IDE 插件也可导入完整目录或 ZIP，但应保留 runtime 和脚本，见 [官方 Skill 配置页面](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/ide-deveco-code-plugin-skill)。
 
 运行仍需要本机 Node.js、DevEco Code 和工程要求的 DevEco SDK、构建及测试环境；发行包包含 JavaScript 运行时依赖，不包含平台专用 Node、SDK 或设备。
@@ -95,7 +97,7 @@ JavaScript 安装器默认拒绝覆盖，--force 才备份升级；--dry-run 仅
 
 默认运行记录位于系统临时目录下 arkts-refactor-tui/<工程标识>/runs（Windows 通常是 AppData/Local/Temp）。构建副本位于 Skill 的 runtime/v，运行时 smoke 副本位于系统临时目录 arkts-smell-refactor-runtime；清理只处理对应任务的派生目录，不清空这些目录下的其他任务。必要证据仍占磁盘空间，不按保留天数自动删除。
 
-finish 不依赖 SDK 或模型预检，可幂等重试。返回 removed、retained、warnings 说明实际清理结果；清理失败不会更改验收结论。若 cleanup.deferred 为 true，先确认残留编辑、构建和测试进程全部停止；遗留 RUNNING 状态、操作锁或路径链接会阻止清理并保留数据。关闭宿主窗口不保证已执行 finish，不应伪造结束状态、擅自删锁或直接删除整个 runs。
+finish 不依赖 SDK 或模型预检，可幂等重试。返回 removed、retained、warnings 说明实际清理结果；清理失败不会更改验收结论。缓存内部的 junction/symlink 只删除链接本身，不遍历其目标；日志归档也不读取链接目标。缓存根或祖先被链接替换时拒绝清理，草稿和日志归档路径仍严格禁止链接。若 cleanup.deferred 为 true，先确认残留编辑、构建和测试进程全部停止；遗留 RUNNING 状态或操作锁会阻止清理并保留数据。关闭宿主窗口不保证已执行 finish，不应伪造结束状态、擅自删锁或直接删除整个 runs。
 
 详细命令见 [CLI 参考](../skills/arkts-smell-refactor/references/cli.md)，子任务调用见 [外层 Agent 指南](../skills/arkts-smell-refactor/references/outer-agent.md)，实现边界见 [编排说明](agent-orchestration.md)。
 
