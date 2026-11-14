@@ -19,6 +19,7 @@ const portableKeys = [
   "timeoutMs",
 ];
 const offlineCommands = new Set([
+  "finish",
   "import",
   "history",
   "diff",

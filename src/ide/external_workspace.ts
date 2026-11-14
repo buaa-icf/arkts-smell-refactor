@@ -8,6 +8,7 @@ import { relocateFrozenTestPlan } from "../test_plan.js";
 import { normalizeAgentPromptPaths } from "../gate.js";
 import { buildFailureReport } from "../runner.js";
 import { buildRepairPrompt } from "../prompts.js";
+import { assertTaskOpen } from "./lifecycle.js";
 import {
   BridgeContext, BridgeError, allowedProduction, configurationDigest,
   copyProject, loadRun, safePath, same, snapshot,
@@ -34,6 +35,7 @@ function editPrompt(text: string, taskDir: string, stage: string, edit: string):
 
 /** Prepare the only editable copy. Tests and frozen evidence remain outside this directory. */
 export function openWorkspace(ctx: BridgeContext, params: Json, run: string): Json {
+  assertTaskOpen(ctx, params.taskHandle);
   const [preparedRun, prepared] = loadRun(ctx, params.taskHandle, "prepared.json");
   unchanged(ctx, preparedRun, prepared);
   const original = prepared.originalRoot,
@@ -42,11 +44,11 @@ export function openWorkspace(ctx: BridgeContext, params: Json, run: string): Js
     taskDir = path.join(run, "backend"),
     editDirectory = path.join(run, "edit"),
     promptFile = path.join(run, "prompts", "refactor.md");
-  if (!same(snapshot(originalStage), prepared.baselineFiles))
+  if (fs.existsSync(originalStage) && !same(snapshot(originalStage), prepared.baselineFiles))
     throw new BridgeError("CANDIDATE_CHANGED", "准备阶段的选测来源已变化");
   copyProject(path.join(preparedRun, "baseline"), stage);
-  copyArtifacts(path.join(preparedRun, "backend"), taskDir, path.dirname(originalStage), path.dirname(stage));
-  relocateFrozenTestPlan(path.join(preparedRun, "backend"), taskDir, originalStage, stage);
+  copyArtifacts(path.join(preparedRun, "backend"), taskDir, path.dirname(originalStage), path.dirname(stage),
+    { root: stage, files: prepared.baselineFiles });
   freshCopy(stage, editDirectory, true);
   const editBaseline = snapshot(editDirectory);
   if (Object.keys(editBaseline).some(isTest)) throw new BridgeError("INVALID_INPUT", "编辑副本包含测试文件");
@@ -67,6 +69,8 @@ export async function validateWorkspace(
   ctx: BridgeContext, params: Json, run: string, runner: PipelineRunner = runPipelineLogged,
 ): Promise<Json> {
   const [workspaceRun, workspace] = loadRun(ctx, params.workspaceId, "workspace.json");
+  if (workspace.lifecycle === "FINISHED")
+    throw new BridgeError("TASK_FINISHED", "工作区已收尾，请复验已封存候选或重新准备任务");
   if (workspace.schemaVersion !== 1 || workspace.workspaceId !== params.workspaceId ||
       !Number.isInteger(workspace.validations) || workspace.validations < 0)
     throw new BridgeError("INVALID_INPUT", "工作区记录无效");

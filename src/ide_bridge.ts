@@ -17,6 +17,7 @@ import {
 } from "./ide/common.js";
 import { normalizeIssues, scan, smellCandidateGate } from "./ide/scan.js";
 import { openWorkspace, validateWorkspace } from "./ide/external_workspace.js";
+import { assertTaskOpen, cleanupAttempt, finishTask, lockOperation } from "./ide/lifecycle.js";
 import {
   checkCandidate,
   executeCandidate,
@@ -70,11 +71,14 @@ export async function dispatch(
     case "task.prepare":
       return prepareCandidate(ctx, params, run!);
     case "task.execute":
+      assertTaskOpen(ctx, params.taskHandle);
       return executeCandidate(ctx, params, run!);
     case "task.openWorkspace":
       return openWorkspace(ctx, params, run!);
     case "task.validateWorkspace":
       return validateWorkspace(ctx, params, run!);
+    case "task.finish":
+      return finishTask(ctx, params.taskHandle);
     case "task.validateCandidate":
       return validateCandidate(ctx, params, run!);
     case "task.validateApplied": {
@@ -146,6 +150,13 @@ export async function serveRequest(
     options.output ??
     ((message) => process.stdout.write(JSON.stringify(message) + "\n"));
   let run: string | undefined;
+  let unlock: (() => void) | undefined;
+  const cleanupMethods = ["task.execute", "task.validateWorkspace", "task.validateCandidate", "task.validateApplied"];
+  const cleanup = (completed: boolean, pipeline: Json = {}): Json | undefined => {
+    if (!run || !cleanupMethods.includes(request.method)) return;
+    try { return cleanupAttempt(run, request.method, completed, pipeline); }
+    catch (error) { return { removed: [], retained: [run], warnings: ["缓存清理未完成：" + (error as Error).message] }; }
+  };
   try {
     if (!request || typeof request !== "object" || Array.isArray(request))
       throw new BridgeError("INVALID_REQUEST", "请求必须为 JSON 对象");
@@ -180,14 +191,25 @@ export async function serveRequest(
         "candidate.check",
         "candidate.describe",
         "candidate.restore",
+        "task.finish",
       ];
+    if (!queries.includes(request.method) || request.method === "task.finish") unlock = lockOperation(ctx);
     if (!queries.includes(request.method)) run = ctx.createRun(request.method);
+    if (run) {
+      const params = request.params ?? {}, session = readJson(path.join(run, "session.json"));
+      const taskHandle = request.method === "task.prepare" ? path.basename(run) : params.taskHandle ??
+        (params.workspaceId ? loadRun(ctx, params.workspaceId, "workspace.json")[1].taskHandle :
+          params.candidateId ? loadRun(ctx, params.candidateId, "candidate.json")[1].taskHandle : undefined);
+      if (taskHandle) writeJson(path.join(run, "session.json"), { ...session, taskHandle });
+    }
     const result = await dispatch(
       ctx,
       request.method,
       request.params ?? {},
       run,
     );
+    const cacheCleanup = cleanup(true, result.result);
+    if (cacheCleanup) result.cleanup = cacheCleanup;
     if (run) {
       const session = readJson(path.join(run, "session.json"));
       session.state = "SUCCEEDED";
@@ -205,6 +227,7 @@ export async function serveRequest(
     return 0;
   } catch (error) {
     const e = error as Error;
+    const cacheCleanup = cleanup(false);
     if (run && isFile(path.join(run, "session.json"))) {
       const session = readJson(path.join(run, "session.json"));
       writeJson(path.join(run, "session.json"), {
@@ -222,9 +245,12 @@ export async function serveRequest(
         code: error instanceof BridgeError ? error.code : "INTERNAL_ERROR",
         message: e.message ?? String(error),
         details: error instanceof BridgeError ? error.details : {},
+        ...(cacheCleanup ? { cleanup: cacheCleanup } : {}),
       },
     });
     return 2;
+  } finally {
+    unlock?.();
   }
 }
 export async function bridgeGateMain(args: string[]): Promise<number> {

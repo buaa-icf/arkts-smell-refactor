@@ -28,6 +28,7 @@ const commands: Record<string, string[]> = {
   execute: ["task"],
   "open-workspace": ["task"],
   "validate-workspace": ["workspace"],
+  finish: ["task"],
   diff: ["candidate", "file"],
   "validate-candidate": ["candidate"],
   apply: ["candidate", "confirm"],
@@ -46,6 +47,7 @@ Usage: node dist/skill.js <command> --config <settings.json> [options]
   execute --task <taskHandle>
   open-workspace --task <taskHandle>
   validate-workspace --workspace <workspaceId>
+  finish --task <taskHandle>
   diff --candidate <candidateId> [--file <relativePath>]
   validate-candidate --candidate <candidateId>
   apply --candidate <candidateId> --confirm <candidateId>
@@ -246,6 +248,9 @@ export async function runSkill(
         result = await request("task.validateWorkspace", {
           workspaceId: required("workspace"),
         });
+        break;
+      case "finish":
+        result = await request("task.finish", { taskHandle: required("task") });
         break;
       case "validate-candidate": {
         const id = candidateId();

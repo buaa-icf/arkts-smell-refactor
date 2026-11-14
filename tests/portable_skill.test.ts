@@ -125,6 +125,21 @@ test("history remains available without model/SDK preflight, using the explicit 
   assert.deepEqual(JSON.parse(output[0]).result, { records: [] });
 });
 
+test("finish remains available when SDK and model preflight cannot run", async (t) => {
+  const base = fixture(t), root = project(base, "Project"), output: string[] = [];
+  const code = await runPortableSkill(["finish", "--project", root, "--task", "task-1", "--runs", path.join(base, "runs")], {
+    runtimeRoot: base, stdout: line => output.push(line),
+    inspect: async () => { throw new Error("cleanup must not invoke preflight"); },
+    backend: () => ({ request: async (method, params) => {
+      assert.equal(method, "task.finish");
+      assert.equal(params?.taskHandle, "task-1");
+      return { taskHandle: "task-1", state: "FINISHED", removed: [], retained: [], warnings: [], runDirectory: base } as never;
+    } }),
+  });
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(output[0]).result.state, "FINISHED");
+});
+
 test("doctor blocks outside a Harmony project and emits actionable configuration errors", async (t) => {
   const base = fixture(t);
   for (const args of [

@@ -72,6 +72,7 @@ export function relocateFrozenTestPlan(
   destinationTaskDir: string,
   sourceRoot: string,
   destinationRoot: string,
+  sourceSnapshotRoot?: string,
 ): void {
   sourceRoot = path.resolve(sourceRoot);
   destinationRoot = path.resolve(destinationRoot);
@@ -92,10 +93,13 @@ export function relocateFrozenTestPlan(
     .replaceAll(path.dirname(sourceRoot).replaceAll("\\", "/"), path.dirname(destinationRoot).replaceAll("\\", "/")));
   if (JSON.stringify(rewrite(original)) !== JSON.stringify(destination))
     stale("destination task differs from the original task beyond staging paths");
+  // A caller may supply a manifest-verified reconstruction after clearing the
+  // old staging cache. Existing staging must still pass its own hash checks.
+  const testSourceRoot = fs.existsSync(sourceRoot) ? sourceRoot : sourceSnapshotRoot ?? sourceRoot;
   for (const [file, digest] of Object.entries(frozen.testHashes ?? {})) {
     if (!file || path.isAbsolute(file) || file.includes("\\") || file.includes(":") ||
         file.split("/").some(part => !part || part === ".." || part === ".")) stale("invalid frozen test path");
-    for (const root of [sourceRoot, destinationRoot]) {
+    for (const root of [testSourceRoot, destinationRoot]) {
       const absolute = path.resolve(root, file);
       if (!within(absolute, root) || !isFile(absolute) ||
           !within(fs.realpathSync(absolute), fs.realpathSync(root)) || hash(absolute) !== digest)

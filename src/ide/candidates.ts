@@ -268,6 +268,7 @@ export function copyArtifacts(
   destination: string,
   oldStage: string,
   newStage: string,
+  verifiedSource?: { root: string; files: Record<string, string> },
 ): void {
   fs.mkdirSync(destination, { recursive: true });
   const names = [
@@ -300,10 +301,33 @@ export function copyArtifacts(
       copyProject(path.join(source, dir), path.join(destination, dir));
   // Legacy runs may not have a frozen plan. Preserve it whenever available,
   // including candidate revalidation and post-application validation.
-  if (isFile(path.join(source, "baseline-test-plan.json")))
-    relocateFrozenTestPlan(source, destination,
-      taskFromJson(readJson(path.join(source, "task.json"))).project_root,
-      taskFromJson(readJson(path.join(destination, "task.json"))).project_root);
+  if (isFile(path.join(source, "baseline-test-plan.json"))) {
+    const sourceRoot = taskFromJson(
+      readJson(path.join(source, "task.json")),
+    ).project_root;
+    // Completed runs may discard staging, but never their frozen test selection.
+    // Reuse a fully verified reconstruction without recreating the old cache.
+    let snapshotRoot: string | undefined,
+      sourceMissing = false;
+    try {
+      fs.lstatSync(sourceRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      sourceMissing = true;
+    }
+    if (sourceMissing && verifiedSource) {
+      if (!same(snapshot(verifiedSource.root), verifiedSource.files))
+        throw new BridgeError("CANDIDATE_CHANGED", "重建工程与冻结清单不同");
+      snapshotRoot = verifiedSource.root;
+    }
+    relocateFrozenTestPlan(
+      source,
+      destination,
+      sourceRoot,
+      taskFromJson(readJson(path.join(destination, "task.json"))).project_root,
+      snapshotRoot,
+    );
+  }
 }
 export function freezeCandidate(
   ctx: BridgeContext,
@@ -413,6 +437,7 @@ export async function executeCandidate(
     taskDir,
     path.join(preparedRun, "staging"),
     path.dirname(stage),
+    { root: stage, files: prepared.baselineFiles },
   );
   const result = await runner(ctx, taskDir, pipelineConfig(ctx, taskDir));
   return freezeCandidate(
@@ -526,6 +551,7 @@ export async function validateCandidate(
     taskDir,
     path.join(oldRun, "staging"),
     path.dirname(stage),
+    { root: stage, files: candidate.afterFiles },
   );
   for (const item of candidate.changes)
     if (item.beforeSha256)
@@ -603,6 +629,7 @@ export async function validateApplied(
     taskDir,
     path.join(oldRun, "staging"),
     path.dirname(stage),
+    { root: stage, files: candidate.afterFiles },
   );
   const changes = readJson(path.join(oldRun, "backend/refactor-changes.json"));
   writeJson(path.join(taskDir, "refactor-changes.json"), changes);
