@@ -44,6 +44,8 @@ test("首轮 Agent 失败时不执行后续门禁", async (t) => {
 test("并行任一失败会取消同组慢任务，不运行 Test 和 Review", async (t) => {
   const dir = setupTask(fixture(t)),
     c = goodConfig();
+  // Measure cancellation of this group, without timing three subsequent repair attempts.
+  c.maxRepairAttempts = 0;
   c.gates!.smell = spec("process.exit(1)");
   c.gates!.build = spec("setTimeout(()=>process.exit(0), 30000)");
   const begin = now(),
