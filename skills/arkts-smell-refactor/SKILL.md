@@ -19,8 +19,10 @@ description: 在 DevEco 对话中检测 ArkTS 异味，调度子 Agent 在副本
 
 ## 对话流程
 
-1. **检测或导入。** 预检通过后运行 scan，已有报告则运行 import。保留 responseFile，用 issueId 标识问题。在对话中展示序号、异味、文件/行号、概述和支持状态。用户指定的文件或目录就是扫描范围。仅要求检测时展示结果及下一步选择；已经指定重构目标时继续，不重复询问已明确的选择。
-2. **准备并解释建议。** 用原 responseFile 和选定 issueId 调用 prepare，保存 taskHandle。说明风险、建议调整和必须保留的行为；业务约束经 --instructions-file 传入。约束改变后重新准备。证据过期时重新检测，不通过重复导入旧报告刷新哈希绕过检查。
+1. **检测并展示全部结果。** 对用户指定的文件或目录运行 scan，已有报告则运行 import。保存原 responseFile，按 result.issues 原顺序从 1 编号，展示每项的异味、文件/行号、方法、概述和支持状态。包括仅能查看的项；同文件、同类型的多处命中分行列出。
+2. **让用户选择，再准备该项。** 除非用户明确要求到检测为止，或已经明确指定唯一一处要重构的异味，否则在展示结果后，立即用当前宿主的原生 question 工具调用 result.questionInput，等待用户点击。只有文件路径或“重构这个文件里的异味”不能在多个问题中确定一项。questionInput 为 null 时展示结果后结束。若工具不可用，沿用相同编号，请用户回复一个可重构项的序号或“仅查看结果”。用户关闭、取消或选择仅查看结果时在此结束。收到未能唯一定位的自由输入时先澄清。选择前不 prepare、不开工作区、不派发 Agent。
+
+   用 `prepare --from <原responseFile> --choice <所选完整标签或序号>` 准备一项；用户已明确指定的唯一目标可直接用 `--issue <issueId>`。用返回的 taskHandle 说明风险、建议和必须保留的行为，按需通过 --instructions-file 传入业务约束。点击表示同意为该项生成候选，应用仍按第 7 步授权。约束改变后重新准备，证据过期则重新检测并使用新列表。
 3. **打开编辑副本。** 用户选择生成候选或已经要求重构该问题时，调用 open-workspace --task。保存返回的 workspaceId、editDirectory 和 promptFile。这些是实际编辑入口；原工程、冻结候选的 content/after 和验证目录都不是编辑入口。
 4. **外层启动重构 Agent。** 阅读 [外层 Agent 指南](references/outer-agent.md)，通过当前 DevEco 已提供的原生 task 调用可编辑的 general 子 Agent。传入本次 promptFile、editDirectory 的绝对路径和修改边界，等待子任务真正结束。不要虚构 task 的 cwd 或权限参数；遵守宿主对具体副本路径的权限要求。子 Agent 的“完成”只表示编辑结束。
 5. **验收并按证据返修。** 调用 validate-workspace --workspace。后端检查修改、执行门禁，并在条件满足时启动独立只读 reviewer。只有本轮 FAIL 且 repairEligible 为 true，并提供 repairPromptFile 时，才在同一副本启动新的返修子任务，读取该提示后定向修复，再验收同一 workspaceId。首次重构后最多三次返修，以后端轮次和资格为准；不得重开工作区重置次数。BLOCKED、stop 为 true、不可归因或无返修资格时，不再编辑，执行下一步收尾后报告并结束。

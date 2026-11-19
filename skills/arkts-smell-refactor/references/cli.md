@@ -43,6 +43,7 @@ import 的命令实现也支持离线读取报告，无须 SDK 或模型。但�
 | scan --scope "<文件或目录>" | 执行检测；保存 responseFile，保留原范围。 |
 | import --file "<报告.json>" | 规范化并保存已有报告，不等于重新检测。 |
 | prepare --from "<responseFile>" --issue "<issueId>" | 选择问题，冻结基线、分析风险，返回 taskHandle。 |
+| prepare --from "<responseFile>" --choice "<所选标签或序号>" | 用户点击或回复编号后，从此回执中选择一项。与 --issue 二选一。 |
 | prepare … --instructions-file "<UTF-8文本>" | 准备时加入用户业务约束。 |
 | open-workspace --task "<taskHandle>" | 创建外层可编辑副本，返回 workspaceId、editDirectory、promptFile。 |
 | validate-workspace --workspace "<workspaceId>" | 接收副本修改、验收并独立评审；返回候选及返修资格。 |
@@ -56,6 +57,8 @@ import 的命令实现也支持离线读取报告，无须 SDK 或模型。但�
 | rollback --candidate "<candidateId>" --confirm "<同一ID>" | 按事务恢复应用前内容，保留后续修改并报告冲突。 |
 
 execute --task 保留兼容原后端自动编排，不属于此 Skill 默认流程。原生子 Agent 缺失或权限阻塞时，不自动回退 execute。
+
+scan 和 import 的 result.questionInput 是供宿主原生 question 工具直接使用的参数对象（questions、单选 options）；它不是终端命令。呈现选项时保留每个 label 的原文及编号，description 显示位置。若界面需要分页，保留原编号，提供翻页或返回完整编号列表的入口，所有可重构项都应可达。永远以同一次 responseFile 解析点击的标签，例如 `--choice "#3 过长方法"`，文本回退可用 `--choice 3`。回执之间的编号不通用。仅查看结果或取消时不调用 prepare。旧回执缺少 questionInput 时展示原 issues 编号，用同一回执继续。
 
 ## 外层编辑与返修
 
