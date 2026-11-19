@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { BridgeClient, BridgeError } from "./client/bridge.js";
 import { loadConfig, within, type PluginConfig } from "./client/config.js";
 import { canonicalPath, safePath } from "./client/paths.js";
+import { issueForChoice, issueQuestion } from "./skill_issue_selection.js";
 import {
   applyCandidate,
   candidateDiff,
@@ -24,7 +25,7 @@ const commands: Record<string, string[]> = {
   doctor: [],
   scan: ["scope"],
   import: ["file"],
-  prepare: ["from", "issue", "instructions-file"],
+  prepare: ["from", "issue", "choice", "instructions-file"],
   execute: ["task"],
   "open-workspace": ["task"],
   "validate-workspace": ["workspace"],
@@ -43,7 +44,7 @@ Usage: node dist/skill.js <command> --config <settings.json> [options]
   doctor
   scan --scope <file-or-directory>
   import --file <report.json>
-  prepare --from <responseFile> --issue <issueId> [--instructions-file <text>]
+  prepare --from <responseFile> (--issue <issueId> | --choice <label-or-number>) [--instructions-file <text>]
   execute --task <taskHandle>
   open-workspace --task <taskHandle>
   validate-workspace --workspace <workspaceId>
@@ -173,7 +174,7 @@ export async function runSkill(
           scopePath: scanned.scopePath,
           ...(scanned.rules ? { rules: scanned.rules } : {}),
         };
-        result = scanned;
+        result = { ...scanned, questionInput: issueQuestion(scanned.issues) };
         break;
       }
       case "import": {
@@ -191,7 +192,7 @@ export async function runSkill(
           ),
         ];
         scanScope = { scopePath: projectRoot, files };
-        result = imported;
+        result = { ...imported, questionInput: issueQuestion(imported.issues) };
         break;
       }
       case "prepare": {
@@ -213,8 +214,13 @@ export async function runSkill(
           invalid("--from 必须是当前工程此前 scan/import 返回的 responseFile");
         }
         const issues = (receipt.result as { issues?: Issue[] })?.issues;
-        const issueId = required("issue");
         if (!Array.isArray(issues)) invalid("检测结果缺少 issues");
+        if (Boolean(options.issue) === Boolean(options.choice))
+          invalid("prepare 需要且仅接受 --issue 或 --choice 其中一个");
+        const issueId = options.choice
+          ? issueForChoice(issues, options.choice)?.issueId
+          : options.issue;
+        if (!issueId) invalid("请选择原检测列表中可重构项的完整标签或序号");
         const matches = issues.filter((issue) => issue.issueId === issueId);
         if (matches.length !== 1 || !matches[0].supported)
           invalid("请选择唯一且支持重构的 issueId");

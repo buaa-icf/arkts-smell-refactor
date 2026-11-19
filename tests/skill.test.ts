@@ -210,6 +210,45 @@ test("skill refuses stale imported bytes instead of reimporting the report durin
   assert.equal(fs.readFileSync(f.target, "utf8"), changed);
 });
 
+test("DevEco choice selects one finding from the original receipt, even at the same location", async t => {
+  const f = setup(t);
+  const record = readJson(f.report);
+  const message = record.messages[0];
+  record.messages = [message, { ...message, rule: "other/rule" }, message];
+  writeJson(f.report, record);
+  const input = ["import", "--config", f.config, "--file", f.report];
+  const imported = await invoke(input);
+  assert.equal(imported.code, 0);
+  const { issues, questionInput } = imported.value.result;
+  const [question] = questionInput.questions;
+  assert.equal(question.multiple, false);
+  assert.equal(issues.length, 3);
+  const labels = question.options.map((option: { label: string }) => option.label);
+  assert.deepEqual(labels, ["#1 过长方法", "#3 过长方法", "仅查看结果"]);
+  assert.ok(question.options[1].description.includes(f.name + ":2"));
+
+  const prepare = ["prepare", "--config", f.config, "--from", imported.value.responseFile];
+  const selected: string[] = [];
+  const backend = () => fakeBackend((method, params) => {
+    assert.equal(method, "task.prepare");
+    selected.push((params.issue as Issue).issueId);
+    return { issue: params.issue };
+  });
+  for (const choice of [labels[1], "3"])
+    assert.equal((await invoke([...prepare, "--choice", choice], backend)).code, 0);
+  for (const args of [["--choice", "2"], ["--choice", "#3 重复代码"], ["--choice", labels[2]],
+    ["--choice", "4"], ["--choice", "1", "--issue", issues[2].issueId]])
+    assert.equal((await invoke([...prepare, ...args], backend)).code, 2);
+  assert.deepEqual(selected, [issues[2].issueId, issues[2].issueId]);
+
+  for (const messages of [[], [{ ...message, rule: "other/rule" }]]) {
+    writeJson(f.report, { ...record, messages });
+    const { value } = await invoke(input);
+    assert.equal(value.result.issues.length, messages.length);
+    assert.equal(value.result.questionInput, null);
+  }
+});
+
 test("skill requires matching candidate confirmation before creating an apply or rollback backend", async (t) => {
   const f = setup(t);
   let created = 0;
@@ -290,6 +329,7 @@ for (const kind of ["file", "directory"] as const) {
       backend,
     );
     assert.equal(scanned.code, 0, JSON.stringify(scanned.value));
+    assert.equal(scanned.value.result.questionInput.questions[0].options[0].label, "#1 过长方法");
     const prepared = await invoke(
       [
         "prepare",
