@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 
 const repository = path.resolve(".");
 const packager = path.join(repository, "scripts/package-skill.mjs");
+const releaseAttachments = ["run_batch_100.ps1", "batch-100.json"];
 function node(
   script: string,
   args: string[],
@@ -47,6 +48,8 @@ function publishedState(output: string) {
   }
   for (const suffix of ["", ".tgz", ".zip"])
     visit(output + suffix, path.basename(output) + suffix);
+  for (const name of releaseAttachments)
+    visit(path.join(path.dirname(output), name), name);
   return result;
 }
 
@@ -57,6 +60,7 @@ function onlyLatestArtifacts(output: string) {
       path.basename(output),
       path.basename(output) + ".tgz",
       path.basename(output) + ".zip",
+      ...releaseAttachments,
     ].sort(),
     "completed or failed builds must not leave previous releases or transaction files",
   );
@@ -87,6 +91,10 @@ test(
     onlyLatestArtifacts(output);
     const summary = JSON.parse(packaged.stdout);
     assert.equal(summary.directory, output);
+    assert.deepEqual(
+      summary.attachments,
+      releaseAttachments.map((name) => path.join(path.dirname(output), name)),
+    );
     assert.ok(fs.statSync(summary.archive).size > 1_000_000);
     assert.ok(fs.statSync(summary.zipArchive).size > 1_000_000);
     assert.match(summary.zipSha256, /^[a-f0-9]{64}$/);
@@ -95,6 +103,9 @@ test(
       fs.readFileSync(path.join(output, "package-manifest.json"), "utf8"),
     );
     assert.equal(manifest.sourceDigest, summary.sourceDigest);
+    assert.deepEqual(manifest.releaseAttachments, releaseAttachments);
+    assert.ok(manifest.files["scripts/batch-100-runner.mjs"]);
+    assert.ok(!Object.hasOwn(manifest.files, "batch-100.json"));
     assert.ok(
       manifest.dependencies.some(
         (item: { name: string }) =>
@@ -143,6 +154,12 @@ test(
     assert.ok(
       archive.stdout.includes("arkts-smell-refactor/scripts/install.mjs"),
     );
+    const tarEntries = new Set(archive.stdout.trim().split(/\r?\n/));
+    for (const name of releaseAttachments)
+      assert.ok(tarEntries.has(name), name);
+    assert.ok(
+      tarEntries.has("arkts-smell-refactor/scripts/batch-100-runner.mjs"),
+    );
 
     const unpacked = path.join(base, "ZIP 解压目录");
     const extraction =
@@ -174,6 +191,68 @@ test(
           });
     assert.ifError(extraction.error);
     assert.equal(extraction.status, 0, extraction.stderr);
+    const batchScript = fs.readFileSync(
+      path.join(repository, "tools/run_batch_100.ps1"),
+    );
+    const datasetTemplate = {
+      ...JSON.parse(
+        fs.readFileSync(path.join(repository, "data/batch-100.json"), "utf8"),
+      ),
+      workspaceRoot: "",
+    };
+    for (const dir of [unpacked, path.dirname(output)]) {
+      assert.deepEqual(
+        fs.readFileSync(path.join(dir, "run_batch_100.ps1")),
+        batchScript,
+      );
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(path.join(dir, "batch-100.json"), "utf8")),
+        datasetTemplate,
+      );
+    }
+    const listed = node(
+      path.join(unpacked, "arkts-smell-refactor/scripts/batch-100-runner.mjs"),
+      ["--dataset", path.join(unpacked, "batch-100.json"), "--list"],
+      base,
+    );
+    assert.equal(listed.status, 0, listed.stdout + listed.stderr);
+    assert.equal(listed.stdout.trim().split(/\r?\n/).length, 100);
+    if (process.platform === "win32") {
+      const listedFromPowerShell = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          path.join(unpacked, "run_batch_100.ps1"),
+          "-Dataset",
+          path.join(unpacked, "batch-100.json"),
+          "-ListOnly",
+          "-StartOrdinal",
+          "99",
+          "-EndOrdinal",
+          "100",
+          "-NodeExe",
+          process.execPath,
+        ],
+        { cwd: base, encoding: "utf8", windowsHide: true, timeout: 30_000 },
+      );
+      assert.ifError(listedFromPowerShell.error);
+      assert.equal(
+        listedFromPowerShell.status,
+        0,
+        listedFromPowerShell.stdout + listedFromPowerShell.stderr,
+      );
+      assert.deepEqual(
+        listedFromPowerShell.stdout
+          .trim()
+          .split(/\r?\n/)
+          .map((line) => line.split("\t")[0]),
+        ["99", "100"],
+      );
+    }
     const delivered = path.join(base, "用户收到的独立目录");
     fs.renameSync(path.join(unpacked, "arkts-smell-refactor"), delivered);
     for (const name of [
@@ -344,6 +423,7 @@ syncBuiltinESMExports();
     );
     const beforeFailure = publishedState(output);
     for (const failure of ["archive", "publish"]) {
+      fs.rmSync(observed, { force: true });
       const failed = node(
         packager,
         ["--output", output, "--force"],
@@ -358,6 +438,7 @@ syncBuiltinESMExports();
         90_000,
       );
       assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+      assert.ok(fs.existsSync(observed), failed.stdout + failed.stderr);
       assert.match(
         fs.readFileSync(observed, "utf8"),
         failure === "archive" ? /archive failure/ : /publication failure/,
@@ -371,6 +452,10 @@ syncBuiltinESMExports();
     }
     const marker = path.join(output, "old-build-marker.txt");
     write(marker, "obsolete build output");
+    write(
+      path.join(path.dirname(output), "batch-100.json"),
+      "obsolete release dataset",
+    );
     const repeated = node(
       packager,
       ["--output", output],
@@ -387,6 +472,15 @@ syncBuiltinESMExports();
     onlyLatestArtifacts(output);
     const latest = JSON.parse(repeated.stdout);
     assert.equal(latest.sourceDigest, summary.sourceDigest);
+    assert.deepEqual(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(path.dirname(output), "batch-100.json"),
+          "utf8",
+        ),
+      ),
+      datasetTemplate,
+    );
     assert.equal(
       createHash("sha256")
         .update(fs.readFileSync(latest.archive))
@@ -406,6 +500,8 @@ test("Skill packager rejects unsafe output and malformed options before building
   for (const args of [
     ["--output", repository],
     ["--output", path.join(repository, "src/release")],
+    ["--output", path.join(repository, "data/release")],
+    ["--output", path.join(repository, "tools/release")],
     ["--unknown"],
     ["--output"],
   ]) {
@@ -413,6 +509,23 @@ test("Skill packager rejects unsafe output and malformed options before building
     assert.equal(result.status, 2);
     assert.match(result.stderr, /输出目录|参数无效/);
   }
+});
+
+test("Skill packager preserves an unrelated batch attachment at the requested output", (t) => {
+  const base = fs.mkdtempSync(
+    path.join(os.tmpdir(), "arkts-skill-unmanaged-asset-"),
+  );
+  const dataset = path.join(base, "batch-100.json");
+  write(dataset, "user-owned dataset");
+  t.after(() => {
+    fs.unlinkSync(dataset);
+    fs.rmdirSync(base);
+  });
+  const result = node(packager, ["--output", path.join(base, "skill")], base);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /同名批测附件/);
+  assert.equal(fs.readFileSync(dataset, "utf8"), "user-owned dataset");
+  assert.deepEqual(fs.readdirSync(base), ["batch-100.json"]);
 });
 
 test("Skill packager refuses to replace an unmanaged directory", (t) => {

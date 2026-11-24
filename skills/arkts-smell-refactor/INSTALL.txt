@@ -15,7 +15,7 @@ ArkTS 对话式重构 Skill：Windows 安装说明
    安装后重新打开终端，执行 node --version 确认版本，再重新运行 install.bat。
    已安装却找不到时，将包含 node.exe 的目录加入用户 PATH 后重新打开窗口。
 
-3. 双击解压目录中的 install.bat，查看窗口显示的安装结果。
+3. 在解压目录中打开 arkts-smell-refactor 文件夹，双击 install.bat 查看安装结果。
    默认安装到当前用户的：
      %USERPROFILE%\.config\deveco\skills\arkts-smell-refactor
    如已设置绝对路径 XDG_CONFIG_HOME，则使用其下的 deveco\skills 目录。
@@ -37,7 +37,7 @@ Skill 安装一次即可用于不同工程，不绑定某个业务项目。
 
 二、可选：从命令行安装或配置工具
 
-在完整解压目录打开终端：
+在同时包含 install.bat 与 SKILL.md 的文件夹中打开终端：
 
   .\install.bat --no-pause
   .\install.bat --no-pause --studio "D:\Tools\DevEco Studio"
@@ -61,3 +61,11 @@ linterMode 和 timeoutMs。本次提供的工具设置覆盖已有值，原配�
 项目级同名 Skill。完整命令说明在 references\cli.md。
 
 DevEco Code、SDK、Node.js、签名及设备环境由本机提供。
+
+四、批量实验
+
+解压后的顶层提供 run_batch_100.ps1 与 batch-100.json。保留旁边的完整
+arkts-smell-refactor 文件夹，或先将该版本 Skill 安装到用户目录。
+在 run_batch_100.ps1 所在目录打开 PowerShell，查看参数与分段执行方式：
+
+  Get-Help .\run_batch_100.ps1 -Examples

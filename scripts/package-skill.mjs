@@ -21,6 +21,10 @@ const repository = path.resolve(
 );
 const skillSource = path.join(repository, "skills/arkts-smell-refactor");
 const bridgeRelative = "deveco-plugin/src/main/resources/bridge";
+const batchRunner = "tools/batch-100-runner.mjs";
+const batchDataset = "data/batch-100.json";
+const releaseSources = ["tools/run_batch_100.ps1", batchDataset];
+const releaseNames = releaseSources.map((source) => path.basename(source));
 const readJson = (file) =>
   JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
 const writeJson = (file, data) => {
@@ -49,12 +53,20 @@ function parse(args) {
   output = canonical(output);
   if (within(output, repository))
     throw new Error("输出目录不能是仓库本身或仓库的祖先目录");
+  if (
+    releaseNames.some(
+      (name) => name.toLowerCase() === path.basename(output).toLowerCase(),
+    )
+  )
+    throw new Error("输出目录不能与批测附件同名");
   for (const source of [
     "src",
     "node_modules",
     "skills",
     "scripts",
     "deveco-plugin",
+    "tools",
+    "data",
   ])
     if (within(path.join(repository, source), output))
       throw new Error("输出目录不能覆盖源码或依赖");
@@ -64,14 +76,27 @@ function parse(args) {
 
 function checkOutput(output) {
   noLinks(output);
+  let previousManifest;
   if (info(output)) {
     files(output); // Refuse links anywhere inside a directory that may be replaced.
     const manifest = path.join(output, "package-manifest.json");
-    if (
-      !info(manifest)?.isFile() ||
-      readJson(manifest).format !== "arkts-smell-refactor-portable"
-    )
+    if (info(manifest)?.isFile()) previousManifest = readJson(manifest);
+    if (previousManifest?.format !== "arkts-smell-refactor-portable")
       throw new Error(`输出目录不是已有 Skill 制品，拒绝覆盖：${output}`);
+  }
+  for (const name of releaseNames) {
+    const target = checkedPath(
+      path.dirname(output),
+      path.join(path.dirname(output), name),
+    );
+    const stat = info(target);
+    if (
+      stat &&
+      !(stat.isFile() && previousManifest?.releaseAttachments?.includes(name))
+    )
+      throw new Error(
+        `同名批测附件不属于该输出目录的上次构建，拒绝覆盖：${target}`,
+      );
   }
   for (const suffix of [".tgz", ".zip"]) {
     noLinks(output + suffix);
@@ -104,6 +129,8 @@ function sourceDigest() {
     "scripts/package-skill.mjs",
     "scripts/install-deveco-skill.mjs",
     "scripts/skill-package-integrity.mjs",
+    batchRunner,
+    ...releaseSources,
     ...files(path.join(repository, "src")).map((name) => "src/" + name),
     ...files(skillSource).map((name) => "skills/arkts-smell-refactor/" + name),
     ...["ide_bridge.cjs", "homecheck_scan.cjs"].map(
@@ -197,7 +224,7 @@ function createZip(directory, archive) {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:ARKTS_PACKAGE_DIRECTORY, $env:ARKTS_PACKAGE_ARCHIVE, [System.IO.Compression.CompressionLevel]::Optimal, $true, [System.Text.Encoding]::UTF8)",
+        "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:ARKTS_PACKAGE_DIRECTORY, $env:ARKTS_PACKAGE_ARCHIVE, [System.IO.Compression.CompressionLevel]::Optimal, $false, [System.Text.Encoding]::UTF8)",
       ],
       {
         env: {
@@ -210,8 +237,8 @@ function createZip(directory, archive) {
       },
     );
   }
-  return spawnSync("zip", ["-q", "-r", archive, path.basename(directory)], {
-    cwd: path.dirname(directory),
+  return spawnSync("zip", ["-q", "-r", archive, "."], {
+    cwd: directory,
     encoding: "utf8",
     windowsHide: true,
   });
@@ -250,6 +277,20 @@ function buildContents(staging) {
       path.join(repository, "scripts", source),
       path.join(staging, "scripts", destination),
     );
+  for (const source of [batchRunner, ...releaseSources]) {
+    const file = path.join(repository, source);
+    noLinks(file);
+    const directory =
+      source === batchRunner
+        ? path.join(staging, "scripts")
+        : path.dirname(staging);
+    const destination = path.join(directory, path.basename(file));
+    if (source === batchDataset) {
+      const dataset = readJson(file);
+      // The checkout path belongs to the tester who fills in the release copy.
+      writeJson(destination, { ...dataset, workspaceRoot: "" });
+    } else fs.copyFileSync(file, destination, fs.constants.COPYFILE_EXCL);
+  }
   const runtime = path.join(staging, "runtime");
   const compiler = path.join(repository, "node_modules/typescript/bin/tsc");
   if (!info(compiler)?.isFile())
@@ -331,6 +372,7 @@ function buildContents(staging) {
     version: pkg.version,
     node: pkg.engines.node,
     sourceDigest: inputDigest,
+    releaseAttachments: releaseNames,
     dependencies,
     files: content,
   });
@@ -343,18 +385,19 @@ function buildContents(staging) {
 }
 
 /** Retain the old set only while publishing, then delete it with the transaction directory. */
-function publish(output, staging, transaction) {
+function publish(output, payload, transaction) {
   const parent = path.dirname(output),
     previous = path.join(transaction, "previous");
   checkOutput(output);
   fs.mkdirSync(checkedPath(transaction, previous));
-  const entries = ["", ".tgz", ".zip"].map((suffix) => ({
-    target: checkedPath(parent, output + suffix),
-    next: checkedPath(transaction, staging + suffix),
-    old: checkedPath(
-      transaction,
-      path.join(previous, path.basename(output) + suffix),
-    ),
+  const name = path.basename(output);
+  const entries = [
+    ...[name, ...releaseNames].map((file) => [file, payload]),
+    ...[".tgz", ".zip"].map((suffix) => [name + suffix, transaction]),
+  ].map(([file, source]) => ({
+    target: checkedPath(parent, path.join(parent, file)),
+    next: checkedPath(transaction, path.join(source, file)),
+    old: checkedPath(transaction, path.join(previous, file)),
   }));
   const moved = [],
     published = [];
@@ -397,7 +440,7 @@ function build(args) {
   fs.mkdirSync(parent, { recursive: true });
   const lockPath = checkedPath(
     parent,
-    path.join(parent, `.${path.basename(output)}.package.lock`),
+    path.join(parent, ".arkts-smell-refactor.package.lock"),
   );
   let lock;
   try {
@@ -416,18 +459,22 @@ function build(args) {
   let preserveTransaction = false;
   try {
     fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
-    const staging = path.join(transaction, "next", path.basename(output));
+    const payload = path.join(transaction, "payload");
+    const staging = path.join(payload, path.basename(output));
+    const tgzArchive = path.join(transaction, path.basename(output) + ".tgz");
+    const zipArchive = path.join(transaction, path.basename(output) + ".zip");
     fs.mkdirSync(checkedPath(parent, staging), { recursive: true });
     const metadata = buildContents(staging);
     const packed = spawnSync(
       "tar",
       [
         "-czf",
-        staging + ".tgz",
+        tgzArchive,
         "-C",
-        path.dirname(staging),
+        payload,
         "--",
         path.basename(staging),
+        ...releaseNames,
       ],
       { encoding: "utf8", windowsHide: true },
     );
@@ -435,27 +482,28 @@ function build(args) {
       throw new Error(
         `tar 归档失败：${packed.error?.message || packed.stderr}`,
       );
-    const zipped = createZip(staging, staging + ".zip");
+    const zipped = createZip(payload, zipArchive);
     if (zipped.error || zipped.status !== 0)
       throw new Error(
         `ZIP 归档失败（Windows 需要系统 PowerShell，其他平台需要 zip）：${zipped.error?.message || zipped.stderr}`,
       );
-    for (const suffix of [".tgz", ".zip"]) {
-      const archive = info(staging + suffix);
+    for (const file of [tgzArchive, zipArchive]) {
+      const archive = info(file);
       if (!archive?.isFile() || !archive.size)
-        throw new Error(`归档未生成有效文件：${staging + suffix}`);
+        throw new Error(`归档未生成有效文件：${file}`);
     }
     validatePackage(staging);
     if (metadata.sourceDigest !== sourceDigest())
       throw new Error("打包期间源码发生变化，请重试");
-    const archiveSha256 = digest(fs.readFileSync(staging + ".tgz")),
-      zipSha256 = digest(fs.readFileSync(staging + ".zip"));
-    publish(output, staging, transaction);
+    const archiveSha256 = digest(fs.readFileSync(tgzArchive)),
+      zipSha256 = digest(fs.readFileSync(zipArchive));
+    publish(output, payload, transaction);
     return {
       ok: true,
       directory: output,
       archive: output + ".tgz",
       zipArchive: output + ".zip",
+      attachments: releaseNames.map((name) => path.join(parent, name)),
       ...metadata,
       archiveSha256,
       zipSha256,
@@ -476,7 +524,7 @@ function build(args) {
 try {
   if (process.argv.length === 3 && ["--help", "-h"].includes(process.argv[2]))
     process.stdout.write(
-      "Usage: node scripts/package-skill.mjs [--output <directory>] [--force]\nReplaces the latest directory, ZIP and TGZ only after a successful build. --force is accepted for compatibility.\n",
+      "Usage: node scripts/package-skill.mjs [--output <directory>] [--force]\nPublishes the Skill, batch script and dataset together as loose files and inside ZIP/TGZ. --force is accepted for compatibility.\n",
     );
   else
     process.stdout.write(JSON.stringify(build(process.argv.slice(2))) + "\n");
