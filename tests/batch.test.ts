@@ -3,15 +3,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { BATCH_INPUT_FILE, loadBatch } from "../src/batch.js";
+import { datasetRecords } from "../src/dataset.js";
 import { runTasks } from "../src/automatic.js";
 import { readJson, writeText, isFile } from "../src/utils.js";
 import { fixture } from "./helpers.js";
 
 function batchFixture(root: string) {
   const workspace = path.join(root, "workspace");
-  for (const record of readJson(BATCH_INPUT_FILE) as unknown as {
-    filePath: string;
-  }[])
+  for (const record of datasetRecords(readJson(BATCH_INPUT_FILE)))
     writeText(
       path.join(workspace, record.filePath),
       "export class Page { work() { return 1; } }",

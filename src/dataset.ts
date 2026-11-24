@@ -1,9 +1,15 @@
 import path from "node:path";
 import { RULE_TYPES, type Json, type RefactorTask } from "./models.js";
 import { readJson, walk, slash, slug } from "./utils.js";
+export function datasetRecords(data: unknown): Json[] {
+  const records = Array.isArray(data) ? data : (data as Json | null)?.samples;
+  if (!Array.isArray(records)) throw new Error("阳性数据集必须包含 JSON 数组");
+  return records;
+}
 export function normalizeInput(data: unknown): Json[] {
   if (data && typeof data === "object" && !Array.isArray(data)) {
     const item = data as Json;
+    if (Array.isArray(item.samples)) return normalizeInput(item.samples);
     if (!item.filePath || !Array.isArray(item.messages))
       throw new Error("单条 JSON 对象必须包含 filePath 和 messages 数组");
     return [item];
@@ -41,8 +47,7 @@ export function loadDatasetTasks(
   workspace: string,
   onlyIndex?: number,
 ): RefactorTask[] {
-  const data: unknown = readJson(file);
-  if (!Array.isArray(data)) throw new Error("阳性数据集顶层必须是 JSON 数组");
+  const data = datasetRecords(readJson(file));
   const parentKind = path.basename(path.dirname(file)),
     datasetKind = ["local-test", "instrument-test"].includes(parentKind)
       ? parentKind

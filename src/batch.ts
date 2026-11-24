@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDatasetTasks } from "./dataset.js";
+import { datasetRecords, loadDatasetTasks } from "./dataset.js";
 import {
   RULE_TYPES,
   targetPath,
@@ -29,7 +29,7 @@ export function loadBatch(workspace: string): {
   metadata: Json;
 } {
   if (!isDir(workspace)) throw new Error("工作区目录不存在：" + workspace);
-  const data = readJson(BATCH_INPUT_FILE) as unknown as Json[];
+  const data = datasetRecords(readJson(BATCH_INPUT_FILE));
   if (
     !Array.isArray(data) ||
     data.length !== 100 ||

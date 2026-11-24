@@ -60,6 +60,7 @@ test("HomeCheck 固定使用 npm 内置版本，不搜索工作区或旧环境�
 test("粘贴对象和数组保持标准数据格式", () => {
   assert.deepEqual(normalizeInput(record), [record]);
   assert.deepEqual(normalizeInput([record]), [record]);
+  assert.deepEqual(normalizeInput({ workspaceRoot: "", samples: [record] }), [record]);
   assert.throws(() => normalizeInput({ filePath: "a", message: "flat" }));
   assert.throws(() => normalizeInput([null]));
 });
