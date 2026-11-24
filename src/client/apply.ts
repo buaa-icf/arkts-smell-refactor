@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { batchRecoveryOwner } from "../batch_owner.js";
 import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
@@ -87,7 +88,8 @@ async function withLock<T>(config: PluginConfig, work: () => Promise<T>): Promis
   await mkdir(config.runs, { recursive: true });
   const path = resolve(config.runs, ".apply.lock");
   const lock = await open(path, "wx").catch(() => { throw new Error(`另一个应用事务正在执行，或需检查遗留锁：${path}`); });
-  try { await lock.writeFile(String(process.pid)); return await work(); }
+  const owner = batchRecoveryOwner();
+  try { await lock.writeFile(owner ? JSON.stringify(owner) : String(process.pid)); return await work(); }
   finally { await lock.close(); await unlink(path); }
 }
 

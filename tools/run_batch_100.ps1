@@ -6,10 +6,17 @@ Run a range of ArkTS Skill experiments, one case at a time.
 Supply the JSON file via -Dataset. Set workspaceRoot in that file to the
 directory containing the source repositories, or pass -Workspace explicitly.
 With no range specified, the runner processes the entire dataset.
+.PARAMETER Recover
+Recover the last interrupted case after confirming that its agent, build and
+device processes have all exited. Run this without a dataset or range.
+.PARAMETER Config
+Optional JSON tool settings for the portable Skill.
 .EXAMPLE
 .\run_batch_100.ps1 -Dataset .\batch-100.json -ListOnly
 .EXAMPLE
 .\run_batch_100.ps1 -Dataset .\batch-100.json -StartOrdinal 21 -EndOrdinal 40
+.EXAMPLE
+.\run_batch_100.ps1 -Recover
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(

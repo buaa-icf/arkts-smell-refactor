@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { batchRecoveryOwner } from "../batch_owner.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -343,6 +344,7 @@ export class BridgeContext {
       method,
       startedAt: new Date().toISOString(),
       state: "RUNNING",
+      ...batchRecoveryOwner(),
     });
     this.emit("run.started", { runId: path.basename(run), runDirectory: run });
     return run;

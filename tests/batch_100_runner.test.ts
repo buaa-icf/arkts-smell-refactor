@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -119,7 +119,20 @@ async function fixture(t: TestContext, opts: Record<string, unknown> = {}) {
   await new Promise<void>(resolve => server.close(() => resolve()));
   const host = { stateRoot: path.join(temp, "state"), endpoint: { host: "127.0.0.1", port, exclusive: true } };
   const script = path.join(temp, "start.mjs");
-  write(script, `import { runBatch } from ${JSON.stringify(pathToFileURL(runner).href)};
+  write(script, `import fs from "node:fs";
+import { runBatch } from ${JSON.stringify(pathToFileURL(runner).href)};
+if (process.platform === "win32" && ${opts.transientRename === true}) {
+  const rename = fs.renameSync;
+  let attempt = 0;
+  fs.renameSync = (src, dest) => {
+    if (dest.endsWith("active-case.json") && attempt++ === 1) {
+      const error = new Error("temporary file sharing violation");
+      error.code = "EPERM";
+      throw error;
+    }
+    return rename(src, dest);
+  };
+}
 try { process.exitCode = await runBatch(process.argv.slice(2), ${JSON.stringify(host)}); }
 catch (err) { console.error(err.message); process.exitCode = 2; }`);
   const output = path.join(temp, "out");
@@ -138,7 +151,12 @@ catch (err) { console.error(err.message); process.exitCode = 2; }`);
 }
 
 test("batch preserves test kind and clone paths, continues sample gate failures, and verifies rollback before the next case", async t => {
-  const f = await fixture(t, { blocked: 1, fail: 2 });
+  const f = await fixture(t, { blocked: 1, fail: 2, transientRename: true });
+  // A source bundle inside somebody else's checkout must not inherit its revision.
+  const parent = path.dirname(f.dataset);
+  assert.equal(spawnSync("git", ["init", "--quiet", parent]).status, 0);
+  assert.equal(spawnSync("git", ["-C", parent, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "enclosing repository"]).status, 0);
   const run = await f.start([]).done;
   assert.equal(run.code, 3, run.log);
   const events = fs.readFileSync(f.events, "utf8").trim().split("\n").map(line => JSON.parse(line));
@@ -151,6 +169,8 @@ test("batch preserves test kind and clone paths, continues sample gate failures,
   assert.equal(summary.completedRange, true);
   assert.equal(summary.skillVersion, "fixture");
   assert.ok(summary.results.every((r: { rollbackVerified: boolean }) => r.rollbackVerified));
+  assert.ok(summary.results.every((r: { gitHead: string | null; baselineSha256: string; restoredSha256: string }) =>
+    r.gitHead === null && /^[0-9a-f]{64}$/.test(r.baselineSha256) && r.baselineSha256 === r.restoredSha256));
   assert.equal(fs.readFileSync(f.target, "utf8"), "user baseline");
 });
 

@@ -21,13 +21,26 @@ const slash = name => name.split(path.sep).join("/");
 const samePath = (left, right) => typeof left === "string" && typeof right === "string" &&
   path.relative(left, right) === "";
 
+const retryTimer = new Int32Array(new SharedArrayBuffer(4));
+function retryMetadataOperation(action) {
+  const delays = [10, 25, 50, 100, 200, 400, 800];
+  for (let i = 0; ; i++) {
+    try { return action(); }
+    catch (err) {
+      if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(err.code) || i >= delays.length) throw err;
+      Atomics.wait(retryTimer, 0, 0, delays[i]);
+    }
+  }
+}
+
 function writeJson(file, value) {
   const temporary = file + "." + randomUUID() + ".tmp";
   try {
     fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx", flush: true });
-    fs.renameSync(temporary, file);
-  } finally {
-    fs.rmSync(temporary, { force: true });
+    retryMetadataOperation(() => fs.renameSync(temporary, file));
+  } catch (err) {
+    try { retryMetadataOperation(() => fs.rmSync(temporary, { force: true })); } catch { /* retain original write error */ }
+    throw err;
   }
 }
 
@@ -131,6 +144,17 @@ function baseline(root) {
   return hash.digest("hex");
 }
 
+function repositoryHead(repo) {
+  // A worktree can use a .git file. A directory of unpacked sources can also sit
+  // inside the experimenter's unrelated Git checkout, which must not supply its HEAD.
+  if (!fs.existsSync(path.join(repo, ".git"))) return null;
+  const check = spawnSync("git", ["-C", repo, "rev-parse", "--show-toplevel", "HEAD"],
+    { windowsHide: true, encoding: "utf8" });
+  if (check.status !== 0) return null;
+  const [root, head] = check.stdout.trimEnd().split(/\r?\n/);
+  return root && /^[a-f\d]{40}(?:[a-f\d]{24})?$/i.test(head) && samePath(fs.realpathSync(root), repo) ? head : null;
+}
+
 function launcher(explicit) {
   const dir = path.dirname(script);
   const config = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
@@ -172,8 +196,8 @@ async function invoke(state, journal, command, flags = []) {
       env: { ...process.env, ARKTS_BATCH_RECOVERY_TOKEN: state.recoveryToken ?? "" } });
     const closed = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
     state.pending.pid = child.pid;
-    writeJson(journal, state);
-    code = await closed;
+    try { writeJson(journal, state); }
+    finally { code = await closed; }
   } finally { fs.closeSync(out); fs.closeSync(err); }
   const receipt = readJson(prefix + ".json");
   if (receipt.command !== command || (receipt.projectRoot && !samePath(receipt.projectRoot, state.project)))
@@ -222,8 +246,66 @@ async function restore(state, journal) {
     }
   }
   await finish(state, journal);
-  if (baseline(state.project) !== state.baseline)
+  const restored = baseline(state.project);
+  if (restored !== state.baseline)
     throw new Error("工程文件与实验前基线不一致；保留现场与日志，请检查可能的并发修改");
+  return restored;
+}
+
+// Only used after the operator has confirmed that the case's build, agent and
+// device processes have stopped. A dead owner alone says nothing about children.
+function recoverBackendRecords(state) {
+  if (!samePath(state.runs, path.join(state.dir, "runs")) || inside(state.project, state.dir) ||
+      !samePath(fs.realpathSync(state.dir), state.dir))
+    throw new Error("恢复记录目录不符，保留现场：" + state.dir);
+  if (!fs.existsSync(state.runs)) return;
+  const manual = file => {
+    const instructions = file.endsWith(".lock")
+      ? "仅在人工确认锁属于本次中断且相关进程均已退出后，把该锁改名留档，再运行 --recover。"
+      : path.basename(file) === "session.json"
+        ? "核对本条样例的 projectRoot、taskHandle 和日志；确认相应进程均已退出后，备份该文件，将该条中断记录的 RUNNING 改为 INTERRUPTED，再运行 --recover。"
+        : "核对日志中的原始案例目录并恢复正确目录，随后运行 --recover。";
+    return new Error(`无法确认该记录属于中断样例，保持原状：${file}。${instructions}`);
+  };
+  function regular(file, directory = false) {
+    const stat = fs.lstatSync(file);
+    if (!(directory ? stat.isDirectory() : stat.isFile()) || !samePath(file, fs.realpathSync(file)))
+      throw manual(file);
+  }
+  regular(state.runs, true);
+  const records = [];
+  function stale(file, session = false) {
+    regular(file);
+    const text = fs.readFileSync(file, "utf8");
+    let row;
+    try { row = JSON.parse(text); } catch { throw manual(file); }
+    if (session && row?.state !== "RUNNING") return;
+    if (!uuid.test(state.recoveryToken ?? "") || row?.batchRecoveryToken !== state.recoveryToken ||
+        !Number.isSafeInteger(row.pid) || row.pid < 1) throw manual(file);
+    if (processAlive(row.pid)) throw new Error(`相关进程仍在运行或不可检查（PID ${row.pid}），未处理：${file}`);
+    if (session && (!samePath(row.projectRoot, state.project) || row.runId !== path.basename(path.dirname(file)) ||
+        !["task.prepare", "task.execute", "task.validateApplied"].includes(row.method) ||
+        (state.task && row.taskHandle && row.taskHandle !== state.task))) throw manual(file);
+    records.push({ file, text, row, session });
+  }
+  for (const name of [".operation.lock", ".apply.lock"]) {
+    const file = path.join(state.runs, name);
+    if (fs.lstatSync(file, { throwIfNoEntry: false })) stale(file);
+  }
+  for (const id of fs.readdirSync(state.runs).filter(id => uuid.test(id))) {
+    const run = path.join(state.runs, id);
+    regular(run, true);
+    const file = path.join(run, "session.json");
+    if (fs.lstatSync(file, { throwIfNoEntry: false })) stale(file, true);
+  }
+  // Inspect all owners before changing any record. Keep the old locks until the
+  // identified sessions are retired. Recheck contents in case of manual recovery.
+  for (const { file, text, row, session } of records.sort((a, b) => Number(b.session) - Number(a.session))) {
+    regular(file);
+    if (fs.readFileSync(file, "utf8") !== text || processAlive(row.pid)) throw manual(file);
+    if (session) writeJson(file, { ...row, state: "INTERRUPTED", recoveredAt: new Date().toISOString() });
+    else fs.unlinkSync(file);
+  }
 }
 
 async function recover(journal) {
@@ -232,20 +314,31 @@ async function recover(journal) {
   if (state.version !== 1 || !path.isAbsolute(state.project) || !path.isAbsolute(state.dir))
     throw new Error("无法识别恢复日志：" + journal);
   if (processAlive(state.pending?.pid)) throw new Error("命令进程仍在运行，PID " + state.pending.pid);
+  recoverBackendRecords(state);
   // A runner may die between prepare returning and recording its handle. The runs directory
   // belongs to this single case, so only this invocation's prepared task can be recovered.
   if (!state.task && fs.existsSync(state.runs)) {
     const prepared = fs.readdirSync(state.runs).filter(id =>
       uuid.test(id) && existsFile(path.join(state.runs, id, "prepared.json")));
     if (prepared.length > 1) throw new Error("同一样例下存在多个准备任务，需人工核对：" + state.runs);
-    if (prepared.length) state.task = prepared[0];
+    if (prepared.length) {
+      const id = prepared[0], run = path.join(state.runs, id);
+      const session = readJson(path.join(run, "session.json")), manifest = readJson(path.join(run, "prepared.json"));
+      if (!uuid.test(state.recoveryToken ?? "") || session.batchRecoveryToken !== state.recoveryToken ||
+          session.method !== "task.prepare" || session.runId !== id || manifest.taskHandle !== id ||
+          !samePath(session.projectRoot, state.project) || !samePath(manifest.originalRoot, state.project))
+        throw new Error("无法确认准备记录属于中断样例，未清理；请核对本条 prepare 回执与任务目录：" + run);
+      state.task = id;
+    }
   }
   state.pending = null;
   state.deferred = null;
   writeJson(journal, state);
-  await restore(state, journal);
-  writeJson(path.join(state.dir, "recovery.json"), { ordinal: state.ordinal, rollbackVerified: true });
-  fs.unlinkSync(journal);
+  const restoredSha256 = await restore(state, journal);
+  writeJson(path.join(state.dir, "recovery.json"), {
+    ordinal: state.ordinal, rollbackVerified: true, baselineSha256: state.baseline, restoredSha256,
+  });
+  retryMetadataOperation(() => fs.unlinkSync(journal));
   console.log("中断样例已完成恢复与基线核验：" + state.dir);
 }
 
@@ -255,9 +348,8 @@ async function runCase(selected, setup, interrupted) {
   fs.mkdirSync(dir);
   const state = { version: 1, ordinal: item.ordinal, recoveryToken: randomUUID(), dir, runs: path.join(dir, "runs"),
     project, launcher: setup.launcher, config: setup.config, sequence: 0, baseline: baseline(project) };
-  const head = spawnSync("git", ["-C", repo, "rev-parse", "--verify", "HEAD"], { windowsHide: true, encoding: "utf8" });
   const info = { ordinal: item.ordinal, filePath: item.filePath, rule: item.messages[0].rule, testKind: item.testKind,
-    commitHash: item.commitHash, gitHead: head.status === 0 ? head.stdout.trim() : null,
+    commitHash: item.commitHash, gitHead: repositoryHead(repo), baselineSha256: state.baseline,
     sourceSha256: fileHash(target, Buffer.allocUnsafe(65536)), project, startedAt: new Date().toISOString() };
   const journal = setup.journal;
   const checkStop = () => { if (interrupted()) throw new Error("已收到中断请求"); };
@@ -287,7 +379,6 @@ async function runCase(selected, setup, interrupted) {
         !uuid.test(candidate.candidateId) || !samePath(candidate.originalRoot, project)) throw new Error("候选与任务身份不一致");
     info.candidateId = candidate.candidateId;
     if (state.deferred) throw new Error("流水线要求延后清理，请确认相关进程结束后运行 --recover");
-    await finish(state, journal);
     info.verdict = info.candidateVerdict;
     if (info.candidateVerdict === "PASS") {
       checkStop();
@@ -307,7 +398,7 @@ async function runCase(selected, setup, interrupted) {
     info.stopReason = err.message;
   } finally {
     try {
-      await restore(state, journal);
+      info.restoredSha256 = await restore(state, journal);
       info.rollbackVerified = true;
     } catch (err) {
       info.rollbackVerified = false;
@@ -315,7 +406,7 @@ async function runCase(selected, setup, interrupted) {
     }
     info.completedAt = new Date().toISOString();
     writeJson(path.join(dir, "result.json"), info);
-    if (info.rollbackVerified) fs.unlinkSync(journal);
+    if (info.rollbackVerified) retryMetadataOperation(() => fs.unlinkSync(journal));
   }
   return info;
 }

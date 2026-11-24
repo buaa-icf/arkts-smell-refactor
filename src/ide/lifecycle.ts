@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { batchRecoveryOwner } from "../batch_owner.js";
 import path from "node:path";
 import type { Json } from "../models.js";
 import { hash, isFile, readJson, writeJson } from "../utils.js";
@@ -22,7 +23,7 @@ export function lockOperation(ctx: BridgeContext): () => void {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     throw new BridgeError("WORKFLOW_BUSY", "另一个后端操作正在执行或有中断遗留锁；请先检查运行记录");
   }
-  fs.writeFileSync(fd, JSON.stringify({ pid: process.pid }));
+  fs.writeFileSync(fd, JSON.stringify(batchRecoveryOwner() ?? { pid: process.pid }));
   return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
 }
 
@@ -93,7 +94,12 @@ export function finishTask(ctx: BridgeContext, taskHandle: string): Json {
   // Cooperate with client-side apply/rollback, which run outside the bridge process.
   const applyLock = safePath(base, path.join(base, ".apply.lock"));
   try {
-    try { locks.push({ path: applyLock, fd: fs.openSync(applyLock, "wx") }); }
+    try {
+      const fd = fs.openSync(applyLock, "wx");
+      locks.push({ path: applyLock, fd });
+      const owner = batchRecoveryOwner();
+      if (owner) fs.writeFileSync(fd, JSON.stringify(owner));
+    }
     catch { throw new BridgeError("WORKFLOW_BUSY", "应用或回滚事务正在执行或有遗留锁，未清理任务"); }
     for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
       if (!/^[0-9a-f-]{36}$/i.test(entry.name)) continue;
