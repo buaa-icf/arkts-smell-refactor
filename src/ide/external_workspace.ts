@@ -146,9 +146,10 @@ export async function validateWorkspace(
       throw new BridgeError("WORKSPACE_CHANGED", "验收期间源码或编辑副本变化，本轮结果不能封存，请停止编辑后重试");
     unchanged(ctx, preparedRun, prepared);
     const task = taskFromJson(readJson(path.join(taskDir, "task.json"))),
-      failed = (result.steps ?? []).find((step: CommandResult) => step.status === "FAIL") as CommandResult | undefined;
+      terminal: CommandResult[] = result.attempts?.at(-1)?.steps ?? result.steps ?? [],
+      failed = terminal.find(step => step.status === "FAIL");
     let repairEligible = false, repairPromptFile: string | undefined;
-    if (result.verdict === "FAIL" && failed && !(result.steps ?? []).some((s: CommandResult) => s.status === "BLOCKED")) {
+    if (result.verdict === "FAIL" && failed && !terminal.some(step => step.status === "BLOCKED")) {
       const failure = buildFailureReport(taskDir, task, failed, attempt + 1);
       writeJson(path.join(taskDir, "failure-report.json"), failure);
       repairEligible = !!failure.repairable && workspace.validations < MAX_VALIDATIONS;

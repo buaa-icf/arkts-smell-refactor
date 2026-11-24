@@ -34,6 +34,7 @@ import { finalReviewText, parseReview, formatRetryPrompt, preservesReview } from
 import {
   failedHypiumCases,
   hostUnavailable,
+  missingUiId,
   parseHypiumCases,
 } from "./test_execution.js";
 export const PLACEHOLDERS = [
@@ -347,14 +348,18 @@ export function buildFailureReport(
         if (job.evidenceFiles["test_result.txt"])
           for (const c of failedHypiumCases(
             parseHypiumCases(job.evidenceFiles["test_result.txt"]),
-          ))
+          )) {
+            const missingId = missingUiId(c.details);
             cases.push({
               ...c,
-              uiEvidence: frozenUiFailureEvidence(taskDir, job, c, changes),
+              missingId,
+              uiEvidence: frozenUiFailureEvidence(taskDir, job, c, changes)
+                .filter(e => !missingId || e.uiId === missingId),
               targeted:
                 job.selectionReason === "target-named-suite" &&
                 (job.expectedSuites ?? []).includes(c.suite),
             });
+          }
       if (cases.length) {
         hasCaseEvidence = true;
         const formatted = (c: Json) =>
@@ -362,8 +367,9 @@ export function buildFailureReport(
         log = cases.map(formatted).join("\n\n");
         for (const c of cases)
           if (c.uiEvidence.length) testAttribution.push({ suite: c.suite, caseName: c.name, evidence: c.uiEvidence });
-        attributable = cases.every(
-          (c) =>
+        attributable = cases.every(c => {
+          if (c.missingId) return c.uiEvidence.length > 0;
+          return (
             c.targeted ||
             c.uiEvidence.length > 0 ||
             mentionsChanged(formatted(c), changes) ||
@@ -376,8 +382,9 @@ export function buildFailureReport(
             (task.target.symbol &&
               formatted(c)
                 .toLowerCase()
-                .includes(task.target.symbol.toLowerCase())),
-        );
+                .includes(task.target.symbol.toLowerCase()))
+          );
+        });
         unavailable =
           attributable && cases.every((c) => hostUnavailable(c.details));
       } else {
@@ -754,6 +761,12 @@ export async function executePipeline(
           undefined,
           deadline,
         );
+        // Only a completed reviewer can return a semantic verdict. DevEco can
+        // print a full PASS before terminating with EPIPE on the same attempt.
+        if (reviewResult.status === "FAIL" || (reviewResult.exit_code != null && reviewResult.exit_code !== 0)) {
+          reviewResult.status = "BLOCKED";
+          reviewResult.reason ??= `只读评审进程异常退出（code=${reviewResult.exit_code ?? "unknown"}），本轮没有可信的语义结论`;
+        }
         if (
           reviewResult.status !== "BLOCKED" ||
           reviewResult.exit_code == null ||

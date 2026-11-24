@@ -72,9 +72,13 @@ export const failedHypiumCases = (cases: HypiumCase[]) =>
         c.result.toLowerCase(),
       ),
   );
+export function missingUiId(details: string): string | undefined {
+  const match = /\b(?:component not found|unable to find id)(?:[ \t]*:[ \t]*|[ \t]+)(?:'([^'\r\n]+)'|"([^"\r\n]+)"|([\w.-]+))(?=[ \t]*(?:,|$))/im.exec(details);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
 export const hostUnavailable = (details: string) =>
-  /(?:component not found|unable to find id)\s*:\s*[^\r\n]+/i.test(details) &&
-  /error in beforeAll function/i.test(details);
+  /error in beforeAll function/i.test(details) &&
+  (missingUiId(details) !== undefined || /(?:component not found|unable to find id)\s*:\s*[^\r\n]+/i.test(details));
 export function resultEvidence(file: string, expected: string[]): Json {
   if (!isFile(file))
     return { status: "BLOCKED", reason: "missing fresh test_result.txt" };

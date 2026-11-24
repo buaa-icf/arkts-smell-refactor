@@ -330,6 +330,20 @@ for (const [name, text, expected] of [
     writeText(file, text);
     assert.equal(resultEvidence(file, ["PageTest"]).status, expected);
   });
+test("宿主 ID 后无冒号时只在全部用例停于 beforeAll 才阻塞", t => {
+  const file = path.join(fixture(t), "result.txt");
+  const missing = "HomeVisitUiTest_host not launched: unable to find id scenario_bar";
+  for (const setupOnly of [true, false]) {
+    writeText(file, [
+      "class=HomeVisit", "test=mount", missing + ", error in beforeAll function", "result=Error",
+      "test=open", missing + (setupOnly ? ", error in beforeAll function" : ""), "result=Error",
+      "Tests run: 2, Failure: 0, Error: 2, Pass: 0",
+    ].join("\n"));
+    const evidence = resultEvidence(file, ["HomeVisit"]);
+    assert.equal(evidence.status, setupOnly ? "BLOCKED" : "FAIL");
+    assert.equal(evidence.classification, setupOnly ? "TEST_HOST_UNAVAILABLE" : undefined);
+  }
+});
 test("期望的 suite 未执行不能 PASS", (t) => {
   const file = path.join(fixture(t), "result.txt");
   writeText(file, success("OtherTest"));

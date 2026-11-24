@@ -215,10 +215,8 @@ test("重构前冻结接口测试；修改后改名不重新猜测，同时补�
   });
   const plan = buildTestPlan(p.taskDir, p.source);
   assert.equal(plan.selectionBasis, "frozen-before-refactor");
-  assert(
-    plan.jobs.some((j: any) => j.scope === "Coins" && j.frozenBeforeRefactor),
-  );
-  assert(plan.jobs.some((j: any) => j.scope === "HelperTest"));
+  assert.deepEqual(plan.jobs.map((job: any) => job.scope), ["Coins", "HelperTest"]);
+  assert.equal(plan.jobs[0].frozenBeforeRefactor, true);
   assert.equal(plan.selectionEvidence[0].target.method, "work");
 });
 

@@ -117,6 +117,29 @@ test("格式修复后的语义 FAIL 保留问题并进入代码返修", async (t
   assert.match(readText(path.join(dir, "repair-prompt-1.md")), /Restore guard/);
 });
 
+test("EPIPE 后的 PASS 文本只触发评审重试；持续异常保留候选并阻塞", async t => {
+  for (const recover of [true, false]) {
+    const dir = setupTask(fixture(t)), config = goodConfig();
+    config.reviewAgent = spec([
+      "const fs = require('node:fs')",
+      "console.log(JSON.stringify({verdict:'PASS',issues:[]}))",
+      "const retried = fs.existsSync('review-count')",
+      "fs.appendFileSync('review-count','x')",
+      `if (!retried || !${recover}) { console.error('EPIPE: broken pipe, write'); process.exitCode = 1 }`,
+    ].join(";"), { cwd: "{task_dir}", maxEnvironmentRetries: 1, retryDelaySeconds: 0 });
+    config.gates!.test = spec("require('node:fs').appendFileSync('test-count','x')", { cwd: "{task_dir}" });
+    const result = await executePipeline(dir, config);
+    assert.equal(result.verdict, recover ? "PASS" : "BLOCKED");
+    assert.equal(result.reviewRetries, 1);
+    assert.equal(result.repairAttempts, 0);
+    assert.equal(readText(path.join(dir, "test-count")), "x");
+    assert.equal(readText(path.join(dir, "review-count")), "xx");
+    assert.equal(result.steps.find((s: any) => s.name === "review-agent").status, "BLOCKED");
+    assert.equal(fs.existsSync(path.join(dir, "review.json")), false);
+    assert.equal(fs.existsSync(path.join(dir, "review-retry-1.json")), recover);
+  }
+});
+
 test("格式修复识别正确的返修和环境重试评审轮次", (t) => {
   const dir = setupTask(fixture(t)), task = taskFromJson(readJson(path.join(dir, "task.json")));
   for (const suffix of ["", "-retry-1", "-repair-1", "-repair-2-retry-1"]) {

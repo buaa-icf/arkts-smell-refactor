@@ -328,6 +328,19 @@ test("environment BLOCKED never offers external code repair or reuses an old rep
   assert.equal(response.result.verdict, "BLOCKED");
 });
 
+test("a completed semantic FAIL after a reviewer transport retry permits external repair", async t => {
+  const f = setup(t);
+  f.edit();
+  const response = await f.validate(async (_ctx, taskDir) => {
+    const previous = { name: "review-agent", status: "BLOCKED", exit_code: 1, duration_seconds: 0 };
+    const final = { name: "review-agent-retry-1", status: "FAIL", exit_code: 0, duration_seconds: 0 };
+    writeJson(path.join(taskDir, "review-retry-1.json"), { verdict: "FAIL", summary: "return value changed", issues: [] });
+    return { verdict: "FAIL", steps: [previous, final], attempts: [{ attempt: 0, steps: [final] }] };
+  });
+  assert.equal(response.repairEligible, true);
+  assert.ok(readText(response.repairPromptFile).includes("return value changed"));
+});
+
 test("frozen test relocation rejects changed tests and changed task identity", t => {
   const f = setup(t), sourceDir = path.join(f.openRun, "backend"),
     sourceRoot = readJson(path.join(sourceDir, "task.json")).project_root;

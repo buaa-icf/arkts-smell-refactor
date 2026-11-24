@@ -486,6 +486,7 @@ export function buildTestPlan(
       throw new Error(`No runnable test files in affected module: ${name}`);
   }
   if (frozen) {
+    const frozenJobs: Json[] = [];
     for (const job of frozen.plan.jobs) {
       const registered =
         inventory.get(JSON.stringify([job.module, job.kind])) ?? [];
@@ -497,23 +498,21 @@ export function buildTestPlan(
         throw new Error(
           "TEST_PLAN_STALE: baseline test is no longer registered",
         );
-      const duplicate = jobs.find(
+      const index = jobs.findIndex(
         (j) =>
           j.kind === job.kind &&
           j.module === job.module &&
           j.scope === job.scope,
       );
-      if (duplicate) {
-        duplicate.testFiles = unique([
-          ...duplicate.testFiles,
-          ...job.testFiles,
-        ]);
-        duplicate.expectedSuites = unique([
-          ...duplicate.expectedSuites,
-          ...job.expectedSuites,
-        ]);
-      } else jobs.push({ ...job, frozenBeforeRefactor: true });
+      const duplicate = index >= 0 ? jobs.splice(index, 1)[0] : undefined;
+      frozenJobs.push({
+        ...job,
+        frozenBeforeRefactor: true,
+        testFiles: unique([...job.testFiles, ...(duplicate?.testFiles ?? [])]),
+        expectedSuites: unique([...job.expectedSuites, ...(duplicate?.expectedSuites ?? [])]),
+      });
     }
+    jobs.unshift(...frozenJobs);
     selectionEvidence.unshift(...(frozen.plan.selectionEvidence ?? []));
     selectionWarnings.unshift(...(frozen.plan.selectionWarnings ?? []));
     excludedTests.unshift(...(frozen.plan.excludedTests ?? []));

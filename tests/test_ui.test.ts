@@ -73,6 +73,8 @@ function setup(t: Parameters<typeof fixture>[0]) {
 function fail(
   p: ReturnType<typeof setup>,
   names = ["swap cities", "clear city"],
+  details = "expect true, actualValue false",
+  selectionReason?: string,
 ) {
   const plan = buildTestPlan(p.taskDir, p.source),
     job = plan.jobs[0];
@@ -83,7 +85,7 @@ function fail(
     names
       .map(
         (name) =>
-          `class=FlightBookingTest\ntest=${name}\nexpect true, actualValue false\nresult=Failure\n`,
+          `class=FlightBookingTest\ntest=${name}\n${details}\nresult=Failure\n`,
       )
       .join(""),
   );
@@ -93,7 +95,7 @@ function fail(
       {
         ...job,
         status: "FAIL",
-        selectionReason: job.reason,
+        selectionReason: selectionReason ?? job.reason,
         artifacts: { "test_result.txt": report },
       },
     ],
@@ -131,6 +133,18 @@ test("同一套件无关断言不能借用其他用例或 beforeEach 的 ID 进�
   assert.equal(report.repairable, false);
   assert.equal(report.classification, "UNATTRIBUTED_TEST_FAILURE");
   assert.equal(report.issues.length, 0);
+});
+
+test("明确报错的 UI ID 只和该 ID 的冻结证据匹配", t => {
+  const p = setup(t);
+  freezeTestPlan(p.taskDir, p.source);
+  const lookup = (id: string) => fail(p, ["swap cities"], "Unable to find id: " + id, "target-named-suite");
+  const host = lookup("agreement_test_host_anchor");
+  assert.equal(host.repairable, false);
+  assert.deepEqual(host.testAttribution, []);
+  const owned = lookup("destination_value");
+  assert.equal(owned.repairable, true);
+  assert.deepEqual(owned.testAttribution[0].evidence.map((e: any) => e.uiId), ["destination_value"]);
 });
 
 test("重复组件 ID 和重复用例名不建立关联", (t) => {
