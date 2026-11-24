@@ -42,6 +42,7 @@ v/
 /docs/
 reports/
 /tools/*.ps1
+!/tools/run_batch_100.ps1
 /.codex_tmp/
 # Local boundary test for the untracked helpers; it still stubs the old Python entry.
 /tests/test_experiment_scripts.py

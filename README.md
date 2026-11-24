@@ -209,7 +209,29 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 
 自动替换的占位符：`{task_dir}`、`{task_file}`、`{risk_file}`、`{prompt_file}`、`{review_prompt_file}`、`{repair_prompt_file}`、`{project_root}`、`{workspace_root}`、`{target_file}`、`{backend_root}`、`{harmony_root}`。`project_root` 是数据集源仓库根；`harmony_root` 是最近可构建的 Harmony 工程。占位符只替换路径，不执行命令。
 
-## 8. 本地实验批跑脚本
+## 8. 发行包里的 100 条串行实验
+
+完整解压 Skill 的 ZIP。顶层的 `run_batch_100.ps1` 是测试入口，旁边是 `batch-100.json` 和带后端、依赖的 `arkts-smell-refactor/`。在测试机上需要 Node.js 20.19 或更高版本，以及能通过 Skill 环境预检的 DevEco 配置。可以直接使用解压包，也可以用 `-SkillDirectory` 指向已安装的同版本 Skill。
+
+在清单顶部把空白的 `workspaceRoot` 填成源码仓库的**共同父目录**。该目录应直接包含 `applications_settings`、`agc-template-market-harmonyos-demos`、`applications_photos`。JSON 内的 Windows 路径可用正斜杠，相对路径以清单所在目录为准。也可以在运行时用 `-Workspace` 覆盖。清单路径每次由 `-Dataset` 指定。
+
+```powershell
+# 在解压目录操作。只列清单时可以留空 workspaceRoot。
+.\run_batch_100.ps1 -Dataset .\batch-100.json -ListOnly
+
+# 分段执行，序号从 1 开始，包含两端。上一条命令退出后再运行下一段。
+.\run_batch_100.ps1 -Dataset .\batch-100.json -StartOrdinal 1 -EndOrdinal 20
+.\run_batch_100.ps1 -Dataset .\batch-100.json -StartOrdinal 21 -EndOrdinal 40
+
+# 全量执行（47 条 local-test，53 条 instrument-test）
+.\run_batch_100.ps1 -Dataset .\batch-100.json
+```
+
+每条样例调用发行包的非交互 `execute` 流程，在副本上重构和验收。通过的候选临时应用到工程，执行应用后验收，再按候选事务回滚。对所有结果，脚本都将工程文件与本条开始前的 SHA-256 基线比对，包括源码、测试、配置和资源。个人已有改动属于基线。工程生成物和依赖缓存不参与比对。脚本记录清单给出的 `commitHash`、本地可用的 Git HEAD 和实际目标文件哈希，使用当前检出的工程，不自动切换 Git 提交。
+
+同一台机器同时只允许运行一个批测实例。脚本无法确认回滚时会停止并保留证据。上次被强制关闭时，先确认它启动的构建和设备进程已结束，再从同一用户运行 `.\run_batch_100.ps1 -Recover`。恢复成功后，按日志中的序号重跑所需区间。每次运行打印结果目录，也可通过 `-OutputDirectory` 指定父目录。`summary.json` 记录本段逐条结果，单条目录保存执行回执、日志和还原核验结果。
+
+### 开发机上的四个专项实验脚本
 
 按异味和数据集类型提供四个入口。这些 PowerShell 辅助脚本保存在本机 `tools/` 中，由 `.gitignore` 忽略，不随仓库分发；它们会调用本仓库 TypeScript CLI（`node dist/cli.js`），因此需先执行 `npm install` 和 `npm run build`。新克隆的仓库请直接使用上文的 CLI 或 `npm run batch`。
 
