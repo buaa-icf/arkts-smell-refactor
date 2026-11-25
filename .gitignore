@@ -34,7 +34,7 @@ config.local.json
 
 # Refactoring runs and disposable workspaces
 runs/
-/releases/
+releases/
 v/
 .workspace-links/
 

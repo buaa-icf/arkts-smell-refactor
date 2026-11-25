@@ -6,14 +6,14 @@ Skill 在 DevEco 对话中展示检测结果、风险、建议、候选 Diff 和
 
 ## Windows 使用者安装
 
-1. 下载发布者提供的 arkts-smell-refactor.zip，**完整解压**到一个目录。目录中应同时有 install.bat、SKILL.md、scripts 和 runtime；不要在压缩包预览中运行。
+1. 下载发布者提供的 `arkts-smell-refactor.zip` 并**完整解压**。解压后的顶层包含批测脚本、样例清单和 `arkts-smell-refactor` 子目录。该子目录内有 `install.bat`、`SKILL.md`、`scripts` 和 `runtime`。
 2. 确认本机有 Node.js **20.19 或更高版本**，且 node 在 PATH 中；DevEco Code 要求更高版本时以其要求为准。没有 Node 或版本过低时，安装入口会明确提示并结束，不会自动下载或安装。可从 [Node.js 官方下载页](https://nodejs.org/en/download) 安装受支持的 LTS 版本，重新打开终端后运行 `node --version` 检查。
-3. 双击解压目录中的 **install.bat**。已有同名安装时自动备份升级，并保留原有工具设置；查看窗口中的安装结果、实际位置和备份路径。
+3. 双击 **`arkts-smell-refactor\install.bat`**。已有同名安装时自动备份升级，并保留原有工具设置。窗口会显示安装结果、实际安装位置和备份路径。
 4. 退出并重启 DevEco Code，在目标业务工程打开聊天，通过 /skills 确认 arkts-smell-refactor，然后说“使用 arkts-smell-refactor，先检查环境，再检测 entry/src/main/ets/pages/Index.ets”。请把文件路径换成工程中的实际文件。
 
 安装入口是批处理，后续执行包内 JavaScript。使用者无需 TypeScript、npm 或开发仓库。安装成功只表示文件就绪；首次流程仍会预检 SDK、工具和审查模型配置，缺项时列出补齐方法并结束本次执行。完整包内向导见 [INSTALL.txt](../skills/arkts-smell-refactor/INSTALL.txt)。
 
-如需从终端安装或提供工具路径，在完整解压目录执行：
+如需从终端安装或提供工具路径，在含 `install.bat` 的子目录执行以下命令。
 
     .\install.bat --no-pause
     .\install.bat --no-pause --studio "D:/tool/DevEco/DevEco Studio"
@@ -34,6 +34,27 @@ Skill 在 DevEco 对话中展示检测结果、风险、建议、候选 Diff 和
 运行仍需要本机 Node.js、DevEco Code 和工程要求的 DevEco SDK、构建及测试环境；发行包包含 JavaScript 运行时依赖，不包含平台专用 Node、SDK 或设备。
 
 SDK 优先使用显式 studio 或 DEVECO_HOME；未设置时从 DEVECO_SDK_HOME、已有 Hvigor/OHPM/codelinter 命令的安装位置发现标准 SDK 目录。无法发现时 doctor 会列出配置方法。
+
+## 运行 100 条批量测试
+
+在解压后含 `run_batch_100.ps1` 和 `batch-100.json` 的顶层目录打开 PowerShell。脚本调用随包提供的 Skill 后端，以非交互方式逐条重构和验收。也可用 `-SkillDirectory` 指向已安装的同版本 Skill。
+
+用 `-Dataset` 指定清单路径。在清单顶部，把空白的 `workspaceRoot` 填为三个源码仓库的**共同父目录**。该目录应直接包含 `applications_settings`、`agc-template-market-harmonyos-demos` 和 `applications_photos`。JSON 中的 Windows 路径可用正斜杠，相对路径以清单所在目录为准。临时切换源码位置时，可用 `-Workspace` 覆盖清单设置。
+
+```powershell
+# 预览全部 100 条。此时 workspaceRoot 可以留空，也不会启动模型或设备。
+.\run_batch_100.ps1 -Dataset .\batch-100.json -ListOnly
+
+# 跑第 1 至 20 条，含首尾。命令结束后，可把区间改为 21 至 40 继续。
+.\run_batch_100.ps1 -Dataset .\batch-100.json -StartOrdinal 1 -EndOrdinal 20
+
+# 全量运行（47 条 local-test，53 条 instrument-test）
+.\run_batch_100.ps1 -Dataset .\batch-100.json
+```
+
+**同一台机器一次只运行一个批测实例。** 每条样例先记录工程基线，包含已有的未提交修改。候选通过后，脚本临时应用修改、执行应用后复验，再回滚。每条结束都核对源码、测试、配置和资源的 SHA-256，确认还原才开始下一条。单条验收未通过会记入结果。环境缺项或回滚无法确认时，本段停止。
+
+运行时会打印结果目录。`summary.json` 中的 `completedRange` 表示所选区间是否跑完，`stopReason` 记录提前停止的原因。若窗口被强制关闭，先确认该条启动的 Agent、构建和设备进程均已退出，再用同一用户单独执行 `.\run_batch_100.ps1 -Recover`。恢复成功后可从中断的序号重新分段运行。
 
 ## 维护者打包与其他安装入口
 
