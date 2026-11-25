@@ -1,6 +1,64 @@
 import type { Json, RefactorTask } from "../models.js";
+import { targetPath } from "../models.js";
+import path from "node:path";
 import { mask, matching, symbolRegion } from "./source.js";
-import { escapeRe } from "../utils.js";
+import { escapeRe, readText } from "../utils.js";
+import { resolveDependency } from "../workspace.js";
+
+function typeImport(source: string, name: string): string | undefined {
+  for (const entry of mask(source, false).matchAll(/\bimport\s+([^;]*?)\s+from\s*['"]([^'"]+)['"]/g)) {
+    const names = entry[1].replace(/[{}]/g, "").split(",").map(s =>
+      s.trim().replace(/^type\s+/, "").split(/\s+as\s+/).at(-1));
+    if (names.includes(name)) return entry[2];
+  }
+  return undefined;
+}
+
+function fieldReceiverType(receiver: string, source: string, task: RefactorTask, types: Record<string, string>): string {
+  const [first, ...tail] = receiver.replace(/^this\./, "").split(".");
+  let type = types[first]?.match(/^[\w$]+(?:\s*\|\s*(?:undefined|null))*/)?.[0];
+  let file = targetPath(task);
+  for (const field of tail) {
+    if (!type) return "待解析";
+    const owner = type.split(/\s*\|/)[0];
+    const specifier = typeImport(source, owner);
+    if (specifier) {
+      let dependency: string | null;
+      try {
+        dependency = resolveDependency(file, specifier, task.project_root);
+      } catch {
+        // A missing or malformed dependency manifest cannot establish type ownership.
+        return "待解析";
+      }
+      if (!dependency) return "待解析";
+      file = dependency;
+      source = readText(file);
+    }
+    const code = mask(source);
+    const declaration = new RegExp("\\b(?:class|struct|interface)\\s+" + escapeRe(owner) + "\\b[^{]*\\{").exec(code);
+    if (!declaration) return "待解析";
+    const start = declaration.index + declaration[0].length - 1;
+    const body = code.slice(start + 1, matching(code, start));
+    type = new RegExp("\\b" + escapeRe(field) + "\\s*:\\s*([\\w$]+(?:\\s*\\|\\s*(?:undefined|null))*)").exec(body)?.[1];
+  }
+  if (!type) return "待解析";
+  const imported = typeImport(source, type.split(/\s*\|/)[0]);
+  return type + "（" + path.basename(file) + (imported ? " 导入自 " + imported : " 中声明") + "）";
+}
+
+export function recurringEnvyAdvice(before: Json, after: Json): string {
+  if (before.stage !== "smell" || after.stage !== "smell") return "";
+  const findings = (r: Json) => (r.issues ?? []).flatMap((issue: Json) => {
+    const hit = /(?:Method|Function) '([^']+)' is feature-envious toward '([^']+)' \((ATFD=[^)]+)\)/.exec(issue.reason ?? "");
+    return hit ? [{ method: hit[1], target: hit[2], metrics: hit[3] }] : [];
+  });
+  const previous = findings(before);
+  for (const current of findings(after)) {
+    const prior = previous.find((f: Json) => f.target === current.target && f.metrics === current.metrics);
+    if (prior) return `\n前后两轮 HomeCheck 均命中 ${current.target}（${current.metrics}），上一轮方法 ${prior.method}，本轮方法 ${current.method}。已有委托或 Mapper 未能减少跨对象字段访问；重新核对字段归属、原地写入和参数类型，避免把相同读写再次搬入新 helper。\n`;
+  }
+  return "";
+}
 export function analyzeFeatureEnvy(
   task: RefactorTask,
   source: string,
@@ -63,6 +121,19 @@ export function analyzeFeatureEnvy(
   }
   const total = (obj: Record<string, number> = {}) =>
     Object.values(obj).reduce((a, b) => a + b, 0);
+  const transfers = new Map<string, { from: string; to: string; fields: string[] }>();
+  for (const m of text.matchAll(/\b([\w$]+(?:\.[\w$]+)*)\.([\w$]+)\s*=\s*([\w$]+(?:\.[\w$]+)*)\.([\w$]+)\s*(?=;|\r?\n|})/g)) {
+    const [, to, written, from, read] = m;
+    if (from === to) continue;
+    const key = from + "→" + to;
+    const transfer = transfers.get(key) ?? { from, to, fields: [] };
+    transfer.fields.push(read === written ? read : read + "→" + written);
+    transfers.set(key, transfer);
+  }
+  const fieldTransfers = [...transfers.values()].map(t => ({
+    ...t, sourceType: fieldReceiverType(t.from, source, task, types),
+    destinationType: fieldReceiverType(t.to, source, task, types),
+  }));
   const reported =
     /(?:feature-envious toward|highly coupled to)\s+['"]([^'"]+)['"]/i.exec(
       task.message,
@@ -146,7 +217,7 @@ export function analyzeFeatureEnvy(
       ? "GLOBAL_STORAGE_ACCESS"
       : ownership === "sdk-object"
         ? "SDK_ORCHESTRATION"
-        : Object.keys(w).length
+        : Object.keys(w).length || fieldTransfers.length
           ? "STATE_MUTATION"
           : /\.(?:map|forEach|filter|reduce|sort)\s*\(/.test(text)
             ? "COLLECTION_PROCESSING"
@@ -197,6 +268,9 @@ export function analyzeFeatureEnvy(
                 : "类型归属仍需确认，先采用最小委托",
             ];
   const preserve: string[] = [];
+  for (const t of fieldTransfers) {
+    preserve.push(`从 ${t.from} [${t.sourceType}] 读取 ${t.fields.join(", ")}，按原顺序写入 ${t.to} [${t.destinationType}]；保留目标对象身份，跨文件委托前核对声明来源和可空性`);
+  }
   if (/\.push\s*\(/.test(text)) preserve.push("数组 push 的累加语义和对象身份");
   if (/\bif\s*\(/.test(text)) preserve.push("条件不满足时不执行的边界");
   if (/\bawait\b/.test(text))
@@ -232,6 +306,7 @@ export function analyzeFeatureEnvy(
     ),
     readCount: total(a),
     writeCount: total(w),
+    fieldTransfers,
     accessedMembers: Object.entries(a)
       .sort((a, b) => b[1] - a[1])
       .map(([name, count]) => ({ name, count, writes: w[name] ?? 0 })),

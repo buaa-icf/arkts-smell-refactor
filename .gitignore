@@ -41,6 +41,12 @@ v/
 /docs/
 reports/
 /tools/*.ps1
+!/tools/run_refactor_experiment.ps1
+!/tools/task_source_rollback.ps1
+!/tools/run_long_method_local.ps1
+!/tools/run_long_method_instrument.ps1
+!/tools/run_code_clone_local.ps1
+!/tools/run_code_clone_instrument.ps1
 /.codex_tmp/
 # Local boundary test for the untracked helpers; it still stubs the old Python entry.
 /tests/test_experiment_scripts.py

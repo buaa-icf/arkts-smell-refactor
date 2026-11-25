@@ -4,11 +4,46 @@ import path from "node:path";
 import fs from "node:fs";
 import {
   moduleBuildPlan,
+  addedCompilerErrors,
   restoreBuildBaseline,
 } from "../src/build_validation.js";
 import { fixture, makeProject } from "./helpers.js";
 import { readText, writeJson, writeText } from "../src/utils.js";
 import { freshCopy } from "../src/workspace.js";
+
+test("基线构建也失败时只归因补丁新增的有位置编译错误", (t) => {
+  const root = fixture(t),
+    before = path.join(root, "before"),
+    after = path.join(root, "after");
+  for (const file of ["AddVisitorPage.ets", "EditVisitorPage.ets"])
+    writeText(path.join(before, file), "old();");
+  writeText(path.join(after, "AddVisitorPage.ets"), "\nold();");
+  writeText(path.join(after, "EditVisitorPage.ets"), "newCall();");
+  const diag = (dir: string, file: string, line: number) =>
+    "1 ERROR: 10605030 ArkTS Compiler Error\nError Message: Structural typing is not supported At File: " +
+    path.join(dir, file) +
+    ":" +
+    line +
+    ":29";
+  const baseline = diag(before, "AddVisitorPage.ets", 1);
+  const current = [
+    diag(after, "AddVisitorPage.ets", 2),
+    diag(after, "EditVisitorPage.ets", 1),
+    diag(after, "EditVisitorPage.ets", 1),
+  ].join("\n");
+  const changes = ["AddVisitorPage.ets", "EditVisitorPage.ets"];
+  assert.deepEqual(
+    addedCompilerErrors(baseline, current, before, after, changes).map(
+      (e) => e.filePath,
+    ),
+    ["EditVisitorPage.ets"],
+  );
+  assert.deepEqual(
+    addedCompilerErrors("tool unavailable", current, before, after, changes),
+    [],
+  );
+  assert.deepEqual(addedCompilerErrors(baseline, current.replaceAll("ERROR:", "WARN:"), before, after, changes), []);
+});
 
 test("构建显式选择全部 HAP 和本次变更库模块，不误切到 assembleApp", (t) => {
   const p = makeProject(fixture(t));

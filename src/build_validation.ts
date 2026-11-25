@@ -7,9 +7,77 @@ import {
   isFile,
   readJson,
   readJson5,
+  relative,
   unique,
   within,
 } from "./utils.js";
+import { changedCurrentLines } from "./workspace.js";
+
+/** Compare compiler diagnostics that actually identify a source location in each build. */
+export function addedCompilerErrors(
+  before: string,
+  after: string,
+  baseline: string,
+  candidate: string,
+  changed: string[],
+): Json[] {
+  function diagnostics(output: string, root: string) {
+    const seen = new Set<string>();
+    const items: {
+      filePath: string;
+      line: number;
+      column: number;
+      message: string;
+    }[] = [];
+    for (const match of output
+      .replace(/\x1b\[[0-9;]*m/g, "")
+      .matchAll(
+        /^(?:\d+[ \t]+)?ERROR:[ \t]*(?:\d+[ \t]+)?ArkTS Compiler Error[^\r\n]*\r?\nError Message:[ \t]*(.+?)[ \t\r\n]+At File:[ \t]*(.+?):(\d+):(\d+)[ \t]*\r?$/gim,
+      )) {
+      const file = path.resolve(root, match[2].trim());
+      const identity = JSON.stringify([file, match[1].trim(), match[3], match[4]]);
+      if (within(file, root) && isFile(file) && !seen.has(identity)) {
+        seen.add(identity);
+        items.push({
+          filePath: relative(file, root),
+          message: match[1].trim(),
+          line: +match[3],
+          column: +match[4],
+        });
+      }
+    }
+    return items;
+  }
+  const old = diagnostics(before, baseline);
+  if (!old.length) return [];
+  const key = (issue: (typeof old)[number]) =>
+    JSON.stringify([issue.filePath, issue.message]);
+  const remaining = new Map<string, number>();
+  for (const issue of old)
+    remaining.set(key(issue), (remaining.get(key(issue)) ?? 0) + 1);
+  const changedLines = new Map<string, Set<number>>();
+  for (const file of changed) {
+    const current = path.resolve(candidate, file);
+    if (within(current, candidate) && isFile(current))
+      changedLines.set(
+        relative(current, candidate),
+        changedCurrentLines(path.join(baseline, file), current),
+      );
+  }
+  const touchesPatch = (issue: (typeof old)[number]) =>
+    changedLines.get(issue.filePath)?.has(issue.line) === true;
+  // Consume persistent errors first, even when a moved line has a new line number.
+  return diagnostics(after, candidate)
+    .sort((a, b) => Number(touchesPatch(a)) - Number(touchesPatch(b)))
+    .filter((issue) => {
+      const count = remaining.get(key(issue)) ?? 0;
+      if (count) {
+        remaining.set(key(issue), count - 1);
+        return false;
+      }
+      return touchesPatch(issue);
+    });
+}
 
 /** Explicit module artifacts avoid the assembleApp semantics of --product alone. */
 export function moduleBuildPlan(

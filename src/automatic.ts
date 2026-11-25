@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,9 @@ import {
   now,
   parents,
   round,
+  hash,
+  relative,
+  walk,
   writeJson,
   writeText,
 } from "./utils.js";
@@ -25,6 +29,7 @@ import { TEST_TOOL_BLOCKERS } from "./test_execution.js";
 import { bundledHomecheck } from "./homecheck_runtime.js";
 import { resolveSelection, POLICY_VERSION, DISABLED_AGENT_TOOLS, INTERNAL_VALIDATION_TOOLS, MAX_INTERNAL_VALIDATION_ATTEMPTS, type AgentSelection } from "./agent_runtime.js";
 import { freezeTestPlan } from "./test_plan.js";
+import { withBatchWorkspace } from "./batch_workspace.js";
 export async function readPastedJson(
   input: NodeJS.ReadableStream = process.stdin,
 ): Promise<Json[]> {
@@ -317,6 +322,7 @@ export async function runTasks(
   dryRun = false,
   metadata: Json = {},
   selection: AgentSelection = {},
+  rollback = false,
 ): Promise<Json> {
   selection = resolveSelection(selection);
   const started = now(),
@@ -331,8 +337,15 @@ export async function runTasks(
   const tools = dryRun ? {} : discoverTools(workspace),
     tasks = selectedTasks ?? loadDatasetTasks(input, workspace),
     summary: Json[] = [];
+  const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
+  const digest = createHash("sha256");
+  for (const file of [...walk(runtimeDir)].filter(f => f.endsWith(".js")).sort())
+    digest.update(relative(file, runtimeDir) + "\n" + hash(file) + "\n");
+  const runtimeSha256 = digest.digest("hex");
   writeJson(path.join(session, "manifest.json"), {
     ...metadata,
+    runtimeSha256,
+    batchSourceMode: rollback ? "isolated-copy" : "in-place",
     workspace,
     dryRun,
     tools,
@@ -363,6 +376,8 @@ export async function runTasks(
       tasks: summary,
       validationPolicy: { linterMode: mode },
       ...metadata,
+      runtimeSha256,
+      batchSourceMode: rollback ? "isolated-copy" : "in-place",
     };
     writeJson(path.join(session, "summary.json"), final);
     return final;
@@ -381,7 +396,7 @@ export async function runTasks(
   for (const [i, task] of tasks.entries()) {
     const taskStarted = now(),
       taskDir = path.join(session, task.task_id);
-    try {
+    const runOne = async (task: RefactorTask) => {
       const { risk, smoke, contract } = prepareTask(task, taskDir, mode);
       console.log(
         `\n[${i + 1}/${tasks.length}] ${task.target.symbol ?? task.target.file_path}\n  静态风险：${risk.riskLevel}；Refactor Agent 仅接收生产代码与重构规范`,
@@ -389,13 +404,16 @@ export async function runTasks(
       const config = autoConfig(task, taskDir, tools, smoke, contract, mode, selection);
       console.log("Agent 配置：" + JSON.stringify(config.agentPolicy));
       writeJson(path.join(taskDir, "effective-config.json"), config);
-      const result = await executePipeline(
+      return executePipeline(
         taskDir,
         config,
         false,
         (name, status) => console.log(`  ${name}: ${status}`),
         taskStarted,
       );
+    };
+    try {
+      const result = rollback ? await withBatchWorkspace(task, taskDir, runOne) : await runOne(task);
       console.log(
         `  最终结果：${result.verdict}；总耗时：${result.durationSeconds.toFixed(1)} 秒${result.timedOut ? "（已达到20分钟上限）" : ""}`,
       );
@@ -405,6 +423,8 @@ export async function runTasks(
         testKind: task.raw.testKind ?? null,
         target: task.target.symbol ?? task.target.file_path,
         verdict: result.verdict,
+        firstFailureStage: result.firstFailureStage,
+        finalFailureStage: result.finalFailureStage,
         durationSeconds: result.durationSeconds,
         timedOut: result.timedOut,
         taskDir,

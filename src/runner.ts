@@ -30,10 +30,11 @@ import { interruptTestResults } from "./test_progress.js";
 import { buildRepairPrompt } from "./prompts.js";
 import { frozenUiFailureEvidence } from "./test_ui.js";
 import { collectReactiveEvidence } from "./reactive_evidence.js";
-import { finalReviewText, parseReview, formatRetryPrompt, preservesReview } from "./review_output.js";
+import { completedPipeReview, finalReviewText, parseReview, formatRetryPrompt, preservesReview } from "./review_output.js";
 import {
   failedHypiumCases,
   hostUnavailable,
+  missingTestSelector,
   parseHypiumCases,
 } from "./test_execution.js";
 export const PLACEHOLDERS = [
@@ -222,6 +223,10 @@ export async function runSpec(
   // previewer output (for example TLS timing statistics preceding a timeout).
   if (!passed && isTest && isFile(manifest) && fs.statSync(manifest).mtimeMs >= wallStarted) {
     const evidence = readJson(manifest);
+    // A blocker in the baseline replay log does not change the candidate's assertion result.
+    if (run.code === 1 && evidence.status === "FAIL" && evidence.classification &&
+        evidence.classification === evidence.jobs?.at(-1)?.baselineComparison?.classification)
+      return result(name, "FAIL", { ...fields, exit_code: run.code, reason: evidence.reason ?? null });
     if (evidence.status === "BLOCKED") {
       const job = evidence.jobs?.find((j: Json) => j.status === "BLOCKED");
       const reason = evidence.reason ?? job?.reason;
@@ -307,27 +312,31 @@ export function buildFailureReport(
   if (stage === "build" && isFile(path.join(taskDir, "build-evidence.json"))) {
     const evidence = readJson(path.join(taskDir, "build-evidence.json"));
     if (evidence.engine === "devecocli") {
+      const additional = evidence.classification === "ADDITIONAL_BUILD_ERRORS" &&
+        evidence.baseline?.status === "FAIL" && Array.isArray(evidence.introducedErrors) &&
+        evidence.introducedErrors.length > 0;
       const introduced =
         typeof evidence.runId === "string" &&
         evidence.runId.length > 0 &&
         evidence.status === "FAIL" &&
-        evidence.classification === "INTRODUCED_BUILD_FAILURE" &&
-        evidence.baseline?.status === "PASS" &&
+        ((evidence.classification === "INTRODUCED_BUILD_FAILURE" && evidence.baseline?.status === "PASS") || additional) &&
         evidence.baseline?.runId === evidence.runId;
       return {
         schemaVersion: "1.0",
         attempt,
         stage,
         classification: introduced
-          ? "INTRODUCED_BUILD_FAILURE"
+          ? evidence.classification
           : (evidence.classification ?? "BUILD_ATTRIBUTION_UNAVAILABLE"),
         repairable: introduced,
-        summary: introduced
+        summary: additional && introduced
+          ? "基线构建已失败，仅修复本次补丁新增的编译诊断，修复后重新验证基线阻塞"
+          : introduced
           ? "相同模块参数下：重构前基线通过，重构后失败，允许定向修复"
           : (evidence.reason ??
             "没有可证明本次引入构建失败的基线证据，不进入代码修复"),
         changedProductionFiles: changes,
-        issues: [],
+        issues: additional && introduced ? evidence.introducedErrors : [],
         logTail: log,
         buildEvidence: evidence,
       };
@@ -378,10 +387,12 @@ export function buildFailureReport(
   let attributable = mentionsChanged(log, changes),
     unavailable = false,
     hasCaseEvidence = false;
+  let testBaseline: Json | undefined;
   const testAttribution: Json[] = [];
   if (stage === "test") {
     const jobs = currentTestFailures(taskDir);
     if (jobs !== null) {
+      testBaseline = jobs.at(-1)?.baselineComparison;
       const cases: Json[] = [];
       for (const job of jobs)
         if (job.evidenceFiles["test_result.txt"])
@@ -403,7 +414,7 @@ export function buildFailureReport(
         for (const c of cases)
           if (c.uiEvidence.length) testAttribution.push({ suite: c.suite, caseName: c.name, evidence: c.uiEvidence });
         attributable = cases.every(
-          (c) =>
+          (c) => missingTestSelector(c.details) ? c.uiEvidence.length > 0 : (
             c.targeted ||
             c.uiEvidence.length > 0 ||
             mentionsChanged(formatted(c), changes) ||
@@ -416,7 +427,7 @@ export function buildFailureReport(
             (task.target.symbol &&
               formatted(c)
                 .toLowerCase()
-                .includes(task.target.symbol.toLowerCase())),
+                .includes(task.target.symbol.toLowerCase()))),
         );
         unavailable =
           attributable && cases.every((c) => hostUnavailable(c.details));
@@ -425,17 +436,19 @@ export function buildFailureReport(
           .filter((j) => j.evidenceFiles.log)
           .map((j) => readText(j.evidenceFiles.log))
           .join("\n\n");
-        attributable = mentionsChanged(log, changes);
+        const diagnosticLocations = [...log.replaceAll("\\", "/").matchAll(/\bError Message:[^\r\n]*?\s+At File:\s*([^\r\n]+?\.(?:ets|ts)):\d+:\d+/gi)];
+        attributable = diagnosticLocations.length > 0 && diagnosticLocations.every(([, file]) =>
+          changes.some((change) => file.trim() === change || file.trim().endsWith("/" + change.replaceAll("\\", "/"))));
       }
+      if (testBaseline) attributable = testBaseline.classification === "INTRODUCED_TEST_FAILURE";
     }
   }
   const repairable =
     ["smell", "contract", "runtime", "linter", "review-agent"].includes(
       stage,
     ) ||
-    (stage === "test" && hasCaseEvidence
-      ? attributable && !unavailable
-      : ["build", "test"].includes(stage) &&
+    (stage === "test" ? attributable && !unavailable
+      : stage === "build" &&
         !unavailable &&
         (attributable ||
           (!!task.target.symbol &&
@@ -445,11 +458,11 @@ export function buildFailureReport(
     build: repairable
       ? "INTRODUCED_BUILD_FAILURE"
       : "UNATTRIBUTED_BUILD_FAILURE",
-    test: unavailable
+    test: testBaseline?.classification ?? (unavailable
       ? "TEST_HOST_UNAVAILABLE"
       : repairable
         ? "RELATED_TEST_FAILURE"
-        : "UNATTRIBUTED_TEST_FAILURE",
+        : "UNATTRIBUTED_TEST_FAILURE"),
     linter: "INTRODUCED_LINTER_FAILURE",
     runtime: "INTRODUCED_RUNTIME_INITIALIZATION_FAILURE",
     contract: "PUBLIC_CONTRACT_BREAK",
@@ -470,7 +483,7 @@ export function buildFailureReport(
       ? "目标测试在 beforeAll 找不到测试宿主，未执行生产断言，不能归因于本次修改"
       : (review.summary ?? failed.reason ?? `${stage} 未通过`),
     changedProductionFiles: changes,
-    ...(stage === "test" ? { testAttribution } : {}),
+    ...(stage === "test" ? { testAttribution, ...(testBaseline ? {testBaseline} : {}) } : {}),
     issues,
     logTail: log,
   };
@@ -677,6 +690,8 @@ export async function executePipeline(
         ),
     );
 
+    const finalFailure = filtered.find(s => s.status === "BLOCKED") ??
+      filtered.find(s => s.status === "FAIL" || s.status === "INCOMPLETE");
     const output = {
       ...finalResult(task.task_id, results, dry, filtered),
       validationPolicy: policy,
@@ -684,6 +699,8 @@ export async function executePipeline(
       repairAttempts: repairs,
       reviewRetries: retries,
       reviewFormatRetries: formatRetries,
+      firstFailureStage: results.find(s => ["FAIL", "BLOCKED", "INCOMPLETE"].includes(s.status))?.name ?? null,
+      finalFailureStage: finalFailure?.name ?? null,
       attempts,
       durationSeconds: round(now() - started),
       timeoutSeconds: timeout,
@@ -703,6 +720,8 @@ export async function executePipeline(
     writeJson(path.join(taskDir, `failure-report-${index}.json`), failure);
   };
   if (config.refactorAgent) {
+    const recheckFile = path.join(taskDir, "original-target-recheck.json");
+    if (!dry) fs.rmSync(recheckFile, { force: true });
     progress?.("重构 Agent", "开始");
     const current = await runSpec(
       "refactor-agent",
@@ -715,9 +734,31 @@ export async function executePipeline(
       deadline,
     );
     results.push(current);
-    progress?.("重构 Agent", current.status);
     if (!dry && current.status !== "PASS") {
-      saveFailure(buildAgentFailureReport(taskDir, current, 0), "agent");
+      const failure = buildAgentFailureReport(taskDir, current, 0);
+      failure.stage = "refactor-agent";
+      if (current.exit_code === 5 && failure.classification === "NO_ALLOWED_PRODUCTION_CHANGE" && isFile(recheckFile)) {
+        const recheck = readJson(recheckFile);
+        if (recheck.taskId === task.task_id) {
+          failure.originalTarget = recheck;
+          if (recheck.status === "NOT_REPRODUCED") {
+            current.status = "INCOMPLETE";
+            failure.classification = "ORIGINAL_TARGET_NOT_REPRODUCED";
+            failure.summary = "原始源码复扫未复现该目标，本轮没有重构候选";
+          } else if (recheck.status === "UNAVAILABLE") {
+            current.status = "BLOCKED";
+            failure.classification = "ORIGINAL_TARGET_RECHECK_UNAVAILABLE";
+            failure.summary = "原始目标复核未完成：" + recheck.reason;
+          } else if (recheck.status === "DETECTED") {
+            failure.summary = "原始目标仍被 HomeCheck 命中，Agent 未完成生产变更";
+          }
+          current.reason = failure.summary;
+          failure.repairable = false;
+          failure.issues = [{ category: failure.classification, reason: failure.summary }];
+        }
+      }
+      progress?.("重构 Agent", current.status);
+      saveFailure(failure, "agent");
       const skipped = [
         "smell",
         "build",
@@ -740,6 +781,7 @@ export async function executePipeline(
       );
       return finish(results, 0, 0);
     }
+    progress?.("重构 Agent", current.status);
   } else
     results.push(
       result("refactor-agent", "SKIPPED", {
@@ -778,7 +820,7 @@ export async function executePipeline(
       const spec = config.reviewAgent,
         maxRetries = dry ? 0 : Math.max(0, spec.maxEnvironmentRetries ?? 0);
       progress?.("评审 Agent", "开始");
-      let retrySuffix = "";
+      let retrySuffix = "", recoveredReview: Json | null = null;
       for (let n = 0; ; n++) {
         retrySuffix = n ? "-retry-" + n : "";
         if (n) {
@@ -807,6 +849,18 @@ export async function executePipeline(
           undefined,
           deadline,
         );
+        if (!dry) fs.rmSync(path.join(taskDir, `review${suffix}${retrySuffix}.json`), { force: true });
+        if (reviewResult.status === "FAIL" || (reviewResult.exit_code != null && reviewResult.exit_code !== 0)) {
+          if (reviewResult.status !== "BLOCKED" && reviewResult.exit_code === 1 && reviewResult.output_file)
+            recoveredReview = completedPipeReview(reviewResult.output_file);
+          if (recoveredReview) {
+            reviewResult.status = "PASS";
+            reviewResult.reason = "评审进程报告 EPIPE，已核实同一会话的完整终止事件和评审结论";
+          } else {
+            reviewResult.status = "BLOCKED";
+            reviewResult.reason ??= `评审进程异常退出（code=${reviewResult.exit_code ?? "unknown"}），缺少可采信的评审结论`;
+          }
+        }
         if (
           reviewResult.status !== "BLOCKED" ||
           reviewResult.exit_code == null ||
@@ -816,10 +870,9 @@ export async function executePipeline(
         results.push(reviewResult);
       }
       if (!dry && reviewResult!.status === "PASS") {
-        let data = extractReviewJson(
-            reviewResult!.output_file!,
-            path.join(taskDir, `review${suffix}${retrySuffix}.json`),
-          );
+        const reviewFile = path.join(taskDir, `review${suffix}${retrySuffix}.json`);
+        let data = recoveredReview ?? extractReviewJson(reviewResult!.output_file!, reviewFile);
+        if (recoveredReview) writeJson(reviewFile, recoveredReview);
         if (!data && config.reviewFormatAgent && formatRetries === 0 && (deadline === undefined || now() < deadline)) {
           const original = finalReviewText(reviewResult!.output_file!), prompt = formatRetryPrompt(original);
           if (prompt) {
@@ -858,30 +911,24 @@ export async function executePipeline(
     const failed =
       terminal.find((s) => s.status === "BLOCKED") ??
       terminal.find((s) => s.status === "FAIL");
-    if (
-      !dry &&
-      failed?.status === "BLOCKED" &&
-      failed.name.split("-repair-")[0] === "build" &&
-      isFile(path.join(taskDir, "build-evidence.json"))
-    )
-      saveFailure(
-        {
-          ...buildFailureReport(taskDir, task, failed, repairs + 1),
-          repairable: false,
-        },
-        repairs + 1,
-      );
-    if (
-      dry ||
-      !failed ||
-      failed.status === "BLOCKED" ||
-      repairs >= maxRepairs ||
-      !config.repairAgent
-    )
+    if (dry || !failed) break;
+    if (failed.status === "BLOCKED") {
+      const stage = failed.name.startsWith("review-agent") ? "review-agent" : failed.name.split("-repair-")[0];
+      const blockedJob = stage === "test" ? currentTestFailures(taskDir)?.at(-1) : undefined;
+      const failure = stage === "build" && isFile(path.join(taskDir, "build-evidence.json"))
+        ? buildFailureReport(taskDir, task, failed, repairs + 1)
+        : {
+            schemaVersion: "1.0", attempt: repairs + 1, stage,
+            classification: stage === "review-agent" ? "REVIEW_RESULT_UNAVAILABLE" :
+              (blockedJob?.baselineComparison?.classification ?? blockedJob?.classification ?? "GATE_BLOCKED"),
+            summary: failed.reason, exitCode: failed.exit_code, log: failed.output_file, issues: [],
+          };
+      saveFailure({ ...failure, repairable: false }, repairs + 1);
       break;
+    }
     let failure = buildFailureReport(taskDir, task, failed, repairs + 1);
     saveFailure(failure, repairs + 1);
-    if (!failure.repairable) break;
+    if (!failure.repairable || repairs >= maxRepairs || !config.repairAgent) break;
     let repaired = false;
     while (failure.repairable && repairs < maxRepairs) {
       repairs++;

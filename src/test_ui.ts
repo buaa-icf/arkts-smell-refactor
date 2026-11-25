@@ -1,4 +1,5 @@
 import path from "node:path";
+import { missingTestSelector } from "./test_execution.js";
 import type { Json } from "./models.js";
 import {
   callArguments,
@@ -264,6 +265,7 @@ export function frozenUiFailureEvidence(
   if (!isFile(file)) return [];
   const frozen = readJson(file);
   if (frozen.taskSha256 !== hash(path.join(taskDir, "task.json"))) return [];
+  const selector = missingTestSelector(c.details);
   return (frozen.uiCaseEvidence ?? []).filter((e: Json) => {
     const test = path.resolve(frozen.sourceRoot, e.file);
     return (
@@ -272,6 +274,7 @@ export function frozenUiFailureEvidence(
       e.kind === job.kind &&
       e.suite === c.suite &&
       e.caseName === c.name &&
+      (!selector || e.uiId === selector) &&
       (job.testFiles ?? []).includes(e.file) &&
       (job.expectedSuites ?? []).includes(e.suite) &&
       changes.some((f) => f.replaceAll("\\", "/") === e.productionFile) &&

@@ -4,8 +4,54 @@ import fs from "node:fs";
 import path from "node:path";
 import { BATCH_INPUT_FILE, loadBatch } from "../src/batch.js";
 import { runTasks } from "../src/automatic.js";
+import { signingSource, withBatchWorkspace } from "../src/batch_workspace.js";
+import { targetPath } from "../src/models.js";
 import { readJson, writeText, isFile } from "../src/utils.js";
 import { fixture } from "./helpers.js";
+
+test("回滚批次隔离每条的改写和新增文件，异常退出也保留原工作区及证据", async (t) => {
+  const root = fixture(t),
+    workspace = batchFixture(root);
+  const original = loadBatch(workspace).tasks[0],
+    target = targetPath(original);
+  const previous = fs.readFileSync(target),
+    resource = "entry/src/main/resources/rawfile/data.bin";
+  const testFile = "entry/src/ohosTest/ets/test/Ability.test.ets";
+  writeText(path.join(original.project_root, testFile), "original suite");
+  const runs = path.join(root, "receipts");
+  for (const fail of [false, true]) {
+    const receipt = path.join(runs, String(fail));
+    const result = withBatchWorkspace(original, receipt, async (task) => {
+      assert.deepEqual(signingSource(receipt, task.project_root, task.workspace_root), {
+        source: original.project_root, workspaceRoot: original.workspace_root,
+      });
+      assert.deepEqual(fs.readFileSync(targetPath(task)), previous);
+      assert.match(
+        fs.readFileSync(path.join(task.project_root, testFile), "utf8"),
+        /original suite/,
+      );
+      assert.equal(
+        fs.existsSync(path.join(task.project_root, resource)),
+        false,
+      );
+      writeText(targetPath(task), "candidate");
+      writeText(path.join(task.project_root, resource), "one new resource");
+      if (fail) throw new Error("fixture fail");
+      return "PASS";
+    });
+    if (fail) await assert.rejects(result, /fixture fail/);
+    else assert.equal(await result, "PASS");
+    const status = readJson(path.join(receipt, "batch-rollback.json"));
+    assert.equal(status.cleanup, "complete");
+    assert.equal(fs.existsSync(status.privateProject), false);
+    assert.match(status.initialTargetSha256, /^[\da-f]{64}$/);
+    assert.deepEqual(fs.readFileSync(target), previous);
+    assert.equal(
+      fs.existsSync(path.join(original.project_root, resource)),
+      false,
+    );
+  }
+});
 
 function batchFixture(root: string) {
   const workspace = path.join(root, "workspace");
