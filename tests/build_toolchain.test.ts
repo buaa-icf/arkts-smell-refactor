@@ -59,7 +59,11 @@ test("官方 CLI 成功环境跨 wrapper 捕获，测试不借用 PATH 的其他
   );
   writeText(
     hvigor,
-    `const fs=require('node:fs'),path=require('node:path');if(process.argv.includes('test')){fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({node:process.execPath,sdk:process.env.DEVECO_SDK_HOME,java:process.env.JAVA_HOME,args:process.argv.slice(2)}));const dir=path.join('feature','.test/default/intermediates/test/coverage_data');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'test_result.txt'),${JSON.stringify(success())});}console.log('BUILD SUCCESSFUL');`,
+    `const fs=require('node:fs'),path=require('node:path');
+    const assert=require('node:assert/strict');
+    assert.equal(process.env.ARKTS_BUILD_TOOLCHAIN_CAPTURE, undefined);
+    assert.equal(process.env.NODE_OPTIONS, '--no-warnings');
+    if(process.argv.includes('test')){fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({node:process.execPath,sdk:process.env.DEVECO_SDK_HOME,java:process.env.JAVA_HOME,args:process.argv.slice(2)}));const dir=path.join('feature','.test/default/intermediates/test/coverage_data');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'test_result.txt'),${JSON.stringify(success())});}console.log('BUILD SUCCESSFUL');`,
   );
   writeJson(path.join(p.source, "build-profile.json5"), {
     app: { products: [{ name: "demo" }] },
@@ -69,9 +73,11 @@ test("官方 CLI 成功环境跨 wrapper 捕获，测试不借用 PATH 的其他
     module: { type: "entry", name: "featureName" },
   });
   suite(p.source, "local");
+  const oldNodeOptions = process.env.NODE_OPTIONS;
   const oldPath = process.env.PATH,
     oldSdk = process.env.DEVECO_SDK_HOME;
   try {
+    process.env.NODE_OPTIONS = '--no-warnings';
     process.env.PATH = "";
     process.env.DEVECO_SDK_HOME = path.join(root, "错误 SDK");
     assert.equal(await devecoBuildGate(p.taskDir, p.source, launcher), 0);
@@ -127,6 +133,8 @@ test("官方 CLI 成功环境跨 wrapper 捕获，测试不借用 PATH 的其他
       "BLOCKED",
     );
   } finally {
+    if (oldNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = oldNodeOptions;
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;
     if (oldSdk === undefined) delete process.env.DEVECO_SDK_HOME;

@@ -7,11 +7,9 @@ import { syncBuiltinESMExports } from "node:module";
 
 const directory = process.env.ARKTS_BUILD_TOOLCHAIN_CAPTURE;
 if (directory) {
-  const record = (
-    command: string,
-    args: readonly string[] = [],
-    options: any = {},
-  ) => {
+  const observeLaunch = (call: any[]) => {
+    const [command, args, options = {}] = call;
+    if (!Array.isArray(args)) return;
     const script = args.find((a) => /(?:^|[/\\])hvigorw\.js$/i.test(a));
     if (!script) return;
     const env = options.env ?? process.env;
@@ -20,6 +18,18 @@ if (directory) {
       const key = Object.keys(env).find((k) => k.toUpperCase() === name);
       return key ? env[key] : undefined;
     };
+    // Capture the launch in the CLI. Its ESM preload must not enter Hvigor's
+    // daemon or workers. Preserve the caller's other Node options.
+    const childEnv = { ...env };
+    delete childEnv.ARKTS_BUILD_TOOLCHAIN_CAPTURE;
+    const key = Object.keys(childEnv).find(k => k.toUpperCase() === "NODE_OPTIONS");
+    if (key) {
+      const preload = "--import=" + import.meta.url;
+      const remaining = String(childEnv[key]).split(" ").filter(token => token !== preload).join(" ").trim();
+      if (remaining) childEnv[key] = remaining;
+      else delete childEnv[key];
+    }
+    call[2] = { ...options, env: childEnv };
     if (!get("DEVECO_SDK_HOME")) return;
     const cwd = String(options.cwd ?? process.cwd());
     // No command arguments, credentials, or full environment are persisted.
@@ -45,20 +55,12 @@ if (directory) {
   };
   const spawn = childProcess.spawn;
   childProcess.spawn = function (...args: any[]) {
-    record(
-      args[0],
-      Array.isArray(args[1]) ? args[1] : [],
-      Array.isArray(args[1]) ? args[2] : args[1],
-    );
+    observeLaunch(args);
     return (spawn as any)(...args);
   } as typeof spawn;
   const spawnSync = childProcess.spawnSync;
   childProcess.spawnSync = function (...args: any[]) {
-    record(
-      args[0],
-      Array.isArray(args[1]) ? args[1] : [],
-      Array.isArray(args[1]) ? args[2] : args[1],
-    );
+    observeLaunch(args);
     return (spawnSync as any)(...args);
   } as typeof spawnSync;
   syncBuiltinESMExports();
