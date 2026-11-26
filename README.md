@@ -28,11 +28,25 @@ npm start
 
 看到粘贴提示后输入完整 JSON，程序会自动开始。无需安装全局命令，也不用给本项目单独配置 PATH。
 
-自动化批量跑全测试集脚本：
+### 测试部门验收：用带回滚的入口跑 100 条样例
+
+**验收统一使用 `npm run batch:rollback`。** 从本工具仓库根目录执行，`--workspace` 指向各样例仓库的上一级目录（例如该目录下直接包含 `applications_photos` 和 `agc-template-market-harmonyos-demos`）。先执行上面的安装、构建命令，再选用对应平台的路径。
 
 ```sh
-npm run batch -- --workspace "D:\ROG\Documents\harmonyos\test_supplement"
+# macOS / Linux
+npm run batch:rollback -- --workspace "/path/to/arkts-code-smell/repos"
 ```
+
+```powershell
+# Windows PowerShell
+npm run batch:rollback -- --workspace "D:\arkts-code-smell\repos"
+```
+
+此入口用内置的同一份 100 条清单，默认开启 Linter。每条从样例仓库的**当前本地内容**复制源码、测试和资源到独立临时目录，按现有验证副本规则跳过依赖缓存、构建产物和符号链接。返修也在本条副本中完成。通过、失败或阻塞后均丢弃该副本，原仓库不接收候选改动。开始验收前先准备好对应版本的样例及配套测试，此前原地批跑已写入的改动需要单独核对。
+
+- **核对运行方式**：启动时会打印“逐条隔离并回滚”。`runs/<批次>/manifest.json` 和 `summary.json` 中 `batchSourceMode` 应为 `isolated-copy`，`runtimeSha256` 标识本机实际执行的 JavaScript 构建。各样例目录的 `batch-rollback.json` 记录输入工程、目标文件初始哈希及副本清理状态。反馈问题时请一并附上批次清单和该条的日志、候选补丁、结果。加 `--dry-run` 可只检查清单。
+- **原地开发入口**：`npm run batch` 会将允许的候选改动同步到样例仓库，后续门禁失败后也会保留这些改动。同工程的后续样例可能继承前一条的结果。独立验收请使用上面的 `batch:rollback`。
+- **Windows 按异味分组或重跑指定序号**：使用第 8 节的 PowerShell 快照回滚脚本，并显式传入 `-LinterMode required`。
 
 ## 2. 外部工具和工作区
 
@@ -164,7 +178,14 @@ Code Clone 专属分析器为已确认同一宿主的 UI 克隆补充 `reactiveE
 
 设备、签名、下载、网络、工具缺失或总超时通常不能通过修改生产代码解决，不进入代码返修。失败分析保留阶段、分类、归因证据、具体文件/位置和可否修复。
 
-构建成功不会额外跑基线。只有当前构建出现非环境类失败时，才在另一个隔离副本中根据本任务 `baseline-production/` 和变更清单恢复原代码/资源、移除本任务新增文件；保留其他既有修改，不使用 Git HEAD 替代任务开始时的代码。使用完全相同的 CLI、product 和模块参数验证基线。仅“基线 PASS、当前 FAIL”可归因为 `INTRODUCED_BUILD_FAILURE` 并进入修复；基线也失败记为 `BLOCKED / BASELINE_BUILD_FAILURE`，快照缺失、路径异常或基线证据不全记为 `BLOCKED / BUILD_BASELINE_UNAVAILABLE`。不能因为警告里出现变更文件名，就把无关打包错误归因于重构。`build-baseline-evidence.json`、带运行标识的基线日志及 `failure-report.json` 保留归因依据；基线验证也计入单例总时限。不会通过删除无关资源来让门禁通过。
+候选出现非环境类构建错误时，工具在独立副本中恢复本任务开始时的代码与资源，以相同 CLI、product 和模块参数编译。基线通过、候选失败记为 `INTRODUCED_BUILD_FAILURE`。两者都失败时，只有本轮改动行上可定位的新增编译错误允许定向修复，分类为 `ADDITIONAL_BUILD_ERRORS`。相同的基线错误继续记为 `BLOCKED / BASELINE_BUILD_FAILURE`。快照或基线执行证据不足记为 `BLOCKED / BUILD_BASELINE_UNAVAILABLE`。可在 `build-baseline-evidence.json`、`build-evidence.json` 及 `failure-report.json` 核对具体原因。
+
+复测时还可以用以下证据定位失败阶段。
+
+- 测试计划优先执行重构前冻结的目标套件。测试包解包失败、全套用例均停在宿主 `beforeAll`、以及产品断言失败分别记录。候选断言失败或测试源码编译错误可触发同一作业的基线对照，候选和基线各自的日志都保留。同案同错记基线阻塞，对照不可用或结果不一致时保留候选失败并停止无依据的代码返修。
+- 首轮没有生产改动时，平台使用内置 HomeCheck 复核目标。目标未复现记为 `INCOMPLETE`，扫描无法确认记为 `BLOCKED`，目标仍存在且零改动记为 `FAIL`。移动代码产生的 Linter 告警会与同文件、同配置的基线报告比对，超出基线次数的同类告警仍会拦截。
+- 评审记录 `EPIPE` 时，只有完整、正常结束且语义自洽的评审消息才能用于判定。无法确认结果时只重试只读评审，用尽后记为 `REVIEW_RESULT_UNAVAILABLE`。明确的语义失败仍进入定向修复。
+- 对仅有 `@hw-stylistic/max-len` 告警的普通单行函数调用，工具会校验文件哈希并尝试在实参逗号处换行，成功后重新执行门禁。复杂语句或混合告警走常规返修。
 
 ## 6. 输出和结果含义
 
@@ -221,7 +242,12 @@ npm run cli -- run --task-dir "runs/prepared/feature-envy-0001-getTotalCash" --c
 
 ## 8. 本地实验批跑脚本
 
-按异味和数据集类型提供四个入口。这些 PowerShell 辅助脚本保存在本机 `tools/` 中，由 `.gitignore` 忽略，不随仓库分发；它们会调用本仓库 TypeScript CLI（`node dist/cli.js`），因此需先执行 `npm install` 和 `npm run build`。新克隆的仓库请直接使用上文的 CLI 或 `npm run batch`。
+以下四个 Windows PowerShell 入口与快照恢复脚本随仓库分发，适合按异味或数据集序号复测。请先执行 `npm install` 和 `npm run build`。下例在每条结束时恢复原有源码和生产资源、移除该条新增的源码和生产资源。请使用批测专用样例目录，运行期间保持该目录无其他编辑。
+
+```powershell
+# 跑 Long Method 本地测试组的第 1 至 3 条；路径替换为本机目录
+.\tools\run_long_method_local.ps1 -Workspace "D:\arkts-code-smell\repos" -DatasetRoot "D:\arkts-code-smell\dataset\positive" -StartOrdinal 1 -EndOrdinal 3 -LinterMode required
+```
 
 | 脚本（`tools/`） | 数据集（`dataset/positive/`） | 当前展开样本数 |
 |---|---|---:|

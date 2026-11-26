@@ -20,6 +20,16 @@ import {
 export const TEST_TOOL_BLOCKERS =
   "\\[Fail\\]\\s*ExecuteCommand\\s+need\\s+connect-key\\b|Connect server failed|\\[Empty\\]|no (?:available |connected )?devices?\\b|device not found|device[^\\r\\n]*(?:offline|not connected)|\\bFailed[^\\r\\n]*@SignHap\\b|Invalid storeFile value|(?:hap/hsp|hap|hsp) package is signed";
 export function testToolBlocker(output: string): Json | null {
+  if (/\[Fail\]\s*ExecuteCommand\s+need\s+connect-key\b/i.test(output))
+    return {
+      classification: "TEST_DEVICE_SELECTION_REQUIRED",
+      reason: "HDC 要求 connect-key。请核对 hdc list targets 返回的目标设备，再重跑设备测试。",
+    };
+  if (/Unable to unpack ohosTest HAP\b/i.test(output))
+    return {
+      classification: "TEST_PACKAGE_UNAVAILABLE",
+      reason: "ohosTest HAP 解包失败，设备用例未执行",
+    };
   if (/00303312\s+Configuration Error|Cannot find the corresponding SDK version under the specified SDK path|(?:SDK|Java|JDK).*(?:not found|not installed|missing|invalid)|JAVA_HOME.*(?:not set|invalid)/i.test(output))
     return {
       classification: "TEST_SDK_UNAVAILABLE",
@@ -77,8 +87,10 @@ export const failedHypiumCases = (cases: HypiumCase[]) =>
         c.result.toLowerCase(),
       ),
   );
+export const missingTestSelector = (details: string): string | undefined =>
+  /\b(?:component not found|unable to find id)(?:[ \t]*:[ \t]*|[ \t]+)['"]?([\w.$:-]+)/i.exec(details)?.[1];
 export const hostUnavailable = (details: string) =>
-  /(?:component not found|unable to find id)\s*:\s*[^\r\n]+/i.test(details) &&
+  !!missingTestSelector(details) &&
   /error in beforeAll function/i.test(details);
 export function resultEvidence(file: string, expected: string[]): Json {
   if (!isFile(file))
@@ -253,6 +265,14 @@ export async function runTestPlan(
       const blocker = evidence.failedCases?.length
         ? null
         : testToolBlocker(run.output);
+      const diagnostics = [...run.output.replace(/\x1b\[[\d;]*m/g, "").replaceAll("\\", "/")
+        .matchAll(/Error Message:\s*([^\r\n]+?)\s+At File:\s*([^\r\n]+?\.(?:ets|ts)):(\d+):(\d+)/gi)]
+        .map(([, message, file, line, column]) => ({
+          message, file: path.isAbsolute(file) ? path.relative(workspace, file).replaceAll("\\", "/") : file,
+          line: Number(line), column: Number(column),
+        }));
+      const testCompileFailure = !blocker && !evidence.failedCases?.length && diagnostics.length > 0 &&
+        diagnostics.every((d) => /(?:^|\/)src\/(?:test|ohosTest)\//i.test(d.file));
       evidence = {
         ...evidence,
         status:
@@ -260,7 +280,8 @@ export async function runTestPlan(
             ? "BLOCKED"
             : "FAIL",
         ...(blocker ?? {}),
-        reason: `Hvigor exited with code ${run.code}; ${blocker?.reason ?? evidence.reason}`,
+        ...(testCompileFailure ? { classification: "TEST_SOURCE_COMPILE_FAILURE", diagnostics } : {}),
+        reason: `Hvigor exited with code ${run.code}; ${blocker?.reason ?? (testCompileFailure ? diagnostics[0].message : evidence.reason)}`,
       };
     }
     if (job.kind === "instrument" && evidence.status === "PASS") {

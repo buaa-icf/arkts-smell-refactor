@@ -92,6 +92,59 @@ export function parseReview(text: string): Json | null {
   }
   return review;
 }
+
+// A failed process normally has no authoritative verdict. Some DevEco runs
+// print this pipe diagnostic and still deliver the entire JSON event stream.
+export function completedPipeReview(log: string): Json | null {
+  const lines = readText(log).trim().split(/\r?\n/);
+  const firstEvent = lines.findIndex(line => line.trimStart().startsWith("{"));
+  if (firstEvent < 1 || lines[0].trim() !== "EPIPE: broken pipe, write") return null;
+  const pipeDetail = /^(?:\s*|\s*syscall: "write",?|\s*errno: -32,?|\s*code: "EPIPE",?|\s+at .+)$/;
+  if (!lines.slice(1, firstEvent).every(line => pipeDetail.test(line))) return null;
+
+  let session: string | undefined, message: string | undefined, stopped = false;
+  const texts: string[] = [];
+  for (const line of lines.slice(firstEvent)) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { return null; }
+    const part = event?.part;
+    if (stopped || !part || event.error || part.error ||
+        typeof event.sessionID !== "string" || !event.sessionID ||
+        (session !== undefined && session !== event.sessionID) ||
+        (part.sessionID !== undefined && part.sessionID !== event.sessionID) ||
+        typeof part.messageID !== "string" || !part.messageID) return null;
+    session = event.sessionID;
+    if (event.type === "step_start" && part.type === "step-start" && message === undefined) {
+      message = part.messageID;
+      continue;
+    }
+    if (part.messageID !== message) return null;
+    if (event.type === "tool_use" && part.type === "tool" && part.state?.status === "completed" && !part.state.error) continue;
+    if (event.type === "text" && part.type === "text" && typeof part.text === "string") {
+      texts.push(part.text);
+      continue;
+    }
+    if (event.type !== "step_finish" || part.type !== "step-finish") return null;
+    if (part.reason === "stop") stopped = true;
+    else if (part.reason !== "tool-calls" || texts.length) return null;
+    message = undefined;
+  }
+  if (!stopped) return null;
+  const review = parseReview(texts.join("\n"));
+  if (!review || typeof review.summary !== "string" || !review.summary.trim() ||
+      typeof review.smellRemoved !== "boolean" || typeof review.behaviorEquivalent !== "boolean" ||
+      !Array.isArray(review.riskChecks) || !Array.isArray(review.issues)) return null;
+  if (!review.riskChecks.every((r: Json) => r && typeof r.riskCode === "string" && r.riskCode.trim() &&
+      typeof r.evidence === "string" && r.evidence.trim() && ["passed", "failed", "uncertain"].includes(r.status)) ||
+      !review.issues.every((i: Json) => i && ["blocking", "warning"].includes(i.severity) &&
+      typeof i.reason === "string" && i.reason.trim())) return null;
+  const hasDefect = !review.smellRemoved || !review.behaviorEquivalent ||
+    review.riskChecks.some((r: Json) => r.status === "failed") || review.issues.some((i: Json) => i.severity === "blocking");
+  if (review.verdict === "FAIL" && hasDefect) return review;
+  if (review.verdict === "PASS" && !hasDefect && review.riskChecks.every((r: Json) => r.status === "passed")) return review;
+  return null;
+}
 export function formatRetryPrompt(text: string): string | null {
   if (parseReview(text) || !/^\{\s*"verdict"\s*:\s*"(PASS|FAIL|UNCERTAIN)"/.test(text) || !text.endsWith("}")) return null;
   // Duplicate keys or multiple conclusions are not escaping/formatting faults.

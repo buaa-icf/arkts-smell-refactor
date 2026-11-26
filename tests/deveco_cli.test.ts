@@ -248,7 +248,13 @@ for (const [mode, expected] of [
     ).path;
     t.after(() => removeGenerated(copied, path.dirname(copied)));
     const captured = readJson(capture);
-    assert.equal(captured.cwd.toLowerCase(), copied.toLowerCase());
+    let lastWorkspace = copied;
+    if (mode === "introduced") {
+      lastWorkspace = readJson(path.join(p.taskDir, "linter-baseline-validation/validation-workspace.json")).path;
+      t.after(() => removeGenerated(lastWorkspace, path.dirname(lastWorkspace)));
+      assert(state.files[0].baseline.report);
+    } else assert.equal(state.files[0].baseline, undefined);
+    assert.equal(captured.cwd.toLowerCase(), lastWorkspace.toLowerCase());
     assert(!captured.args.includes("--incremental"));
     assert(captured.args.includes("--config-path"));
     assert.equal(readText(p.target), before.replace("return 1", "return 2"));
@@ -258,6 +264,40 @@ for (const [mode, expected] of [
       expected === 1 ? 1 : 0,
     );
   });
+
+test("移动的 ForEach 不新增告警，复制的第二处和新增超长行仍阻断", async (t) => {
+  const root = fixture(t), p = makeProject(root), r = "feature/src/main/ets/Page.ets";
+  const loop = "ForEach(this.days, (day) => {", before = "build() {\n  " + loop + "\n  })\n}\n";
+  writeText(path.join(p.taskDir, "baseline-production", r), before);
+  writeJson(path.join(p.taskDir, "refactor-changes.json"), { changedProductionFiles: [r] });
+  const long = "const label = '" + "x".repeat(125) + "'";
+  const script = `const fs = require("node:fs"), path = require("node:path");
+    const args = process.argv.slice(2), file = args[2], issues = [];
+    const source = fs.readFileSync(file, "utf8");
+    for (const [index, text] of source.split("\\n").entries()) {
+      if (text.includes("ForEach")) issues.push({file, line:index+1, column:text.indexOf("ForEach")+1,
+        severity:"Warning", rule:"@performance/foreach-args-check", message:"Set keyGenerator"});
+      if (text.length>120) issues.push({file,line:index+1,column:1,severity:"Warning",rule:"max-len",message:"line too long"});
+    }
+    const out = args[args.indexOf("--output-path")+1];
+    fs.mkdirSync(path.dirname(out), {recursive:true});
+    fs.writeFileSync(out, JSON.stringify({issues, summary:{ filesChecked:1, issues:issues.length,
+      warnings:issues.length, errors:0, suggestions:0 }}));`;
+  const installed = installation(root, script);
+  const moved = "build() {\n  this.draw()\n}\ndraw() {\n    " + loop + "\n    })\n}\n";
+  writeText(p.target, moved);
+  assert.equal(await linterGate(p.taskDir, p.source, installed.launcher), 0);
+  for (const dir of ["linter-validation", "linter-baseline-validation"]) {
+    const copy = readJson(path.join(p.taskDir, dir, "validation-workspace.json")).path;
+    t.after(() => removeGenerated(copy, path.dirname(copy)));
+  }
+  assert.equal(readJson(path.join(p.taskDir, "linter-evidence.json")).files[0].baseline.summary.warnings, 1);
+  writeText(p.target, before + moved + long + "\n");
+  assert.equal(await linterGate(p.taskDir, p.source, installed.launcher), 1);
+  const findings = readJson(path.join(p.taskDir, "linter-after.json")) as { line:number; rule:string }[];
+  assert.deepEqual(findings.map(issue => issue.rule), ["@performance/foreach-args-check", "max-len"]);
+  assert(findings[0].line > before.trimEnd().split("\n").length);
+});
 
 test("Linter JSON 不能用损坏的计数、未知严重级别或越界文件冒充有效结果", (t) => {
   const root = fixture(t),

@@ -9,6 +9,7 @@ import {
   copyTree,
   copyFile,
   escapeRe,
+  hash,
   isDir,
   isFile,
   readJson,
@@ -29,6 +30,7 @@ import {
 } from "./workspace.js";
 import { buildTestPlan, freezeTestPlan } from "./test_plan.js";
 import { resultEvidence, runTestPlan } from "./test_execution.js";
+import { compareFailedTestJob, singleTestDevice } from "./test_baseline.js";
 import { writeTestState } from "./test_progress.js";
 import {
   comparePublicContract,
@@ -38,13 +40,17 @@ import {
   renderRuntimeSmokeList,
   renderRuntimeSmokeTest,
 } from "./runtime_smoke.js";
-import { smellGate } from "./smell.js";
+import { recheckOriginalTarget, smellGate } from "./smell.js";
+import { recurringEnvyAdvice } from "./analysis/feature_envy.js";
+import { bundledHomecheck } from "./homecheck_runtime.js";
 import { runAgent } from "./agent_runtime.js";
 import { prepareReviewPrompt } from "./review_packet.js";
 import { prepareRepairContext } from "./repair_context.js";
 import { bundledDevecoCli } from "./deveco_cli.js";
-import { parseDevecoLintReport } from "./linter_report.js";
-import { moduleBuildPlan, restoreBuildBaseline } from "./build_validation.js";
+import { signingSource } from "./batch_workspace.js";
+import { addedLintIssues, parseDevecoLintReport } from "./linter_report.js";
+import { repairLongCallLines } from "./linter_repair.js";
+import { addedCompilerErrors, moduleBuildPlan, restoreBuildBaseline } from "./build_validation.js";
 import { captureEnvironment, capturedToolchain, successfulBuildToolchain, toolchainEnvironment } from "./build_toolchain.js";
 import {
   prepareSigning,
@@ -95,6 +101,11 @@ export async function refactorGate(
   }
   freezeTestPlan(taskDir, source);
   freshCopy(source, workspace, true);
+  const round = Number(promptFile && /^repair-prompt-(\d+)\.md$/.exec(path.basename(promptFile))?.[1]);
+  if (round > 0 && repairLongCallLines(taskDir, source, workspace, round)) {
+    console.log("已按本轮 Linter 证据在实参逗号后换行，交回全部门禁复验");
+    return syncProductionChanges(workspace, source);
+  }
   const basePrompt = normalizeAgentPromptPaths(
     readText(promptFile ?? path.join(taskDir, "refactor-prompt.md")),
     raw,
@@ -107,7 +118,12 @@ export async function refactorGate(
     ".arkts-refactor-prompt-" + stamp() + ".md",
   );
   try {
-    const prompt = basePrompt + (evidence?.prompt ?? "");
+    let prompt = basePrompt + (evidence?.prompt ?? "");
+    if (task.smell_type === "feature-envy" && round > 1) {
+      const previous = path.join(taskDir, `failure-report-${round - 1}.json`);
+      const latest = path.join(taskDir, `failure-report-${round}.json`);
+      if (isFile(previous) && isFile(latest)) prompt += recurringEnvyAdvice(readJson(previous), readJson(latest));
+    }
     writeText(path.join(taskDir, promptFile ? path.basename(promptFile, path.extname(promptFile)) + "-agent-prompt.md" : "refactor-agent-prompt.md"), prompt);
     writeText(attachment, prompt);
     const code = await runAgent(deveco, taskDir, workspace, attachment, { role: promptFile ? "repair" : "refactor", model, variant, title: task.task_id });
@@ -116,7 +132,12 @@ export async function refactorGate(
     fs.rmSync(attachment, { force: true });
     evidence?.dispose();
   }
-  return syncProductionChanges(workspace, source);
+  const syncCode = syncProductionChanges(workspace, source);
+  if (syncCode === 5 && !promptFile) {
+    const check = await recheckOriginalTarget(taskDir, bundledHomecheck(), source);
+    console.log("原始目标复核：" + check.status + (check.reason ? " " + check.reason : ""));
+  }
+  return syncCode;
 }
 export function hvigorLauncher(hvigor: string): string[] {
   if (path.extname(hvigor).toLowerCase() !== ".js") return [hvigor];
@@ -204,17 +225,16 @@ export async function devecoBuildGate(
       : {},
     signingOptions = {
       taskDir,
-      source,
       workspace,
       stage: "build" as const,
       required: raw.raw?.testKind === "instrument-test",
-      workspaceRoot: raw.workspace_root ?? raw.workspaceRoot,
+      ...signingSource(taskDir, source, raw.workspace_root ?? raw.workspaceRoot),
     },
     signing = await prepareSigning(signingOptions);
   console.log(
     `SIGNING_PREPARATION status=${signing.report.status} required=${signingOptions.required}`,
   );
-  if (!signing.ready) return blocked(signing.report.reason);
+  if (!signing.ready) return blocked(signing.report.reason, { classification: "SIGNING_UNAVAILABLE" });
   const command = [process.execPath, cli.entry, ...scope.args];
   const captureDir = path.join(taskDir, "build-toolchain", runId);
   const buildEnv = captureEnvironment(captureDir);
@@ -334,11 +354,20 @@ export async function devecoBuildGate(
         (before.code === 0 && !baselinePass)
       )
         throw new Error(before.error ?? "基线没有有效的构建完成证据");
-      if (!baselinePass)
+      if (!baselinePass) {
+        const errors = addedCompilerErrors(before.output, output, baselineWorkspace, workspace,
+          readJson(path.join(taskDir, "refactor-changes.json")).changedProductionFiles ?? []);
+        if (errors.length) {
+          writeJson(evidenceFile, { ...evidence, status: "FAIL", classification: "ADDITIONAL_BUILD_ERRORS",
+            baseline, introducedErrors: errors });
+          console.error("基线构建已失败，本次补丁另外引入了编译诊断：" + errors.map(e => e.filePath + ":" + e.line).join(", "));
+          return 1;
+        }
         return blocked(
           "重构前基线也无法构建，不能归因于本次重构，不进入代码修复 Loop",
           { ...evidence, classification: "BASELINE_BUILD_FAILURE", baseline },
         );
+      }
       writeJson(evidenceFile, {
         ...evidence,
         status: "FAIL",
@@ -376,6 +405,7 @@ export async function hvigorGate(
   taskName: string,
   module?: string,
   sharedToolchain?: Json,
+  officialCliEntry?: string,
 ): Promise<number> {
   let plan: Json | null = null;
   if (["auto-test", "test", "onDeviceTest"].includes(taskName)) {
@@ -405,13 +435,12 @@ export async function hvigorGate(
     : {};
   const signingOptions = {
     taskDir,
-    source,
     workspace,
     stage: plan ? ("test" as const) : ("build" as const),
     required: plan
       ? plan.jobs.some((job: Json) => job.kind === "instrument")
       : rawTask.raw?.testKind === "instrument-test",
-    workspaceRoot: rawTask.workspace_root ?? rawTask.workspaceRoot,
+    ...signingSource(taskDir, source, rawTask.workspace_root ?? rawTask.workspaceRoot),
     hdc: sharedToolchain?.hdc ?? [
       path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc.exe"),
       path.resolve(hvigor, "../../sdk/default/openharmony/toolchains/hdc"),
@@ -447,14 +476,38 @@ export async function hvigorGate(
     writeText(marker, "ok");
   }
   if (plan) {
-    const code = await runTestPlan(
-      taskDir,
-      workspace,
-      plan,
-      sharedToolchain ? [sharedToolchain.node, sharedToolchain.hvigor] : hvigorLauncher(hvigor),
-      sharedToolchain ? toolchainEnvironment(sharedToolchain) : devecoEnvironment(hvigor),
-      signing.redact,
-    );
+    const launcher = sharedToolchain ? [sharedToolchain.node, sharedToolchain.hvigor] : hvigorLauncher(hvigor);
+    const env = sharedToolchain ? toolchainEnvironment(sharedToolchain) : devecoEnvironment(hvigor);
+    const device = signingOptions.required ? await singleTestDevice(signingOptions.hdc, workspace) : null;
+    const testPlan = plan;
+    let code = await runTestPlan(taskDir, workspace, testPlan, launcher, env, signing.redact);
+    if (code === 1) code = await compareFailedTestJob(taskDir, testPlan, async (directory, job) => {
+      if (job.kind === "instrument" && (!device || device !== await singleTestDevice(signingOptions.hdc, workspace)))
+        throw new Error("无法确认候选与基线使用同一台测试设备");
+      // Copy the signed project configuration. Keep the baseline and its artifacts out of the candidate.
+      const baselineWorkspace = validationWorkspace(directory, workspace);
+      try {
+        const restored = restoreBuildBaseline(taskDir, source, baselineWorkspace);
+        writeJson(path.join(directory, "restoration.json"), restored);
+        if (sharedToolchain && officialCliEntry) {
+          const files = [...restored.restored.map((r: Json) => r.file), ...restored.removedNewFiles];
+          const scope = moduleBuildPlan(workspace, files);
+          const built = await runCommand([process.execPath, officialCliEntry, ...scope.args], { cwd: baselineWorkspace, env });
+          writeText(path.join(directory, "prepare.log"), signing.redact(built.output));
+          if (built.code !== 0 || !/Build completed successfully/i.test(built.output))
+            throw new Error("相同构建范围下原始基线准备失败，见 prepare.log");
+        } else if (ohpm) {
+          const install = await runCommand([ohpm, "install"], { cwd: baselineWorkspace, env });
+          writeText(path.join(directory, "prepare.log"), signing.redact(install.output));
+          if (install.code !== 0) throw new Error("原始基线依赖准备失败，见 prepare.log");
+        }
+        await runTestPlan(directory, baselineWorkspace, { ...testPlan, jobs: [job] }, launcher, env, signing.redact);
+        if (job.kind === "instrument" && device !== await singleTestDevice(signingOptions.hdc, workspace))
+          throw new Error("测试设备已变化，无法比较本次基线");
+      } finally {
+        removeGenerated(baselineWorkspace, path.dirname(workspace));
+      }
+    }, signing.redact);
     signing.report.verification =
       signingOptions.required && code === 0
         ? "DEVICE_TEST_EXECUTION_CONFIRMED"
@@ -506,7 +559,7 @@ export async function devecoTestGate(taskDir: string, source: string, deveco: st
     const toolchain = successfulBuildToolchain(taskDir, source, workspace, cli.entry);
     writeJson(path.join(taskDir, "test-toolchain.json"), toolchain);
     console.log(`TEST_ENGINE buildRunId=${toolchain.buildRunId}; SDK=${toolchain.sdk}; Hvigor=${toolchain.hvigor}`);
-    return await hvigorGate(taskDir, source, toolchain.hvigor, undefined, "auto-test", undefined, toolchain);
+    return await hvigorGate(taskDir, source, toolchain.hvigor, undefined, "auto-test", undefined, toolchain, cli.entry);
   } catch (e) {
     console.error("TEST_GATE_BLOCKED: " + String(e));
     writeTestState(path.join(taskDir, "test-results.json"), {
@@ -598,14 +651,9 @@ export async function linterGate(
       configOrigin = "official-cli-template-in-validation-copy";
     }
   }
-  for (const r of changes) {
-    const current = path.resolve(source, r),
-      target = path.resolve(workspace, r);
-    if (!within(current, source) || !within(target, workspace))
-      return finish(3, "Linter 文件越界");
-    if (!/\.(ets|ts)$/i.test(r)) continue;
-    if (!isFile(current) || !isFile(target))
-      return finish(3, "变更源码文件不存在：" + r);
+  const configRelative = relative(copiedConfig, workspace);
+  const lintFile = async (root: string, r: string, entry: Json): Promise<Json[]> => {
+    const target = path.resolve(root, r);
     const report = path.join(taskDir, "linter-reports", stamp(), "report.json"),
       command = [
         process.execPath,
@@ -613,23 +661,22 @@ export async function linterGate(
         "check",
         "lint",
         target,
-        ...(copiedConfig ? ["--config-path", copiedConfig] : []),
+        "--config-path",
+        path.join(root, configRelative),
         "--format",
         "json",
         "--output-path",
         report,
       ],
-      result = await runCommand(command, { cwd: workspace });
+      result = await runCommand(command, { cwd: root });
     console.log(result.output);
-    const entry: Json = {
-      file: r,
+    Object.assign(entry, {
       command,
       report,
       exitCode: result.code,
       cliVersion: cli.version,
       configOrigin,
-    };
-    evidence.push(entry);
+    });
     writeText(path.join(path.dirname(report), "command.log"), result.output);
     if (
       result.error ||
@@ -637,29 +684,46 @@ export async function linterGate(
       result.cancelled ||
       ![0, 1].includes(result.code ?? -1)
     )
-      return finish(
-        3,
-        result.error ?? "官方 Linter 进程未正常完成，详见本轮日志",
-      );
+      throw new Error(result.error ?? "官方 Linter 进程未正常完成，详见本轮日志");
     if (!isFile(report))
-      return finish(3, "未生成本轮官方 Linter JSON 报告，不能视为无缺陷");
-    let parsed: Json[];
+      throw new Error("未生成本轮官方 Linter JSON 报告，不能视为无缺陷");
+    const raw = readJson(report);
+    const parsed = parseDevecoLintReport(raw, root);
+    entry.summary = raw.summary;
+    return parsed.filter(issue => path.resolve(issue.filePath) === target);
+  };
+  let baselineWorkspace: string | undefined;
+  for (const r of changes) {
+    const current = path.resolve(source, r), target = path.resolve(workspace, r);
+    if (!within(current, source) || !within(target, workspace)) return finish(3, "Linter 文件越界");
+    if (!/\.(ets|ts)$/i.test(r)) continue;
+    if (!isFile(current) || !isFile(target)) return finish(3, "变更源码文件不存在：" + r);
+    const entry: Json = { file: r };
+    evidence.push(entry);
     try {
-      const raw = readJson(report);
-      parsed = parseDevecoLintReport(raw, workspace);
-      entry.summary = raw.summary;
+      const parsed = await lintFile(workspace, r, entry);
+      const baseline = path.join(taskDir, "baseline-production", r);
+      const lines = changedCurrentLines(baseline, current);
+      const hasBaseline = isFile(baseline);
+      let scoped = parsed.filter(issue => !hasBaseline || lines.has(issue.line));
+      if (scoped.length && hasBaseline) {
+        if (!baselineWorkspace) {
+          baselineWorkspace = validationWorkspace(path.join(taskDir, "linter-baseline-validation"), source);
+          restoreBuildBaseline(taskDir, source, baselineWorkspace);
+          copyFile(copiedConfig, path.join(baselineWorkspace, configRelative));
+        }
+        entry.baseline = {};
+        const before = await lintFile(baselineWorkspace, r, entry.baseline);
+        scoped = addedLintIssues(baseline, before, target, parsed, lines);
+      }
+      if (scoped.length) {
+        const sourceSha256 = hash(target);
+        introduced.push(...scoped.map(issue => ({ ...issue, filePath: r, sourceSha256 })));
+      }
+      entry.introducedIssues = scoped.length;
     } catch (e) {
-      return finish(3, "无效的本轮 Linter 报告：" + String(e));
+      return finish(3, `无法核验 ${r} 的 Linter 诊断：${String(e)}`);
     }
-    const baseline = path.join(taskDir, "baseline-production", r),
-      lines = changedCurrentLines(baseline, current);
-    const scoped = parsed.filter(
-      (issue) =>
-        path.resolve(issue.filePath) === target &&
-        (!isFile(baseline) || lines.has(issue.line)),
-    );
-    introduced.push(...scoped.map((issue) => ({ ...issue, filePath: r })));
-    entry.introducedIssues = scoped.length;
   }
   writeJson(path.join(taskDir, "linter-after.json"), introduced);
   if (introduced.length) {

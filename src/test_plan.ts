@@ -455,6 +455,8 @@ export function buildTestPlan(
           j.scope === job.scope,
       );
       if (duplicate) {
+        duplicate.frozenBeforeRefactor = true;
+        duplicate.reason = job.reason;
         duplicate.testFiles = unique([
           ...duplicate.testFiles,
           ...job.testFiles,
@@ -465,6 +467,7 @@ export function buildTestPlan(
         ]);
       } else jobs.push({ ...job, frozenBeforeRefactor: true });
     }
+    jobs.sort((a, b) => Number(!!b.frozenBeforeRefactor) - Number(!!a.frozenBeforeRefactor));
     selectionEvidence.unshift(...(frozen.plan.selectionEvidence ?? []));
     selectionWarnings.unshift(...(frozen.plan.selectionWarnings ?? []));
     excludedTests.unshift(...(frozen.plan.excludedTests ?? []));

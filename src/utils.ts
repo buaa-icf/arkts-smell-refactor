@@ -93,21 +93,22 @@ export function parents(p: string, root?: string): string[] {
   }
   return a;
 }
-export function copyFile(source: string, dest: string): void {
+export function copyFile(source: string, dest: string, mode = 0): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(source, dest);
+  fs.copyFileSync(source, dest, mode);
 }
 export function copyTree(
   source: string,
   dest: string,
   excludeTests = false,
+  copyMode = 0,
 ): void {
   if (within(dest, source)) throw new Error("副本目录不能位于来源工程内部");
   fs.mkdirSync(dest, { recursive: true });
   for (const p of walk(source)) {
     const r = path.relative(source, p);
     if (excludeTests && isTest(r)) continue;
-    copyFile(p, path.join(dest, r));
+    copyFile(p, path.join(dest, r), copyMode);
   }
 }
 export function removeGenerated(p: string, root: string): void {

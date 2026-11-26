@@ -47,6 +47,14 @@ test("构建失败分析以同轮基线证据为准，警告里提及变更文�
     baseline: { status: "PASS", runId: "b" },
   });
   assert.equal(buildFailureReport(dir, task, failed, 1).repairable, true);
+  const newErrors = [{filePath: task.target.file_path, line: 24, message: "Structural typing is not supported"}];
+  writeJson(path.join(dir, "build-evidence.json"), {
+    engine: "devecocli", runId: "mixed", status: "FAIL", classification: "ADDITIONAL_BUILD_ERRORS",
+    baseline: {status: "FAIL", runId: "mixed"}, introducedErrors: newErrors,
+  });
+  const mixed = buildFailureReport(dir, task, failed, 1);
+  assert.equal(mixed.repairable, true);
+  assert.deepEqual(mixed.issues, newErrors);
   writeJson(path.join(dir, "build-evidence.json"), {
     engine: "devecocli",
     runId: "b",
@@ -157,6 +165,8 @@ test("语义 Review 失败进入定向修复，随后重新验证通过", async 
   const r = await executePipeline(dir, c);
   assert.equal(r.verdict, "PASS");
   assert.equal(r.repairAttempts, 1);
+  assert.equal(r.firstFailureStage, "review-agent");
+  assert.equal(r.finalFailureStage, null);
   assert.equal(
     readJson(path.join(dir, "failure-report-1.json")).classification,
     "SEMANTIC_REVIEW_FAILURE",

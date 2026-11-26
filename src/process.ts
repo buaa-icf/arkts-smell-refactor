@@ -64,10 +64,11 @@ export function which(command: string): string | null {
 export function terminateTree(child: ChildProcess): void {
   if (!child.pid) return;
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+    const killed = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
       windowsHide: true,
       stdio: "ignore",
     });
+    if (killed.status === 0) return;
     try {
       child.kill("SIGKILL");
     } catch {}
@@ -125,9 +126,13 @@ export async function runCommand(
     if (options.onStderrLine && child.stderr)
       createInterface({ input: child.stderr, crlfDelay: Infinity }).on("line", options.onStderrLine);
     let hardStop: NodeJS.Timeout | undefined;
+    let killError: string | undefined;
     const kill = () => {
       terminateTree(child);
-      hardStop ??= setTimeout(() => finish(null), 3000);
+      hardStop ??= setTimeout(() => {
+        error ??= killError;
+        finish(null);
+      }, 3000);
     };
     const abort = () => {
       cancelled = true;
@@ -157,7 +162,13 @@ export async function runCommand(
       resolve({ code, output, error, cancelled, timedOut });
     };
     options.signal?.addEventListener("abort", abort, { once: true });
-    child.on("error", (e) => {
+    child.on("error", (e: NodeJS.ErrnoException) => {
+      // On Windows taskkill can terminate the child but report a missing
+      // descendant. A fallback kill may then race the child's close event.
+      if (process.platform === "win32" && (cancelled || timedOut) && e.syscall === "kill") {
+        killError = e.message;
+        return;
+      }
       error = e.message;
       finish(null);
     });

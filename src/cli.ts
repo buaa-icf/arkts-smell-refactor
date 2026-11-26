@@ -37,7 +37,7 @@ const HELP = `ArkTS 异味重构工具（TypeScript / Node.js）
 node dist/cli.js configure --workspace <仓库总目录>
 node dist/cli.js doctor [--workspace <仓库总目录>]
 node dist/cli.js start [--workspace <仓库总目录>] [--linter-mode required|skip]
-node dist/cli.js batch [--workspace <仓库总目录>] [--dry-run]
+node dist/cli.js batch [--workspace <仓库总目录>] [--rollback] [--dry-run]
 node dist/cli.js prepare --dataset <JSON> --workspace <仓库总目录> --output <任务目录> [--index N]
 node dist/cli.js run --task-dir <任务目录> --config <JSON> [--dry-run]
 
@@ -63,11 +63,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         "review-model": { type: "string" },
         "review-variant": { type: "string" },
         "dry-run": { type: "boolean" },
+        rollback: { type: "boolean" },
         "linter-mode": { type: "string", default: "required" },
       },
     });
   if (positionals.length)
     throw new Error("不支持的位置参数：" + positionals.join(" "));
+  if (values.rollback && command !== "batch")
+    throw new Error("--rollback 仅用于 batch；测试验收请运行 npm run batch:rollback");
   const required = (
     key: "workspace" | "dataset" | "output" | "task-dir" | "config",
   ) => {
@@ -156,6 +159,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       if (!workspace)
         throw new Error("请先 configure --workspace 或传入 --workspace");
       const batch = loadBatch(workspace);
+      console.log(values.rollback ? "批测模式：逐条隔离并回滚，原工程保留。" :
+        "批测模式：原地写回，不自动回滚。测试验收请使用 npm run batch:rollback。");
       console.log("四类异味：" + JSON.stringify(batch.metadata.smellCounts));
       const final = await runTasks(
         base,
@@ -166,6 +171,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         values["dry-run"] ?? false,
         batch.metadata,
         resolveSelection({ refactor: { model: values["refactor-model"], variant: values["refactor-variant"] }, review: { model: values["review-model"], variant: values["review-variant"] } }),
+        values.rollback,
       );
       return final.dryRun ||
         final.tasks.every((t: { verdict: string }) => t.verdict === "PASS")

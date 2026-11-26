@@ -73,6 +73,7 @@ function setup(t: Parameters<typeof fixture>[0]) {
 function fail(
   p: ReturnType<typeof setup>,
   names = ["swap cities", "clear city"],
+  detail = "expect true, actualValue false",
 ) {
   const plan = buildTestPlan(p.taskDir, p.source),
     job = plan.jobs[0];
@@ -83,7 +84,7 @@ function fail(
     names
       .map(
         (name) =>
-          `class=FlightBookingTest\ntest=${name}\nexpect true, actualValue false\nresult=Failure\n`,
+          `class=FlightBookingTest\ntest=${name}\n${detail}\nresult=Failure\n`,
       )
       .join(""),
   );
@@ -131,6 +132,14 @@ test("同一套件无关断言不能借用其他用例或 beforeEach 的 ID 进�
   assert.equal(report.repairable, false);
   assert.equal(report.classification, "UNATTRIBUTED_TEST_FAILURE");
   assert.equal(report.issues.length, 0);
+});
+test("044 控件查找失败只能采用实际报错的 ID", (t) => {
+  const p = setup(t);
+  freezeTestPlan(p.taskDir, p.source);
+  assert.equal(fail(p, ["swap cities"], "Unable to find id: agreement_test_host_anchor").repairable, false);
+  const matched = fail(p, ["swap cities"], "Unable to find id destination_value");
+  assert.equal(matched.repairable, true);
+  assert.deepEqual(matched.testAttribution[0].evidence.map((e: any) => e.uiId), ["destination_value"]);
 });
 
 test("重复组件 ID 和重复用例名不建立关联", (t) => {

@@ -222,6 +222,13 @@ export function interruptTestResults(
   if (results.status !== "RUNNING") return;
   const endedAt = new Date().toISOString();
   for (const job of results.jobs ?? []) {
+    if (job.baselineComparison?.classification === "TEST_BASELINE_PENDING") {
+      job.baselineComparison = {classification: "TEST_BASELINE_INTERRUPTED", reason, endedAt};
+      if (typeof results.plan === "string" && within(results.plan, path.join(taskDir, "test-attempts"))) {
+        const directory = path.join(path.dirname(results.plan), "baseline");
+        if (isFile(path.join(directory, "test-results.json"))) interruptTestResults(directory, reason, classification);
+      }
+    }
     if (job.status !== "RUNNING") continue;
     if (
       typeof job.progressFile === "string" &&

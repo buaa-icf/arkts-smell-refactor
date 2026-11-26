@@ -2,12 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { buildTestPlan, isSdkTemplateTest } from "../src/test_plan.js";
+import { buildTestPlan, freezeTestPlan, isSdkTemplateTest } from "../src/test_plan.js";
 import {
   resultEvidence,
   runTestPlan,
   testToolBlocker,
 } from "../src/test_execution.js";
+
+test("HDC 需要 connect-key 时独立标记设备选择阻塞", () => {
+  assert.equal(testToolBlocker("[Fail]ExecuteCommand need connect-key")?.classification,
+    "TEST_DEVICE_SELECTION_REQUIRED");
+});
 import { readJson, writeJson, writeText } from "../src/utils.js";
 import { fixture, makeProject, suite, success } from "./helpers.js";
 const sdkTemplate = (device = false) => `
@@ -256,6 +261,23 @@ test("新增其他模块需要验证，不隐藏原目标测试", (t) => {
   assert(jobs.some((j: any) => j.scope === "PageTest"));
   assert(jobs.some((j: any) => j.module === "host" && j.scope === null));
 });
+test("007 冻结目标套件在新增模块的回退测试前执行，保留补充覆盖", (t) => {
+  const p = makeProject(fixture(t));
+  suite(p.source, "local");
+  suite(p.source, "local", "Other", "products/phone");
+  suite(p.source, "instrument", "UIOther", "products/phone");
+  freezeTestPlan(p.taskDir, p.source);
+  writeJson(path.join(p.taskDir, "refactor-changes.json"), {
+    changedProductionFiles: ["products/phone/src/main/ets/Helper.ets"],
+  });
+  const jobs = buildTestPlan(p.taskDir, p.source).jobs;
+  assert.deepEqual(jobs.map((j: any) => [j.scope, j.kind, !!j.frozenBeforeRefactor]), [
+    ["PageTest", "local", true], [null, "local", false], [null, "instrument", false],
+  ]);
+});
+test("037 测试 HAP 解包失败被识别为测试准备故障", () => {
+  assert.equal(testToolBlocker("Failed :book_read_kit:StripUnsupportedOhosTestNativeLibs\nUnable to unpack ohosTest HAP: null")?.classification, "TEST_PACKAGE_UNAVAILABLE");
+});
 test("同模块新增 Helper 不会放大为无关测试", (t) => {
   const p = makeProject(fixture(t));
   suite(p.source, "instrument");
@@ -335,6 +357,12 @@ for (const [name, text, expected] of [
     "BLOCKED",
   ],
   ["未完成", success().replace("Tests run: 1", "Tests run: 2"), "BLOCKED"],
+  ["090 无冒号 beforeAll 宿主错误", success()
+    .replace("result=Success", "HomeVisitUiTest_host not launched: unable to find id scenario_bar, error in beforeAll function\nresult=Error")
+    .replace("Error: 0", "Error: 1").replace("Pass: 1", "Pass: 0"), "BLOCKED"],
+  ["044 用例中控件缺失仍然失败", success()
+    .replace("result=Success", "unable to find id: agreement_test_host_anchor\nresult=Error")
+    .replace("Error: 0", "Error: 1").replace("Pass: 1", "Pass: 0"), "FAIL"],
 ] as const)
   test(`Hypium 真实执行证据：${name}`, (t) => {
     const file = path.join(fixture(t), "result.txt");
